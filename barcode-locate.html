@@ -1,0 +1,256 @@
+<script type="text/html" data-template-name="barcode-locate">
+  <div class="form-row">
+    <label for="node-input-name"><i class="fa fa-tag"></i> Name</label>
+    <input type="text" id="node-input-name" placeholder="Name" />
+  </div>
+  <div class="form-row">
+    <label for="node-input-mode"><i class="fa fa-search"></i> Mode</label>
+    <select id="node-input-mode" style="width:70%;">
+      <option value="regionsThenAuto">Regions, then full image if nothing found</option>
+      <option value="regionsOnly">Regions only (no full-image fallback)</option>
+      <option value="autoOnly">Full image only (ignore regions)</option>
+    </select>
+  </div>
+
+  <div class="form-row node-input-region-container-row">
+    <label><i class="fa fa-crop"></i> Regions</label>
+    <span class="node-input-hint" style="color:#999;">
+      pixel coordinates on the full-resolution image - find them with any
+      image viewer (see Help). Scanned in order, fastest first; skipped
+      entirely in "Full image only" mode.
+    </span>
+    <ol id="node-input-region-container" style="margin-top:8px;"></ol>
+  </div>
+
+  <div class="form-row">
+    <label><i class="fa fa-list"></i> Formats</label>
+  </div>
+  <div class="form-row" style="margin-left:110px;">
+    <input type="checkbox" id="node-input-Code128" style="width:auto;vertical-align:middle;" />
+    <label for="node-input-Code128" style="width:auto;">Code128</label>
+    <input type="checkbox" id="node-input-DataMatrix" style="width:auto;vertical-align:middle;margin-left:12px;" />
+    <label for="node-input-DataMatrix" style="width:auto;">DataMatrix</label>
+    <input type="checkbox" id="node-input-QRCode" style="width:auto;vertical-align:middle;margin-left:12px;" />
+    <label for="node-input-QRCode" style="width:auto;">QRCode</label>
+  </div>
+  <div class="form-row" style="margin-left:110px;">
+    <input type="checkbox" id="node-input-EAN13" style="width:auto;vertical-align:middle;" />
+    <label for="node-input-EAN13" style="width:auto;">EAN13</label>
+    <input type="checkbox" id="node-input-Code39" style="width:auto;vertical-align:middle;margin-left:12px;" />
+    <label for="node-input-Code39" style="width:auto;">Code39</label>
+    <input type="checkbox" id="node-input-ITF" style="width:auto;vertical-align:middle;margin-left:12px;" />
+    <label for="node-input-ITF" style="width:auto;">ITF</label>
+    <input type="checkbox" id="node-input-PDF417" style="width:auto;vertical-align:middle;margin-left:12px;" />
+    <label for="node-input-PDF417" style="width:auto;">PDF417</label>
+  </div>
+  <div class="form-row" style="margin-left:110px;">
+    <input type="checkbox" id="node-input-EAN8" style="width:auto;vertical-align:middle;" />
+    <label for="node-input-EAN8" style="width:auto;">EAN8</label>
+    <span class="node-input-hint" style="margin-left:10px; color:#999;"
+      >off by default - short enough to have a real chance of misreading noise as a confident wrong result, see Help</span
+    >
+  </div>
+
+  <div class="form-row">
+    <label><i class="fa fa-cogs"></i> Reader</label>
+  </div>
+  <div class="form-row" style="margin-left:110px;">
+    <input type="checkbox" id="node-input-tryHarder" style="width:auto;vertical-align:middle;" />
+    <label for="node-input-tryHarder" style="width:auto;">try harder</label>
+    <input type="checkbox" id="node-input-tryRotate" style="width:auto;vertical-align:middle;margin-left:12px;" />
+    <label for="node-input-tryRotate" style="width:auto;">try rotate</label>
+    <span class="node-input-hint" style="margin-left:10px; color:#999;"
+      >both needed for full recall - see Help</span
+    >
+  </div>
+</script>
+
+<script type="text/html" data-help-name="barcode-locate">
+  <p>
+    Finds and decodes barcodes (1D and 2D) in an image using
+    <a href="https://github.com/Sec-ant/zxing-wasm" target="_blank">zxing-wasm</a>
+    - a WebAssembly build of the real <code>zxing-cpp</code> engine, not the
+    much weaker pure-JS <code>@zxing/library</code> port
+    <code>node-red-contrib-image-tools</code>'s Barcode Decoder uses. Genuine
+    multi-symbol detection, rotation tolerance, and native DataMatrix
+    support - no separate localization step needed to get a result out of
+    it on a big photo.
+  </p>
+
+  <h3>Why regions</h3>
+  <p>
+    Scanning a whole multi-megapixel photo takes on the order of a second,
+    mostly the detector's own search over the full frame. On a fixed camera
+    rig - the same assumption <code>golden-compare</code> and
+    <code>checkerboard-calibrate</code> already make - barcodes land in
+    roughly the same place shot to shot, so telling this node where to look
+    turns that into a handful of single-digit-millisecond crops instead
+    (measured ~2-15ms per region vs ~1.4s for the same image scanned whole
+    on a 4096x5500 test photo - roughly two orders of magnitude). Mode
+    <i>"Regions, then full image if nothing found"</i> keeps the slower
+    whole-image scan available as a safety net (label repositioned, a
+    region mis-measured) without paying its cost on every normal run.
+  </p>
+  <p>
+    Regions are plain pixel coordinates on the image at its native
+    resolution - <code>x</code>/<code>y</code> is the top-left corner,
+    <code>width</code>/<code>height</code> its size. Find them by opening a
+    sample photo in any image viewer that shows a pixel-coordinate readout
+    (or crop candidates and check the crop looks right) and reading off a
+    box comfortably around the barcode, including its quiet-zone margin -
+    tight crops with no margin can make the reader fail even though the
+    barcode itself is perfectly legible. Re-measure regions if the camera,
+    lens, or mounting changes.
+  </p>
+
+  <h3>Input</h3>
+  <p>
+    <code>msg.payload</code> - the image: Buffer / Uint8Array, a file path
+    string, or an object with <code>data</code>/<code>buffer</code>/<code>path</code>.
+  </p>
+  <p>
+    Optional per-message overrides: <code>msg.regions</code> (array of
+    <code>{ label, x, y, width, height }</code>, replaces the configured
+    list for this message) and <code>msg.mode</code>.
+  </p>
+
+  <h3>Output</h3>
+  <p>One message per barcode found, in scan order (regions first, then the full-image fallback if it ran):</p>
+  <ul>
+    <li><code>msg.text</code> - the decoded content</li>
+    <li><code>msg.format</code> - e.g. <code>"Code128"</code>, <code>"DataMatrix"</code></li>
+    <li><code>msg.roi</code> - <code>{ x, y, width, height }</code> of the region scanned (full-image coordinates)</li>
+    <li><code>msg.regionLabel</code> - the region's configured label, or <code>null</code> for a full-image find</li>
+    <li><code>msg.source</code> - <code>"region"</code> or <code>"fullImage"</code></li>
+    <li><code>msg.decodeMs</code> - time for that specific region/scan (not the whole node's runtime)</li>
+    <li><code>msg.timings</code> - <code>{ regionsMs, fullImageMs }</code>, whichever ran</li>
+    <li><code>msg.payload</code> - a cropped preview image of that result's region</li>
+  </ul>
+  <p>
+    If nothing is found anywhere, one message is sent with
+    <code>msg.text = null</code>, <code>msg.barcodeCount = 0</code>.
+  </p>
+
+  <h3>Notes</h3>
+  <p>
+    <b>EAN8 is off by default.</b> It's short enough that ZXing
+    implementations (both the JS port and, in testing against this
+    project's own sample label, zxing-wasm itself) have a real chance of
+    matching noise in a region/crop that has no barcode in it at all - a
+    confident wrong answer, worse than "not found". Turn it on only if a
+    real EAN-8 code is expected.
+  </p>
+  <p>
+    <b>Try harder / try rotate</b> are both on by default and both matter:
+    against this project's sample label, <code>tryHarder=false</code>
+    missed most of the real barcodes, and <code>tryRotate=false</code>
+    missed ones printed upside-down or rotated 90 degrees. Turning either
+    off trades recall for speed.
+  </p>
+  <p>
+    The first decode after Node-RED starts (or this flow redeploys) pays a
+    one-time warmup cost for zxing-wasm's WASM module - handled internally
+    so it doesn't land on whichever message happens to arrive first.
+  </p>
+</script>
+
+<script type="text/javascript">
+  RED.nodes.registerType("barcode-locate", {
+    category: "vision",
+    color: "#FFAAAA",
+    defaults: {
+      name: { value: "" },
+      mode: { value: "regionsThenAuto" },
+      regions: { value: [] },
+      Code128: { value: true },
+      DataMatrix: { value: true },
+      QRCode: { value: true },
+      EAN13: { value: true },
+      Code39: { value: true },
+      ITF: { value: true },
+      PDF417: { value: true },
+      EAN8: { value: false },
+      tryHarder: { value: true },
+      tryRotate: { value: true },
+    },
+    inputs: 1,
+    outputs: 1,
+    icon: "font-awesome/fa-barcode",
+    label: function () {
+      return this.name || "barcode locate";
+    },
+    paletteLabel: function () {
+      return "barcode locate";
+    },
+    oneditprepare: function () {
+      const list = $("#node-input-region-container")
+        .css("min-height", "150px")
+        .css("min-width", "450px")
+        .editableList({
+          addItem: function (container, index, region) {
+            region.label = region.label || "";
+            region.x = region.x || 0;
+            region.y = region.y || 0;
+            region.width = region.width || 0;
+            region.height = region.height || 0;
+
+            container.css({ overflow: "hidden", whiteSpace: "nowrap" });
+
+            const row1 = $("<div/>", { style: "margin-bottom:4px;" }).appendTo(container);
+            const labelInput = $("<input/>", {
+              type: "text",
+              style: "width:100%;",
+              placeholder: "label (optional, e.g. \"main UDI barcode\")",
+            })
+              .appendTo(row1)
+              .val(region.label);
+
+            const row2 = $("<div/>").appendTo(container);
+            function numField(placeholder, value) {
+              return $("<input/>", {
+                type: "number",
+                style: "width:70px;margin-right:6px;",
+                placeholder: placeholder,
+              })
+                .appendTo(row2)
+                .val(value);
+            }
+            $("<span/>", { text: "x:", style: "margin-right:3px;" }).appendTo(row2);
+            const xInput = numField("x", region.x);
+            $("<span/>", { text: "y:", style: "margin-right:3px;" }).appendTo(row2);
+            const yInput = numField("y", region.y);
+            $("<span/>", { text: "w:", style: "margin-right:3px;" }).appendTo(row2);
+            const wInput = numField("width", region.width);
+            $("<span/>", { text: "h:", style: "margin-right:3px;" }).appendTo(row2);
+            const hInput = numField("height", region.height);
+
+            container.data("read", function () {
+              return {
+                label: labelInput.val(),
+                x: parseInt(xInput.val(), 10) || 0,
+                y: parseInt(yInput.val(), 10) || 0,
+                width: parseInt(wInput.val(), 10) || 0,
+                height: parseInt(hInput.val(), 10) || 0,
+              };
+            });
+          },
+          removable: true,
+          sortable: true,
+        });
+
+      const regions = this.regions || [];
+      for (let i = 0; i < regions.length; i++) {
+        list.editableList("addItem", regions[i]);
+      }
+    },
+    oneditsave: function () {
+      const items = $("#node-input-region-container").editableList("items");
+      const regions = [];
+      items.each(function () {
+        const read = $(this).data("read");
+        if (read) regions.push(read());
+      });
+      this.regions = regions;
+    },
+  });
+</script>

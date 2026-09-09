@@ -1,0 +1,167 @@
+<script type="text/html" data-template-name="checkerboard-calibrate">
+  <div class="form-row">
+    <label for="node-input-name"><i class="fa fa-tag"></i> Name</label>
+    <input type="text" id="node-input-name" placeholder="Name" />
+  </div>
+  <div class="form-row">
+    <label for="node-input-targetPitchMm"
+      ><i class="fa fa-arrows-h"></i> Target pitch [mm]</label
+    >
+    <input
+      type="number"
+      id="node-input-targetPitchMm"
+      min="0.01"
+      step="0.01"
+      style="width:90px;"
+    />
+    <span class="node-input-hint" style="margin-left:10px; color:#999;"
+      >physical distance between adjacent same-colour squares on the
+      printed checkerboard</span
+    >
+  </div>
+  <div class="form-row">
+    <label for="node-input-checkerboardCols"
+      ><i class="fa fa-th"></i> Grid size</label
+    >
+    <input
+      type="number"
+      id="node-input-checkerboardCols"
+      min="2"
+      style="width:70px;"
+      placeholder="cols"
+    />
+    <span style="margin:0 6px;">x</span>
+    <input
+      type="number"
+      id="node-input-checkerboardRows"
+      min="3"
+      style="width:70px;"
+      placeholder="rows"
+    />
+    <span class="node-input-hint" style="margin-left:10px; color:#999;"
+      >expected dark-square grid (cols = longest row x rows) - see help</span
+    >
+  </div>
+  <div class="form-row">
+    <label for="node-input-allowedErrorPercent"
+      ><i class="fa fa-exclamation-triangle"></i> Allowed error</label
+    >
+    <input
+      type="number"
+      id="node-input-allowedErrorPercent"
+      min="0"
+      max="100"
+      step="0.1"
+      style="width:80px;"
+    />
+    <span class="node-input-hint" style="margin-left:10px; color:#999;">%</span>
+  </div>
+  <div class="form-row">
+    <label for="node-input-scaleFilePath"
+      ><i class="fa fa-save"></i> Scale file path</label
+    >
+    <input
+      type="text"
+      id="node-input-scaleFilePath"
+      placeholder="/data/golden/calibration.json (container path)"
+    />
+  </div>
+</script>
+
+<script type="text/html" data-help-name="checkerboard-calibrate">
+  <p>
+    Measure how many millimetres a pixel covers, and check that it has not
+    drifted: photograph a printed checkerboard of known physical pitch,
+    measure the detected pixel pitch, and compare the resulting mm/px scale
+    against a previously-saved baseline. Run this once at commissioning and
+    again after camera or mechanical maintenance - not per production frame.
+  </p>
+  <p>
+    Detection is centroid/pitch-based (no sub-pixel corner refinement, no
+    lens-distortion or perspective correction) - it answers "has the
+    scale/geometry drifted since the last calibration," consistent with
+    <code>golden-compare</code>'s translation-only, fixed-rig scope.
+  </p>
+
+  <h3>Checkerboard requirements</h3>
+  <p>
+    <i>Grid size</i> counts <b>dark squares</b>, not total squares or inner
+    corners: cols = dark squares in the <b>longest</b> row, rows = number of
+    rows. Needs at least 3 rows (a 2-row step is used to measure vertical
+    pitch consistently with the horizontal same-colour spacing - see
+    <code>lib/checkerboard.js</code>).
+  </p>
+  <p>
+    A board with an <b>even</b> number of square columns holds the same
+    number of dark squares in every row: 16 columns means cols = 8. An
+    <b>odd</b> number cannot, so its rows alternate - 17 columns gives 9
+    dark squares in the rows that start dark and 8 in the rows that start
+    light, and cols = 9. Both shapes are accepted; count the longest row
+    either way, and the corner colour does not matter.
+  </p>
+
+  <h3>Input</h3>
+  <p>
+    <code>msg.payload</code> — a photo of the printed checkerboard: Buffer /
+    Uint8Array, a file path string, or an object with
+    <code>data</code>/<code>buffer</code>/<code>path</code>.
+  </p>
+  <p>
+    <code>msg.save</code> (bool) — persist the freshly detected scale as the
+    new baseline (their "Match New Scale" + "Save"). Optional per-message
+    overrides: <code>msg.targetPitchMm</code>,
+    <code>msg.checkerboardCols</code>, <code>msg.checkerboardRows</code>,
+    <code>msg.allowedErrorPercent</code>.
+  </p>
+
+  <h3>Output</h3>
+  <ul>
+    <li><code>msg.payload</code> — <code>true</code>/<code>false</code> pass</li>
+    <li>
+      <code>msg.result</code> —
+      <code
+        >{ checkerboardDetected, currentScale, detectedScale,
+        deviationPercent, bootstrap, pass, saved, pitchXPx, pitchYPx,
+        nativeWidth, nativeHeight }</code
+      >
+      (scales in mm/px; <code>bootstrap</code> is true when there's no saved
+      baseline yet to compare against - always passes, since there's
+      nothing to deviate from)
+    </li>
+    <li><code>msg.timings</code> — <code>{ totalMs }</code></li>
+  </ul>
+
+  <h3>Notes</h3>
+  <p>
+    <i>Scale file path</i> is a path <b>inside the container</b> - use
+    <code>/data</code> so the calibration baseline survives a rebuild. The
+    saved scale is <code>mmPerPixelNative</code> - measured at this
+    calibration photo's own native resolution, not any particular
+    <code>golden-compare</code> working resolution - so it stays valid
+    however <code>golden-compare</code>'s <i>Working size</i> is configured.
+  </p>
+</script>
+
+<script type="text/javascript">
+  RED.nodes.registerType("checkerboard-calibrate", {
+    category: "vision",
+    color: "#5DADE2",
+    defaults: {
+      name: { value: "" },
+      targetPitchMm: { value: 10, validate: RED.validators.number(true) },
+      checkerboardCols: { value: 4, validate: RED.validators.number(true) },
+      checkerboardRows: { value: 6, validate: RED.validators.number(true) },
+      allowedErrorPercent: { value: 2, validate: RED.validators.number(true) },
+      scaleFilePath: { value: "" },
+    },
+    inputs: 1,
+    outputs: 1,
+    icon: "checkerboard-calibrate.svg",
+    label: function () {
+      return this.name || "checkerboard calibrate";
+    },
+    paletteLabel: function () {
+      return "checkerboard calibrate";
+    },
+  });
+</script>

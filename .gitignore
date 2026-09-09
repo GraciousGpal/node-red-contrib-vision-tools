@@ -1,0 +1,22 @@
+node_modules/
+
+# Real QC photographs and calibration output: site data, not source. The
+# test suite generates its own fixtures with sharp so it runs anywhere.
+data/
+*.jpg
+*.jpeg
+*.png
+!icons/*.png
+
+# Local calibration and transform files the nodes write next to a flow
+calibration.json
+transform.json
+
+# npm pack output
+*.tgz
+
+# editor / OS noise
+.DS_Store
+Thumbs.db
+.vscode/
+.idea/

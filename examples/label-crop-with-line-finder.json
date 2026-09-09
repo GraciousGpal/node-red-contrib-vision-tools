@@ -1,0 +1,239 @@
+[
+    {
+        "id": "lfx-note-a",
+        "type": "comment",
+        "z": "lfx-tab",
+        "name": "1 · TUNE ONE EDGE  ─  line-finder is the setup tool, not the cropper",
+        "info": "`line-finder` never crops anything. It measures ONE straight edge inside\nONE region you draw, so you can get that edge solid before handing the\nnumbers to `label-crop` (section 2), which runs four of them itself.\n\nOpen the `line finder` node, load a sample frame into its canvas and\ndrag across the edge you want - the drag *direction* sets the scan\ndirection. Then hit Inject and read the preview drawn on the canvas:\n\n  blue parallelogram = the search region\n  green ticks        = calipers that agreed and were used in the fit\n  red ticks          = calipers dropped as outliers\n  yellow line        = the fitted line\n\nTune until it is found on every frame you try, with few red ticks:\n\n  * found nothing        -> lower `contrastThreshold`; if only some\n                            calipers find it, lower\n                            `minCaliperFraction` too\n  * found the WRONG edge -> tighten the region, do NOT raise contrast\n  * soft, multi-step     -> `Edge select` = `first` or `last` instead\n    transition              of `best`. `best` picks the strongest step,\n                            which flips between two similar ones from\n                            frame to frame; `first`/`last` are\n                            positional, so they stay on the same step.\n                            This is what makes a boundary repeatable.\n  * a few red ticks      -> widen the region so the edge stays inside it\n                            on every frame, or raise\n                            `outlierTolerancePx` a little\n\nThe region loaded here is this rig's *top* edge - the hardest one, a\n4-grey-level step that is never found at the default contrast of 2.\nRepeat for the other three, then move to section 2.",
+        "x": 300,
+        "y": 60,
+        "wires": []
+    },
+    {
+        "id": "lfx-inject-a",
+        "type": "inject",
+        "z": "lfx-tab",
+        "name": "one frame",
+        "props": [
+            {
+                "p": "payload"
+            }
+        ],
+        "repeat": "",
+        "crontab": "",
+        "once": false,
+        "onceDelay": 0.1,
+        "topic": "",
+        "payload": "",
+        "payloadType": "date",
+        "x": 140,
+        "y": 120,
+        "wires": [
+            [
+                "lfx-read-a"
+            ]
+        ]
+    },
+    {
+        "id": "lfx-read-a",
+        "type": "file in",
+        "z": "lfx-tab",
+        "name": "sample frame",
+        "filename": "/data/Inspection/sample_images/good/image_20260907_093135-748Z.jpg",
+        "filenameType": "str",
+        "format": "",
+        "chunk": false,
+        "sendError": true,
+        "encoding": "none",
+        "allProps": false,
+        "x": 320,
+        "y": 120,
+        "wires": [
+            [
+                "lfx-finder"
+            ]
+        ]
+    },
+    {
+        "id": "lfx-finder",
+        "type": "line-finder",
+        "z": "lfx-tab",
+        "name": "top edge",
+        "regionX": 300,
+        "regionY": 8,
+        "regionWidth": 2400,
+        "regionHeight": 90,
+        "regionAngleDeg": 0,
+        "scanDirection": "down",
+        "polarity": "either",
+        "edgeSelect": "first",
+        "ignoreCount": 0,
+        "calipers": 16,
+        "contrastThreshold": 0.35,
+        "filterHalfWidth": 2,
+        "outlierTolerancePx": 2.5,
+        "minCaliperFraction": 0.25,
+        "angleToleranceDeg": 10,
+        "minScore": 0,
+        "previewEnabled": true,
+        "previewWidth": 260,
+        "x": 530,
+        "y": 120,
+        "wires": [
+            [
+                "lfx-debug-a"
+            ]
+        ]
+    },
+    {
+        "id": "lfx-debug-a",
+        "type": "debug",
+        "z": "lfx-tab",
+        "name": "msg.lineFinder",
+        "active": true,
+        "tosidebar": true,
+        "console": false,
+        "tostatus": false,
+        "complete": "lineFinder",
+        "targetType": "msg",
+        "statusVal": "",
+        "statusType": "auto",
+        "x": 740,
+        "y": 120,
+        "wires": []
+    },
+    {
+        "id": "lfx-note-b",
+        "type": "comment",
+        "z": "lfx-tab",
+        "name": "2 · CROP  ─  label-crop in calipers mode runs four line finders itself",
+        "info": "`label-crop` with **Boundary = calipers** runs no blob search at all. It\ngreys the frame once, runs one line finder per side over the regions in\nthe `edgeRegions` JSON, intersects the four fitted lines into a\nrectangle, then deskews and crops to it - the same rotate/crop tail the\nblob mode uses.\n\nThe scan direction per side is implied (left scans rightwards, top\nscans downwards, ...), so each side needs only its box plus whichever\nline-finder options you tuned in section 1. Every option in\n`lib/lineFinder.js` is accepted per side.\n\nCoordinates are FULL-RESOLUTION frame pixels. Calipers mode ignores\n`maxEdge` and measures at full res on purpose - a caliper looks for a\nposition, not a shape, so a 640px detection copy would coarsen every\nreading 6x.\n\nIf one edge is not found the frame is NOT cropped:\n`msg.labelCrop.reason` names the side (e.g.\n`calipers:missing-edge:top`) and `msg.labelCrop.edges` carries per-side\ndiagnostics (found / reason / score / calipers / residualPx) so you can\nsee which region to re-aim. Guessing a missing edge would silently\nmis-crop, so it refuses instead.\n\nMeasured with the regions below over this rig's 148 good frames:\n\n  found on           148/148\n  label width spread 1.8 px\n  height spread      5.2 px\n  deskew angle spread 0.14 deg\n\nand of the 14 bad frames it refuses 6 outright - the blanks, which have\nno label boundary to find.\n\nNote the lowered `minCaliperFraction`. Left, right and top are found\nby all 16 calipers on every one of the 148 frames, but the bottom edge\nis picked up by only a third of them - 5 of 16 at worst - so at the 0.5\ndefault it is reported missing on 76 of them. Lowering the fraction is\nthe right fix there, not raising contrast.",
+        "x": 300,
+        "y": 240,
+        "wires": []
+    },
+    {
+        "id": "lfx-inject-b",
+        "type": "inject",
+        "z": "lfx-tab",
+        "name": "one frame",
+        "props": [
+            {
+                "p": "payload"
+            }
+        ],
+        "repeat": "",
+        "crontab": "",
+        "once": false,
+        "onceDelay": 0.1,
+        "topic": "",
+        "payload": "",
+        "payloadType": "date",
+        "x": 140,
+        "y": 300,
+        "wires": [
+            [
+                "lfx-read-b"
+            ]
+        ]
+    },
+    {
+        "id": "lfx-read-b",
+        "type": "file in",
+        "z": "lfx-tab",
+        "name": "sample frame",
+        "filename": "/data/Inspection/sample_images/good/image_20260907_093135-748Z.jpg",
+        "filenameType": "str",
+        "format": "",
+        "chunk": false,
+        "sendError": true,
+        "encoding": "none",
+        "allProps": false,
+        "x": 320,
+        "y": 300,
+        "wires": [
+            [
+                "lfx-crop"
+            ]
+        ]
+    },
+    {
+        "id": "lfx-crop",
+        "type": "label-crop",
+        "z": "lfx-tab",
+        "name": "crop by calipers",
+        "boundaryMode": "calipers",
+        "edgeRegions": "{\n  \"left\":   { \"x\": 40,   \"y\": 400,  \"width\": 90,   \"height\": 2800, \"contrastThreshold\": 1.0,  \"edgeSelect\": \"last\",  \"minCaliperFraction\": 0.25 },\n  \"right\":  { \"x\": 2900, \"y\": 400,  \"width\": 90,   \"height\": 2800, \"contrastThreshold\": 0.6,  \"edgeSelect\": \"last\",  \"minCaliperFraction\": 0.25 },\n  \"top\":    { \"x\": 300,  \"y\": 8,    \"width\": 2400, \"height\": 90,   \"contrastThreshold\": 0.35, \"edgeSelect\": \"first\", \"minCaliperFraction\": 0.25 },\n  \"bottom\": { \"x\": 300,  \"y\": 3580, \"width\": 2400, \"height\": 90,   \"contrastThreshold\": 2.5,  \"edgeSelect\": \"best\",  \"minCaliperFraction\": 0.2 }\n}",
+        "maxEdge": 640,
+        "polarity": "auto",
+        "minAreaFraction": 0.05,
+        "maxAreaFraction": 0.9,
+        "minRectangularity": 0.4,
+        "maxBorderContact": 0.5,
+        "minDominance": 1.5,
+        "minConfidence": 0.4,
+        "aspectRatio": "",
+        "aspectTolerance": 0.15,
+        "expectedSizeFraction": "",
+        "sizeTolerance": 0.2,
+        "cropMargin": 0,
+        "minRotateAngleDeg": 0.5,
+        "previewEnabled": true,
+        "previewWidth": 220,
+        "outputFormat": "jpg",
+        "outputQuality": 92,
+        "pngOptimize": false,
+        "x": 540,
+        "y": 300,
+        "wires": [
+            [
+                "lfx-debug-b",
+                "lfx-write"
+            ]
+        ]
+    },
+    {
+        "id": "lfx-debug-b",
+        "type": "debug",
+        "z": "lfx-tab",
+        "name": "msg.labelCrop",
+        "active": true,
+        "tosidebar": true,
+        "console": false,
+        "tostatus": false,
+        "complete": "labelCrop",
+        "targetType": "msg",
+        "statusVal": "",
+        "statusType": "auto",
+        "x": 760,
+        "y": 260,
+        "wires": []
+    },
+    {
+        "id": "lfx-write",
+        "type": "file",
+        "z": "lfx-tab",
+        "name": "/data/label-crop.jpg",
+        "filename": "/data/label-crop.jpg",
+        "filenameType": "str",
+        "appendNewline": false,
+        "createDir": true,
+        "overwriteFile": "true",
+        "encoding": "none",
+        "x": 790,
+        "y": 320,
+        "wires": [
+            []
+        ]
+    },
+    {
+        "id": "lfx-note-c",
+        "type": "comment",
+        "z": "lfx-tab",
+        "name": "3 · WHAT NOT TO EXPECT from cropping (measured on this rig)",
+        "info": "The crop above is geometrically excellent and still does not improve\nthe inspection on this label. Measured over 148 good / 14 bad frames\nagainst a Demo_Good_60 golden:\n\n  no crop           148/148 good pass\n  blob crop          72/148\n  fixed rect         55/148\n  calipers crop      28/148\n\nThe cause is not the crop quality. The recurring background-defect\nregions sit on logotype strokes and barcode bar fields - real fine\nartwork in the label's left margin. Cropping shifts\nwhich pixels land in which comparison block, which moves that artwork\nrelative to the golden and makes the mismatch worse.\n\nSo use this flow when you want a deskewed, consistently framed label\nimage - archiving, OCR, a downstream tool that wants the label alone -\nnot as a way to raise the inspection score. See ARCHITECTURE.md,\n\"What it does not solve\".",
+        "x": 280,
+        "y": 400,
+        "wires": []
+    }
+]

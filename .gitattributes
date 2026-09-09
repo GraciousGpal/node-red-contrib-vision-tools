@@ -1,0 +1,6 @@
+# Keep source LF in the repo and in the published tarball, whatever the
+# checkout platform does locally.
+* text=auto eol=lf
+*.svg text eol=lf
+*.png binary
+*.jpg binary

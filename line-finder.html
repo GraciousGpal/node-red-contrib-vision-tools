@@ -1,0 +1,1361 @@
+<script type="text/html" data-template-name="line-finder">
+  <div class="form-row">
+    <label for="node-input-name"><i class="fa fa-tag"></i> Name</label>
+    <input type="text" id="node-input-name" placeholder="Name" />
+  </div>
+
+  <div class="form-row">
+    <label><i class="fa fa-crop"></i> Search region</label>
+    <div style="margin-left:105px;">
+      <canvas
+        id="line-finder-canvas"
+        width="360"
+        height="240"
+        style="border:1px solid #ccc; border-radius:3px; cursor:pointer; background:#fafafa;"
+        title="Click to open the zoom viewer"
+      ></canvas>
+      <div style="margin-top:6px;">
+        <input type="file" id="line-finder-file" accept="image/*" style="width:210px;" />
+        <button
+          type="button"
+          id="line-finder-open-viewer"
+          class="red-ui-button red-ui-button-small"
+          title="Zoom in and drag the region over the edge"
+        >
+          <i class="fa fa-search-plus"></i> Viewer
+        </button>
+        <button type="button" id="line-finder-clear" class="red-ui-button red-ui-button-small">
+          Reset
+        </button>
+      </div>
+      <div
+        id="line-finder-readout"
+        style="margin-top:6px; color:#888; font-size:12px; font-family:monospace;"
+      >
+        no region
+      </div>
+      <div style="margin-top:4px; color:#999; font-size:12px;">
+        Load a representative photo, then open the viewer to zoom in and drag
+        <b>across</b> the edge, in the direction the calipers should travel.
+        The orange arrow is that direction, the dashed green line is the edge
+        being looked for, and the pale lines are the calipers themselves.
+        Corner handles resize, the amber grip rotates, arrow keys nudge by a
+        pixel.
+      </div>
+    </div>
+  </div>
+
+  <div class="form-row">
+    <label for="node-input-regionX"><i class="fa fa-arrows"></i> Region</label>
+    <input type="number" id="node-input-regionX" style="width:70px;" placeholder="x" />
+    <input type="number" id="node-input-regionY" style="width:70px;" placeholder="y" />
+    <input type="number" id="node-input-regionWidth" style="width:70px;" placeholder="w" />
+    <input type="number" id="node-input-regionHeight" style="width:70px;" placeholder="h" />
+    <span class="node-input-hint" style="margin-left:8px; color:#999;">x y w h</span>
+  </div>
+
+  <div class="form-row">
+    <label for="node-input-regionAngleDeg"><i class="fa fa-rotate-right"></i> Region angle</label>
+    <input type="number" id="node-input-regionAngleDeg" step="0.1" style="width:80px;" />
+    <span class="node-input-hint" style="margin-left:10px; color:#999;"
+      >degrees clockwise about the region's centre</span
+    >
+  </div>
+
+  <div class="form-row">
+    <label for="node-input-scanDirection"><i class="fa fa-long-arrow-right"></i> Scan</label>
+    <select id="node-input-scanDirection" style="width:130px;">
+      <option value="right">left to right</option>
+      <option value="left">right to left</option>
+      <option value="down">top to bottom</option>
+      <option value="up">bottom to top</option>
+    </select>
+    <span class="node-input-hint" style="margin-left:10px; color:#999;"
+      >the edge found is perpendicular to this</span
+    >
+  </div>
+
+  <div class="form-row">
+    <label for="node-input-polarity"><i class="fa fa-adjust"></i> Polarity</label>
+    <select id="node-input-polarity" style="width:130px;">
+      <option value="either">either</option>
+      <option value="darkToLight">dark to light</option>
+      <option value="lightToDark">light to dark</option>
+    </select>
+    <span class="node-input-hint" style="margin-left:10px; color:#999;"
+      >as seen travelling along the scan direction</span
+    >
+  </div>
+
+  <div class="form-row">
+    <label for="node-input-edgeSelect"><i class="fa fa-crosshairs"></i> Select</label>
+    <select id="node-input-edgeSelect" style="width:130px;">
+      <option value="best">strongest edge</option>
+      <option value="first">first edge</option>
+      <option value="last">last edge</option>
+    </select>
+    <input type="number" id="node-input-ignoreCount" min="0" style="width:60px; margin-left:10px;" />
+    <span class="node-input-hint" style="margin-left:8px; color:#999;"
+      >edges to skip first</span
+    >
+  </div>
+
+  <div class="form-row">
+    <label for="node-input-calipers"><i class="fa fa-bars"></i> Calipers</label>
+    <input type="number" id="node-input-calipers" min="1" max="512" style="width:70px;" />
+    <span class="node-input-hint" style="margin-left:10px; color:#999;"
+      >scans across the region; each averages its own slice</span
+    >
+  </div>
+
+  <div class="form-row">
+    <label for="node-input-contrastThreshold"><i class="fa fa-signal"></i> Contrast</label>
+    <input type="number" id="node-input-contrastThreshold" min="0" step="0.1" style="width:70px;" />
+    <span class="node-input-hint" style="margin-left:10px; color:#999;"
+      >grey levels per pixel of travel; lower finds fainter edges</span
+    >
+  </div>
+
+  <div class="form-row">
+    <label for="node-input-filterHalfWidth"><i class="fa fa-filter"></i> Smoothing</label>
+    <input type="number" id="node-input-filterHalfWidth" min="0" max="64" style="width:70px;" />
+    <span class="node-input-hint" style="margin-left:10px; color:#999;"
+      >box half-width in scan pixels</span
+    >
+  </div>
+
+  <div class="form-row">
+    <label for="node-input-outlierTolerancePx"><i class="fa fa-ban"></i> Outlier</label>
+    <input type="number" id="node-input-outlierTolerancePx" min="0.1" step="0.1" style="width:70px;" />
+    <span class="node-input-hint" style="margin-left:10px; color:#999;"
+      >px from the fitted line before a caliper is dropped</span
+    >
+  </div>
+
+  <div class="form-row">
+    <label for="node-input-minCaliperFraction"><i class="fa fa-check"></i> Min calipers</label>
+    <input type="number" id="node-input-minCaliperFraction" min="0.05" max="1" step="0.05" style="width:70px;" />
+    <span class="node-input-hint" style="margin-left:10px; color:#999;"
+      >fraction that must survive the fit</span
+    >
+  </div>
+
+  <div class="form-row">
+    <label for="node-input-angleToleranceDeg"><i class="fa fa-rotate-left"></i> Angle tol.</label>
+    <input type="number" id="node-input-angleToleranceDeg" min="0" max="90" step="0.5" style="width:70px;" />
+    <span class="node-input-hint" style="margin-left:10px; color:#999;"
+      >degrees from the region's own orientation; blank to skip</span
+    >
+  </div>
+
+  <div class="form-row">
+    <label for="node-input-previewEnabled"
+      ><i class="fa fa-eye"></i> Preview</label
+    >
+    <input
+      type="checkbox"
+      id="node-input-previewEnabled"
+      style="width:auto; vertical-align:top;"
+    />
+    <label for="node-input-previewEnabled" style="width:auto; margin-left:5px;"
+      >Draw the region, calipers and fitted line on the flow canvas</label
+    >
+  </div>
+
+  <div class="form-row" id="line-finder-preview-width-row">
+    <label for="node-input-previewWidth"
+      ><i class="fa fa-arrows-h"></i> Preview width</label
+    >
+    <input type="number" id="node-input-previewWidth" min="80" max="600" style="width:80px;" />
+    <span class="node-input-hint" style="margin-left:10px; color:#999;"
+      >px; diagnostic only - it re-encodes the frame on every message</span
+    >
+  </div>
+
+  <div class="form-row">
+    <label for="node-input-minScore"><i class="fa fa-star-o"></i> Min score</label>
+    <input type="number" id="node-input-minScore" min="0" max="1" step="0.05" style="width:70px;" />
+    <span class="node-input-hint" style="margin-left:10px; color:#999;"
+      >below this the line is reported as not found</span
+    >
+  </div>
+</script>
+
+<script type="text/html" data-help-name="line-finder">
+  <p>
+    Find one straight edge inside a region you draw. A row of
+    <b>calipers</b> scans across the region, each one reports where the
+    brightness steps, and a line is fitted through those points with
+    outliers dropped.
+  </p>
+  <p>
+    Use it when a whole-frame search finds the <i>wrong</i> edge. That
+    happens whenever the strongest contrast near the boundary you want
+    belongs to something else - printed artwork a few millimetres inside
+    a label edge, a frame vignette outboard of it, a conveyor rail. A
+    drawn region settles it by construction: nothing outside the box can
+    win.
+  </p>
+
+  <h3>Drawing the region</h3>
+  <p>
+    Load a representative photo and the <b>zoom viewer</b> opens on it -
+    click the thumbnail or <i>Viewer</i> to reopen it. Drag
+    <b>across</b> the edge, in the direction you want the calipers to
+    travel. The box should straddle the edge with room for it to move
+    frame to frame, and should <b>exclude</b> any stronger edge you do
+    not want. Width along the edge buys noise rejection: each caliper
+    averages its whole slice, so a step of two or three grey levels is
+    perfectly findable over a few hundred rows even though it is
+    invisible in any single one.
+  </p>
+  <p>
+    The viewer is where a region actually gets aimed, because at
+    thumbnail scale a two-grey-level boundary is not visible at all. It
+    opens zoomed onto the current region and shows what the search will
+    do: the <b>orange arrow</b> is the scan direction, the <b>dashed
+    green</b> line is the edge being looked for, and the <b>pale
+    lines</b> are the calipers themselves - one per band, drawn where
+    that band will measure. Turn them off with <i>Calipers</i> if they
+    get in the way.
+  </p>
+  <ul>
+    <li>mouse wheel zooms to the cursor; <i>Fit</i> and <i>100%</i>
+      jump; right-drag pans at any time, or switch <i>Mode</i> to Pan</li>
+    <li>drag on empty space to draw a new region - the drag direction
+      sets the scan direction, which is the one thing a static box
+      cannot tell you</li>
+    <li>corner handles resize from the opposite corner; dragging inside
+      moves the box; the arrow keys nudge it a pixel at a time, ten with
+      Shift</li>
+    <li>the amber grip rotates the region about its centre, to a tenth
+      of a degree - hold Shift to snap to five</li>
+    <li><i>Scan</i> cycles the direction without redrawing</li>
+    <li><i>Apply</i> writes the region into the fields; <i>Cancel</i> or
+      Escape leaves them alone</li>
+  </ul>
+  <p>
+    A region may hang off the frame, but the footer says so: a caliper
+    band that is not wholly inside the image is skipped rather than
+    averaged over a moving pixel count, so a box half off the edge
+    quietly loses its calipers.
+  </p>
+
+  <h3>Input</h3>
+  <p>
+    <code>msg.payload</code> — an encoded image Buffer or a raw
+    <code>{ data, width, height, channels }</code> object. The payload is
+    <b>not</b> modified; this is a measuring tool.
+  </p>
+  <p>
+    <code>msg.region</code> — optional per-message region
+    <code>{ x, y, width, height, angleDeg }</code>, so one node can be
+    re-aimed rather than copied. Every option below can also be
+    overridden by a same-named <code>msg</code> property.
+  </p>
+
+  <h3>Output</h3>
+  <p><code>msg.lineFinder</code>:</p>
+  <ul>
+    <li><code>found</code> / <code>reason</code> — <code>ok</code>, <code>no-edge</code>,
+      <code>too-few-calipers</code>, <code>angle-out-of-tolerance</code>,
+      <code>below-min-score</code></li>
+    <li><code>line</code> — <code>{ x, y, dx, dy, p0, p1 }</code>: a point on
+      the line, a unit direction along it, and the endpoints clipped to the
+      region</li>
+    <li><code>angleDeg</code> — the line's angle, folded to (-90, 90]</li>
+    <li><code>score</code> — coverage × fit tightness, 0..1</li>
+    <li><code>calipers</code> — <code>{ total, found, used }</code></li>
+    <li><code>residualPx</code> — RMS distance of the used points from the line</li>
+    <li><code>points</code> — every caliper hit, each flagged <code>used</code>
+      or not, for overlaying on a debug image</li>
+  </ul>
+  <p>
+    A miss is a normal result, not an error - <code>found</code> is false
+    and the flow decides what to do. Only an unusable payload is an error.
+  </p>
+
+  <h3>Preview</h3>
+  <p>
+    Switch <i>Preview</i> on and the node draws its result on the flow
+    canvas: the search region as you configured it (a rotated region shows
+    as the parallelogram it is), every caliper hit - <b>green</b> kept,
+    <b>red</b> dropped by the outlier trim - and the <b>yellow</b> fitted
+    line, with the angle, caliper count, score and residual above. Click
+    the preview to dismiss it.
+  </p>
+  <p>
+    A <b>miss</b> previews too, which is the point: it shows whether the
+    box is aimed at the wrong edge, clipped by the frame, or straddling
+    two steps - none of which a score alone can tell you. It re-encodes
+    the frame on every message, so it is a tuning aid, not something to
+    leave on in production.
+  </p>
+
+  <h3>Tuning</h3>
+  <p>
+    Start with <i>Contrast</i> at 2 and lower it until the edge is found;
+    if it finds the wrong edge instead, tighten the region rather than
+    raising the threshold. <i>Select</i> = <b>first</b> is the
+    deterministic choice when two steps of similar strength sit close
+    together - <b>strongest</b> can alternate between them from frame to
+    frame. <i>Edges to skip</i> steps past a known structure, such as a
+    frame vignette, without narrowing the box.
+  </p>
+
+  <h3>Four of these make a rectangle</h3>
+  <p>
+    Feed four line-finders (left, right, top, bottom) into
+    <code>label-crop</code>'s <i>calipers</i> boundary mode and it will
+    intersect them into the label's corners and crop to them - far more
+    stable than a blob search when the boundary is faint. See that node's
+    help.
+  </p>
+  <p>
+    No OpenCV engine is needed: the search is pure JS and only touches
+    the pixels inside the region, so its cost follows the box you drew,
+    not the frame size.
+  </p>
+</script>
+
+<script type="text/javascript">
+  RED.nodes.registerType("line-finder", {
+    category: "vision",
+    color: "#5DADE2",
+    defaults: {
+      name: { value: "" },
+      regionX: { value: 0, validate: RED.validators.number(true) },
+      regionY: { value: 0, validate: RED.validators.number(true) },
+      regionWidth: { value: 100, validate: RED.validators.number(true) },
+      regionHeight: { value: 100, validate: RED.validators.number(true) },
+      regionAngleDeg: { value: 0, validate: RED.validators.number(true) },
+      scanDirection: { value: "right" },
+      polarity: { value: "either" },
+      edgeSelect: { value: "best" },
+      ignoreCount: { value: 0, validate: RED.validators.number(true) },
+      calipers: { value: 16, validate: RED.validators.number(true) },
+      contrastThreshold: { value: 2, validate: RED.validators.number(true) },
+      filterHalfWidth: { value: 2, validate: RED.validators.number(true) },
+      outlierTolerancePx: { value: 2.5, validate: RED.validators.number(true) },
+      minCaliperFraction: { value: 0.5, validate: RED.validators.number(true) },
+      angleToleranceDeg: { value: 10, validate: RED.validators.number(true) },
+      minScore: { value: 0, validate: RED.validators.number(true) },
+      previewEnabled: { value: false },
+      previewWidth: { value: 260, validate: RED.validators.number(true) },
+    },
+    inputs: 1,
+    outputs: 1,
+    icon: "font-awesome/fa-minus",
+    label: function () {
+      return this.name || "line finder";
+    },
+    paletteLabel: function () {
+      return "line finder";
+    },
+    oneditprepare: function () {
+      // ---- region geometry ------------------------------------------
+      // A copy of regionFrame()/regionCorners() from lib/lineFinder.js: the
+      // region rotates about its own centre, and the scan direction decides
+      // which corner the calipers start from. The editor has to agree with
+      // the runtime exactly or the box drawn is not the box searched, so
+      // test/editorRegionGeometry.test.js lifts this very function out of
+      // the file and runs it against the runtime one.
+      // EDITOR_GEOMETRY_START
+      const regionFrameEditor = function (region, scanDirection) {
+        const a = (region.angleDeg || 0) * (Math.PI / 180);
+        const ca = Math.cos(a);
+        const sa = Math.sin(a);
+        const ex = { x: ca, y: sa };
+        const ey = { x: -sa, y: ca };
+        const hw = region.width / 2;
+        const hh = region.height / 2;
+        let scan;
+        let line;
+        let depth;
+        let length;
+        let start;
+        switch (scanDirection) {
+          case "left":
+            scan = { x: -ex.x, y: -ex.y };
+            line = ey;
+            depth = region.width;
+            length = region.height;
+            start = { u: hw, v: -hh };
+            break;
+          case "down":
+            scan = ey;
+            line = ex;
+            depth = region.height;
+            length = region.width;
+            start = { u: -hw, v: -hh };
+            break;
+          case "up":
+            scan = { x: -ey.x, y: -ey.y };
+            line = ex;
+            depth = region.height;
+            length = region.width;
+            start = { u: -hw, v: hh };
+            break;
+          default: // "right"
+            scan = ex;
+            line = ey;
+            depth = region.width;
+            length = region.height;
+            start = { u: -hw, v: -hh };
+            break;
+        }
+        const cx = region.x + region.width / 2;
+        const cy = region.y + region.height / 2;
+        const origin = {
+          x: cx + start.u * ex.x + start.v * ey.x,
+          y: cy + start.u * ex.y + start.v * ey.y,
+        };
+        const at = function (u, v) {
+          return {
+            x: origin.x + scan.x * u + line.x * v,
+            y: origin.y + scan.y * u + line.y * v,
+          };
+        };
+        return {
+          scan: scan,
+          line: line,
+          origin: origin,
+          depth: depth,
+          length: length,
+          at: at,
+          centre: { x: cx, y: cy },
+          ex: ex,
+          ey: ey,
+          corners: [at(0, 0), at(depth, 0), at(depth, length), at(0, length)],
+        };
+      };
+      // EDITOR_GEOMETRY_END
+
+      /**
+       * The four corners in the region's own order (top-left, top-right,
+       * bottom-right, bottom-left before rotation) rather than in scan
+       * order, so a resize handle keeps its identity when the scan
+       * direction changes.
+       */
+      const localCorners = function (region) {
+        const f = regionFrameEditor(region, "right");
+        const hw = region.width / 2;
+        const hh = region.height / 2;
+        const at = function (u, v) {
+          return {
+            x: f.centre.x + u * f.ex.x + v * f.ey.x,
+            y: f.centre.y + u * f.ex.y + v * f.ey.y,
+          };
+        };
+        return [at(-hw, -hh), at(hw, -hh), at(hw, hh), at(-hw, hh)];
+      };
+
+      /** Pointer position expressed in the region's own axes, from its centre. */
+      const toLocal = function (region, px, py) {
+        const a = (region.angleDeg || 0) * (Math.PI / 180);
+        const ca = Math.cos(a);
+        const sa = Math.sin(a);
+        const dx = px - (region.x + region.width / 2);
+        const dy = py - (region.y + region.height / 2);
+        return { u: dx * ca + dy * sa, v: -dx * sa + dy * ca };
+      };
+
+      // ---- fields ----------------------------------------------------
+      const canvas = document.getElementById("line-finder-canvas");
+      const ctx = canvas.getContext("2d");
+      const readout = document.getElementById("line-finder-readout");
+      const fileInput = document.getElementById("line-finder-file");
+
+      const SCAN_ORDER = ["right", "down", "left", "up"];
+      const SCAN_ARROW = { right: "→", left: "←", down: "↓", up: "↑" };
+      const MIN_SIDE = 4;
+
+      let image = null;
+      let imageW = 0;
+      let imageH = 0;
+
+      const field = function (id) {
+        return document.getElementById("node-input-" + id);
+      };
+      const num = function (id) {
+        const v = parseFloat(field(id).value);
+        return Number.isFinite(v) ? v : 0;
+      };
+      const clamp = function (v, lo, hi) {
+        return Math.min(hi, Math.max(lo, v));
+      };
+
+      const currentRegion = function () {
+        return {
+          x: num("regionX"),
+          y: num("regionY"),
+          width: Math.max(MIN_SIDE, num("regionWidth")),
+          height: Math.max(MIN_SIDE, num("regionHeight")),
+          angleDeg: num("regionAngleDeg"),
+        };
+      };
+      const currentScan = function () {
+        return field("scanDirection").value || "right";
+      };
+      const currentCalipers = function () {
+        const n = parseInt(field("calipers").value, 10);
+        return Number.isFinite(n) ? clamp(n, 1, 512) : 16;
+      };
+      const writeRegion = function (region, scanDirection) {
+        field("regionX").value = Math.round(region.x);
+        field("regionY").value = Math.round(region.y);
+        field("regionWidth").value = Math.max(1, Math.round(region.width));
+        field("regionHeight").value = Math.max(1, Math.round(region.height));
+        field("regionAngleDeg").value =
+          Math.round((region.angleDeg || 0) * 10) / 10;
+        field("scanDirection").value = scanDirection;
+      };
+
+      const hasRegion = function (r) {
+        return r.width > 0 && r.height > 0;
+      };
+      const outsideFrame = function (region, scanDirection) {
+        if (!imageW || !imageH) return false;
+        return regionFrameEditor(region, scanDirection).corners.some(function (p) {
+          return p.x < 0 || p.y < 0 || p.x > imageW || p.y > imageH;
+        });
+      };
+
+      const describeRegion = function (region, scanDirection) {
+        const bands = currentCalipers();
+        const f = regionFrameEditor(region, scanDirection);
+        return (
+          "x " + Math.round(region.x) +
+          "  y " + Math.round(region.y) +
+          "  " + Math.round(region.width) + "×" + Math.round(region.height) + " px" +
+          "  " + (Math.round((region.angleDeg || 0) * 10) / 10) + "°" +
+          "  scan " + SCAN_ARROW[scanDirection] +
+          "  " + bands + " calipers of " + (f.length / bands).toFixed(1) + " px"
+        );
+      };
+
+      const updateReadout = function () {
+        const r = currentRegion();
+        if (!hasRegion(r)) {
+          readout.textContent = "no region";
+          return;
+        }
+        readout.textContent =
+          describeRegion(r, currentScan()) +
+          (imageW ? "   (image " + imageW + "×" + imageH + ")" : "") +
+          (outsideFrame(r, currentScan()) ? "   ⚠ past the frame" : "");
+      };
+
+      // ---- shared overlay drawing ------------------------------------
+      // Both the thumbnail and the viewer draw the region through this, in
+      // screen coordinates, so line weights stay one pixel at any zoom.
+      const drawArrow = function (c, x0, y0, x1, y1) {
+        c.beginPath();
+        c.moveTo(x0, y0);
+        c.lineTo(x1, y1);
+        c.stroke();
+        const a = Math.atan2(y1 - y0, x1 - x0);
+        c.beginPath();
+        c.moveTo(x1, y1);
+        c.lineTo(x1 - 9 * Math.cos(a - 0.4), y1 - 9 * Math.sin(a - 0.4));
+        c.lineTo(x1 - 9 * Math.cos(a + 0.4), y1 - 9 * Math.sin(a + 0.4));
+        c.closePath();
+        c.fill();
+      };
+
+      const drawRegion = function (c, region, scanDirection, toScreen, opts) {
+        if (!hasRegion(region)) return;
+        const o = opts || {};
+        const f = regionFrameEditor(region, scanDirection);
+        const S = function (u, v) {
+          const p = f.at(u, v);
+          return toScreen(p.x, p.y);
+        };
+
+        const box = f.corners.map(function (p) {
+          return toScreen(p.x, p.y);
+        });
+        c.beginPath();
+        c.moveTo(box[0].x, box[0].y);
+        for (let i = 1; i < box.length; i++) c.lineTo(box[i].x, box[i].y);
+        c.closePath();
+        c.fillStyle = "rgba(33,150,243,0.12)";
+        c.fill();
+        // a dark under-stroke so the box reads on pale and dark frames alike
+        c.lineJoin = "round";
+        c.strokeStyle = "rgba(0,0,0,0.6)";
+        c.lineWidth = 3;
+        c.stroke();
+        c.strokeStyle = "#2196f3";
+        c.lineWidth = 1.5;
+        c.stroke();
+
+        // one line per caliper, along the scan axis at the band's centre:
+        // this is literally where each measurement is taken
+        if (o.showCalipers) {
+          const bands = currentCalipers();
+          const bandLength = f.length / bands;
+          const a0 = S(0, 0);
+          const a1 = S(0, bandLength);
+          const spacing = Math.hypot(a1.x - a0.x, a1.y - a0.y);
+          if (spacing >= 3) {
+            c.strokeStyle = "rgba(255,255,255,0.45)";
+            c.lineWidth = 1;
+            for (let b = 0; b < bands; b++) {
+              const v = bandLength * (b + 0.5);
+              const a = S(0, v);
+              const z = S(f.depth, v);
+              c.beginPath();
+              c.moveTo(a.x, a.y);
+              c.lineTo(z.x, z.y);
+              c.stroke();
+            }
+          }
+        }
+
+        // the edge being looked for runs across the scan, through the middle
+        const e0 = S(f.depth / 2, 0);
+        const e1 = S(f.depth / 2, f.length);
+        c.strokeStyle = "rgba(76,175,80,0.9)";
+        c.lineWidth = 1;
+        c.setLineDash([5, 4]);
+        c.beginPath();
+        c.moveTo(e0.x, e0.y);
+        c.lineTo(e1.x, e1.y);
+        c.stroke();
+        c.setLineDash([]);
+
+        // and the scan direction, from the starting edge inward
+        const a0 = S(0, f.length / 2);
+        const a1 = S(f.depth, f.length / 2);
+        c.strokeStyle = "#e65100";
+        c.fillStyle = "#e65100";
+        c.lineWidth = 2;
+        drawArrow(c, a0.x, a0.y, a1.x, a1.y);
+      };
+
+      // ---- thumbnail -------------------------------------------------
+      const fit = function () {
+        if (!imageW || !imageH) return { s: 1, dx: 0, dy: 0 };
+        const s = Math.min(canvas.width / imageW, canvas.height / imageH);
+        return {
+          s: s,
+          dx: (canvas.width - imageW * s) / 2,
+          dy: (canvas.height - imageH * s) / 2,
+        };
+      };
+
+      const drawThumb = function () {
+        ctx.clearRect(0, 0, canvas.width, canvas.height);
+        if (!image) {
+          ctx.fillStyle = "#999";
+          ctx.font = "12px sans-serif";
+          ctx.textAlign = "center";
+          ctx.fillText("Load a sample image below,", canvas.width / 2, 106);
+          ctx.fillText("then click here for the zoom viewer", canvas.width / 2, 124);
+          return;
+        }
+        const f = fit();
+        ctx.drawImage(image, f.dx, f.dy, imageW * f.s, imageH * f.s);
+        drawRegion(
+          ctx,
+          currentRegion(),
+          currentScan(),
+          function (x, y) {
+            return { x: f.dx + x * f.s, y: f.dy + y * f.s };
+          },
+          { showCalipers: false },
+        );
+      };
+
+      // ---- zoomable modal viewer -------------------------------------
+      let viewer = null;
+
+      const openViewer = function () {
+        if (!image) {
+          readout.textContent = "Load a sample image first.";
+          return;
+        }
+        if (viewer) return;
+
+        const dpr = window.devicePixelRatio || 1;
+        // the region being edited, committed to the fields only on Apply
+        let reg = currentRegion();
+        let scan = currentScan();
+        let showCalipers = true;
+        let mode = "draw";
+
+        const overlay = document.createElement("div");
+        overlay.style.cssText =
+          "position:fixed;inset:0;z-index:100000;background:rgba(0,0,0,0.78);" +
+          "display:flex;flex-direction:column;align-items:center;justify-content:center;" +
+          "font:12px/1.4 sans-serif;color:#ddd;";
+
+        const mkButton = function (text, title) {
+          const b = document.createElement("button");
+          b.type = "button";
+          b.textContent = text;
+          b.title = title || "";
+          b.style.cssText =
+            "background:#4a4d54;color:#eee;border:1px solid #666;border-radius:3px;" +
+            "padding:3px 9px;cursor:pointer;font:12px sans-serif;";
+          return b;
+        };
+
+        const header = document.createElement("div");
+        header.style.cssText =
+          "display:flex;align-items:center;gap:6px;width:92vw;max-width:1200px;" +
+          "padding:6px 8px;background:#33353a;border:1px solid #555;border-bottom:none;" +
+          "border-radius:6px 6px 0 0;box-sizing:border-box;flex:0 0 auto;";
+
+        const btnZoomOut = mkButton("−", "Zoom out (mouse wheel zooms to cursor)");
+        const btnZoomIn = mkButton("+", "Zoom in");
+        const btnFit = mkButton("Fit", "Fit the image into the window");
+        const btn100 = mkButton("100%", "Actual pixel size");
+        const btnMode = mkButton(
+          "Mode: Draw",
+          "Drag to draw the region; right-drag pans",
+        );
+        const btnScan = mkButton(
+          "Scan " + SCAN_ARROW[scan],
+          "Cycle the scan direction (drawing a new region sets it too)",
+        );
+        const btnCalipers = mkButton("Calipers", "Show or hide the caliper lines");
+        const imgInfo = document.createElement("span");
+        imgInfo.style.color = "#999";
+        const btnClose = mkButton("✕", "Close without applying");
+        btnClose.style.marginLeft = "auto";
+        header.append(
+          btnZoomOut, btnZoomIn, btnFit, btn100,
+          btnMode, btnScan, btnCalipers, imgInfo, btnClose,
+        );
+
+        const body = document.createElement("div");
+        body.style.cssText =
+          "width:92vw;max-width:1200px;height:76vh;background:#232325;" +
+          "border:1px solid #555;position:relative;overflow:hidden;box-sizing:border-box;";
+
+        const viewCanvas = document.createElement("canvas");
+        viewCanvas.style.cssText =
+          "position:absolute;inset:0;width:100%;height:100%;display:block;" +
+          "touch-action:none;cursor:crosshair;";
+        body.appendChild(viewCanvas);
+        const vctx = viewCanvas.getContext("2d");
+
+        const footer = document.createElement("div");
+        footer.style.cssText =
+          "width:92vw;max-width:1200px;padding:6px 8px;background:#33353a;border:1px solid #555;" +
+          "border-top:none;border-radius:0 0 6px 6px;box-sizing:border-box;flex:0 0 auto;" +
+          "display:flex;align-items:center;gap:10px;";
+        const footReadout = document.createElement("span");
+        footReadout.style.color = "#bbb";
+        footReadout.style.fontFamily = "monospace";
+        const btnApply = mkButton("Apply", "Write this region into the node's fields");
+        btnApply.style.background = "#3574f0";
+        btnApply.style.borderColor = "#3574f0";
+        btnApply.style.marginLeft = "auto";
+        const btnCancel = mkButton("Cancel", "Close without applying");
+        footer.append(footReadout, btnApply, btnCancel);
+
+        overlay.append(header, body, footer);
+        document.body.appendChild(overlay);
+        viewer = overlay;
+
+        // view.scale/ox/oy map image space -> canvas CSS px
+        const view = { scale: 1, ox: 0, oy: 0 };
+        const toImage = function (ev) {
+          const b = viewCanvas.getBoundingClientRect();
+          return {
+            x: (ev.clientX - b.left - view.ox) / view.scale,
+            y: (ev.clientY - b.top - view.oy) / view.scale,
+          };
+        };
+        const toScreen = function (x, y) {
+          return { x: view.ox + x * view.scale, y: view.oy + y * view.scale };
+        };
+        const fitView = function () {
+          const w = body.clientWidth;
+          const h = body.clientHeight;
+          view.scale = Math.min(w / imageW, h / imageH, 1) * 0.96;
+          view.ox = (w - imageW * view.scale) / 2;
+          view.oy = (h - imageH * view.scale) / 2;
+        };
+        const zoomAt = function (cx, cy, factor) {
+          const ix = (cx - view.ox) / view.scale;
+          const iy = (cy - view.oy) / view.scale;
+          view.scale = clamp(view.scale * factor, 0.02, 40);
+          view.ox = cx - ix * view.scale;
+          view.oy = cy - iy * view.scale;
+        };
+
+        // ---- hit testing ---------------------------------------------
+        const HANDLE = 5; // half-size in screen px
+        const TOL = 11;
+        const handlePoints = function () {
+          return localCorners(reg).map(function (p) {
+            return toScreen(p.x, p.y);
+          });
+        };
+        /** The rotation grip: 30 screen px beyond the +u edge, on the centre line. */
+        const rotatePoint = function () {
+          const f = regionFrameEditor(reg, "right");
+          const edge = {
+            x: f.centre.x + (reg.width / 2) * f.ex.x,
+            y: f.centre.y + (reg.width / 2) * f.ex.y,
+          };
+          const s = toScreen(edge.x, edge.y);
+          return { x: s.x + f.ex.x * 30, y: s.y + f.ex.y * 30 };
+        };
+        const hitHandle = function (sx, sy) {
+          const pts = handlePoints();
+          for (let i = 0; i < pts.length; i++) {
+            if (Math.abs(pts[i].x - sx) <= TOL && Math.abs(pts[i].y - sy) <= TOL) {
+              return i;
+            }
+          }
+          return -1;
+        };
+        const hitRotate = function (sx, sy) {
+          const r = rotatePoint();
+          return Math.hypot(r.x - sx, r.y - sy) <= TOL;
+        };
+        const inside = function (px, py) {
+          const l = toLocal(reg, px, py);
+          return (
+            Math.abs(l.u) <= reg.width / 2 && Math.abs(l.v) <= reg.height / 2
+          );
+        };
+
+        // ---- edits ---------------------------------------------------
+        const fromCorners = function (a, b, angleDeg) {
+          // a and b are opposite corners in the region's own axes, measured
+          // from the *old* centre; rebuild x/y/w/h from them
+          const w = Math.max(MIN_SIDE, Math.abs(b.u - a.u));
+          const h = Math.max(MIN_SIDE, Math.abs(b.v - a.v));
+          const mid = { u: (a.u + b.u) / 2, v: (a.v + b.v) / 2 };
+          const rad = (angleDeg || 0) * (Math.PI / 180);
+          const ca = Math.cos(rad);
+          const sa = Math.sin(rad);
+          const cx = reg.x + reg.width / 2 + mid.u * ca - mid.v * sa;
+          const cy = reg.y + reg.height / 2 + mid.u * sa + mid.v * ca;
+          return { x: cx - w / 2, y: cy - h / 2, width: w, height: h, angleDeg: angleDeg };
+        };
+        const resizeByHandle = function (handleIndex, px, py) {
+          const signs = [
+            { u: -1, v: -1 },
+            { u: 1, v: -1 },
+            { u: 1, v: 1 },
+            { u: -1, v: 1 },
+          ][handleIndex];
+          const fixed = {
+            u: -signs.u * (reg.width / 2),
+            v: -signs.v * (reg.height / 2),
+          };
+          const moved = toLocal(reg, px, py);
+          return fromCorners(fixed, moved, reg.angleDeg);
+        };
+        const newRegionFromDrag = function (from, to) {
+          const x0 = clamp(Math.min(from.x, to.x), 0, imageW);
+          const y0 = clamp(Math.min(from.y, to.y), 0, imageH);
+          const x1 = clamp(Math.max(from.x, to.x), 0, imageW);
+          const y1 = clamp(Math.max(from.y, to.y), 0, imageH);
+          const dx = to.x - from.x;
+          const dy = to.y - from.y;
+          // the drag's dominant axis and sign is the scan direction: which
+          // way the calipers travel is the one thing a static box cannot say
+          scan =
+            Math.abs(dx) >= Math.abs(dy)
+              ? dx >= 0 ? "right" : "left"
+              : dy >= 0 ? "down" : "up";
+          return {
+            x: x0,
+            y: y0,
+            width: Math.max(MIN_SIDE, x1 - x0),
+            height: Math.max(MIN_SIDE, y1 - y0),
+            angleDeg: 0,
+          };
+        };
+
+        // ---- painting ------------------------------------------------
+        let boardPattern = null;
+        const drawView = function () {
+          const w = body.clientWidth;
+          const h = body.clientHeight;
+          vctx.clearRect(0, 0, w, h);
+          if (!boardPattern) {
+            const p = document.createElement("canvas");
+            p.width = 28;
+            p.height = 28;
+            const pc = p.getContext("2d");
+            pc.fillStyle = "#26262a";
+            pc.fillRect(0, 0, 28, 28);
+            pc.fillStyle = "#2d2d32";
+            pc.fillRect(0, 0, 14, 14);
+            pc.fillRect(14, 14, 14, 14);
+            boardPattern = vctx.createPattern(p, "repeat");
+          }
+          vctx.fillStyle = boardPattern;
+          vctx.fillRect(0, 0, w, h);
+
+          vctx.save();
+          vctx.translate(view.ox, view.oy);
+          vctx.scale(view.scale, view.scale);
+          // past 4x the interesting question is "what does one pixel say",
+          // so stop blurring them together
+          vctx.imageSmoothingEnabled = view.scale < 4;
+          vctx.imageSmoothingQuality = "high";
+          vctx.drawImage(image, 0, 0, imageW, imageH);
+          vctx.restore();
+
+          // the frame's own border, so a region hanging off the edge is obvious
+          const tl = toScreen(0, 0);
+          const br = toScreen(imageW, imageH);
+          vctx.strokeStyle = "rgba(255,255,255,0.25)";
+          vctx.lineWidth = 1;
+          vctx.strokeRect(tl.x, tl.y, br.x - tl.x, br.y - tl.y);
+
+          drawRegion(vctx, reg, scan, toScreen, { showCalipers: showCalipers });
+
+          // resize handles and the rotation grip
+          const pts = handlePoints();
+          for (const p of pts) {
+            vctx.fillStyle = "#ffffff";
+            vctx.fillRect(p.x - HANDLE, p.y - HANDLE, HANDLE * 2, HANDLE * 2);
+            vctx.strokeStyle = "#2196f3";
+            vctx.lineWidth = 1.5;
+            vctx.strokeRect(p.x - HANDLE, p.y - HANDLE, HANDLE * 2, HANDLE * 2);
+          }
+          const rp = rotatePoint();
+          const cs = toScreen(reg.x + reg.width / 2, reg.y + reg.height / 2);
+          vctx.strokeStyle = "rgba(255,255,255,0.5)";
+          vctx.lineWidth = 1;
+          vctx.setLineDash([3, 3]);
+          vctx.beginPath();
+          vctx.moveTo(cs.x, cs.y);
+          vctx.lineTo(rp.x, rp.y);
+          vctx.stroke();
+          vctx.setLineDash([]);
+          vctx.beginPath();
+          vctx.arc(rp.x, rp.y, 6, 0, Math.PI * 2);
+          vctx.fillStyle = "#ffb300";
+          vctx.fill();
+          vctx.strokeStyle = "#7a4f00";
+          vctx.stroke();
+        };
+
+        const updateFootReadout = function () {
+          imgInfo.textContent = imageW + " × " + imageH + " px";
+          let txt = "zoom " + Math.round(view.scale * 100) + "%  ·  " +
+            describeRegion(reg, scan);
+          if (outsideFrame(reg, scan)) {
+            txt += "  ·  ⚠ past the frame: bands outside it are skipped";
+          }
+          footReadout.textContent = txt;
+        };
+
+        const repaint = function () {
+          drawView();
+          updateFootReadout();
+        };
+
+        // ---- pointer -------------------------------------------------
+        let drag = null;
+        viewCanvas.addEventListener("pointerdown", function (ev) {
+          if (ev.button !== 0 && ev.button !== 2) return;
+          viewCanvas.setPointerCapture(ev.pointerId);
+          const b = viewCanvas.getBoundingClientRect();
+          const sx = ev.clientX - b.left;
+          const sy = ev.clientY - b.top;
+          const p = toImage(ev);
+          if (ev.button === 2 || mode === "pan") {
+            drag = { type: "pan", sx: sx, sy: sy, ox: view.ox, oy: view.oy };
+          } else if (hitRotate(sx, sy)) {
+            drag = { type: "rotate" };
+          } else {
+            const handleIndex = hitHandle(sx, sy);
+            if (handleIndex >= 0) {
+              drag = { type: "handle", handle: handleIndex };
+            } else if (inside(p.x, p.y)) {
+              drag = { type: "move", ix: p.x, iy: p.y, start: reg };
+            } else {
+              drag = { type: "new", from: p, prev: reg, prevScan: scan };
+            }
+          }
+          ev.preventDefault();
+        });
+        viewCanvas.addEventListener("pointermove", function (ev) {
+          if (!drag) {
+            return;
+          }
+          const b = viewCanvas.getBoundingClientRect();
+          const sx = ev.clientX - b.left;
+          const sy = ev.clientY - b.top;
+          const p = toImage(ev);
+          if (drag.type === "pan") {
+            view.ox = drag.ox + (sx - drag.sx);
+            view.oy = drag.oy + (sy - drag.sy);
+          } else if (drag.type === "new") {
+            reg = newRegionFromDrag(drag.from, p);
+            btnScan.textContent = "Scan " + SCAN_ARROW[scan];
+          } else if (drag.type === "move") {
+            reg = {
+              x: drag.start.x + (p.x - drag.ix),
+              y: drag.start.y + (p.y - drag.iy),
+              width: drag.start.width,
+              height: drag.start.height,
+              angleDeg: drag.start.angleDeg,
+            };
+          } else if (drag.type === "handle") {
+            reg = resizeByHandle(drag.handle, p.x, p.y);
+          } else if (drag.type === "rotate") {
+            const cx = reg.x + reg.width / 2;
+            const cy = reg.y + reg.height / 2;
+            let deg = (Math.atan2(p.y - cy, p.x - cx) * 180) / Math.PI;
+            // shift snaps to 5 degrees; otherwise a tenth, which is the
+            // finest the field carries
+            deg = ev.shiftKey ? Math.round(deg / 5) * 5 : Math.round(deg * 10) / 10;
+            reg = { x: reg.x, y: reg.y, width: reg.width, height: reg.height, angleDeg: deg };
+          }
+          repaint();
+        });
+        const endDrag = function () {
+          if (!drag) return;
+          if (drag.type === "new" && (reg.width <= MIN_SIDE || reg.height <= MIN_SIDE)) {
+            // a click rather than a drag: keep what was there
+            reg = drag.prev;
+            scan = drag.prevScan;
+            btnScan.textContent = "Scan " + SCAN_ARROW[scan];
+          }
+          drag = null;
+          repaint();
+        };
+        viewCanvas.addEventListener("pointerup", endDrag);
+        viewCanvas.addEventListener("pointercancel", endDrag);
+        viewCanvas.addEventListener("contextmenu", function (ev) {
+          ev.preventDefault();
+        });
+        viewCanvas.addEventListener(
+          "wheel",
+          function (ev) {
+            ev.preventDefault();
+            const b = viewCanvas.getBoundingClientRect();
+            zoomAt(ev.clientX - b.left, ev.clientY - b.top, ev.deltaY < 0 ? 1.25 : 0.8);
+            repaint();
+          },
+          { passive: false },
+        );
+
+        // ---- window plumbing -----------------------------------------
+        const setViewSize = function () {
+          viewCanvas.width = Math.round(body.clientWidth * dpr);
+          viewCanvas.height = Math.round(body.clientHeight * dpr);
+          vctx.setTransform(dpr, 0, 0, dpr, 0, 0);
+          repaint();
+        };
+        const closeViewer = function () {
+          if (!viewer) return;
+          window.removeEventListener("keydown", onKeyDown, true);
+          window.removeEventListener("resize", onResize);
+          overlay.remove();
+          viewer = null;
+        };
+        const nudge = function (dx, dy) {
+          reg = {
+            x: reg.x + dx,
+            y: reg.y + dy,
+            width: reg.width,
+            height: reg.height,
+            angleDeg: reg.angleDeg,
+          };
+          repaint();
+        };
+        const onKeyDown = function (ev) {
+          if (ev.key === "Escape") {
+            ev.preventDefault();
+            ev.stopPropagation();
+            closeViewer();
+            return;
+          }
+          const step = ev.shiftKey ? 10 : 1;
+          if (ev.key === "ArrowLeft") nudge(-step, 0);
+          else if (ev.key === "ArrowRight") nudge(step, 0);
+          else if (ev.key === "ArrowUp") nudge(0, -step);
+          else if (ev.key === "ArrowDown") nudge(0, step);
+          else if (
+            ev.key === "Enter" &&
+            !(ev.target && ev.target instanceof Element && overlay.contains(ev.target))
+          ) {
+            // keep Enter from saving the whole edit dialog behind the modal
+            ev.preventDefault();
+            ev.stopPropagation();
+            return;
+          } else {
+            return;
+          }
+          ev.preventDefault();
+          ev.stopPropagation();
+        };
+        const onResize = function () {
+          setViewSize();
+        };
+
+        btnZoomIn.addEventListener("click", function () {
+          zoomAt(body.clientWidth / 2, body.clientHeight / 2, 1.5);
+          repaint();
+        });
+        btnZoomOut.addEventListener("click", function () {
+          zoomAt(body.clientWidth / 2, body.clientHeight / 2, 1 / 1.5);
+          repaint();
+        });
+        btnFit.addEventListener("click", function () {
+          fitView();
+          repaint();
+        });
+        btn100.addEventListener("click", function () {
+          view.scale = 1;
+          view.ox = (body.clientWidth - imageW) / 2;
+          view.oy = (body.clientHeight - imageH) / 2;
+          repaint();
+        });
+        btnMode.addEventListener("click", function () {
+          mode = mode === "draw" ? "pan" : "draw";
+          btnMode.textContent = "Mode: " + (mode === "draw" ? "Draw" : "Pan");
+          btnMode.title =
+            mode === "draw"
+              ? "Drag to draw the region; right-drag pans"
+              : "Drag to pan the image; switch back to Draw to edit the region";
+          viewCanvas.style.cursor = mode === "draw" ? "crosshair" : "grab";
+        });
+        btnScan.addEventListener("click", function () {
+          scan = SCAN_ORDER[(SCAN_ORDER.indexOf(scan) + 1) % SCAN_ORDER.length];
+          btnScan.textContent = "Scan " + SCAN_ARROW[scan];
+          repaint();
+        });
+        btnCalipers.addEventListener("click", function () {
+          showCalipers = !showCalipers;
+          btnCalipers.style.opacity = showCalipers ? "1" : "0.55";
+          repaint();
+        });
+        btnClose.addEventListener("click", closeViewer);
+        btnCancel.addEventListener("click", closeViewer);
+        btnApply.addEventListener("click", function () {
+          writeRegion(reg, scan);
+          updateReadout();
+          drawThumb();
+          closeViewer();
+        });
+
+        window.addEventListener("keydown", onKeyDown, true);
+        window.addEventListener("resize", onResize);
+        overlay.addEventListener(
+          "wheel",
+          function (ev) {
+            ev.preventDefault();
+          },
+          { passive: false },
+        );
+
+        // open zoomed to the region when there is one worth looking at: the
+        // whole point of the viewer is the pixels at the edge
+        fitView();
+        if (hasRegion(reg) && imageW) {
+          const f = regionFrameEditor(reg, scan);
+          const want = Math.min(
+            body.clientWidth / Math.max(20, reg.width * 1.6),
+            body.clientHeight / Math.max(20, reg.height * 1.6),
+          );
+          if (Number.isFinite(want) && want > view.scale) {
+            view.scale = clamp(want, view.scale, 8);
+            view.ox = body.clientWidth / 2 - f.centre.x * view.scale;
+            view.oy = body.clientHeight / 2 - f.centre.y * view.scale;
+          }
+        }
+        setViewSize();
+        btnApply.focus();
+      };
+
+      // ---- wiring ----------------------------------------------------
+      canvas.addEventListener("click", openViewer);
+      document
+        .getElementById("line-finder-open-viewer")
+        .addEventListener("click", openViewer);
+
+      fileInput.addEventListener("change", function () {
+        const file = fileInput.files && fileInput.files[0];
+        if (!file) return;
+        const url = URL.createObjectURL(file);
+        const img = new Image();
+        img.onload = function () {
+          image = img;
+          imageW = img.naturalWidth;
+          imageH = img.naturalHeight;
+          URL.revokeObjectURL(url);
+          updateReadout();
+          drawThumb();
+          openViewer();
+        };
+        img.onerror = function () {
+          URL.revokeObjectURL(url);
+          RED.notify("line-finder: could not read that image", "error");
+        };
+        img.src = url;
+      });
+
+      document
+        .getElementById("line-finder-clear")
+        .addEventListener("click", function () {
+          writeRegion(
+            { x: 0, y: 0, width: 100, height: 100, angleDeg: 0 },
+            currentScan(),
+          );
+          updateReadout();
+          drawThumb();
+        });
+
+      for (const id of [
+        "regionX",
+        "regionY",
+        "regionWidth",
+        "regionHeight",
+        "regionAngleDeg",
+        "scanDirection",
+        "calipers",
+      ]) {
+        field(id).addEventListener("change", function () {
+          updateReadout();
+          drawThumb();
+        });
+      }
+
+      // preview width only means anything when the preview is on
+      const previewCheckbox = document.getElementById("node-input-previewEnabled");
+      const previewWidthRow = document.getElementById("line-finder-preview-width-row");
+      const updatePreviewVisibility = function () {
+        previewWidthRow.style.display = previewCheckbox.checked ? "" : "none";
+      };
+      previewCheckbox.addEventListener("change", updatePreviewVisibility);
+      updatePreviewVisibility();
+
+      updateReadout();
+      drawThumb();
+    },
+  });
+
+  // ---- flow-canvas preview -----------------------------------------
+  // One subscription for every line-finder node, registered once. The
+  // overlay is drawn from image-pixel coordinates scaled to the
+  // thumbnail, so a rotated region shows as the parallelogram it is
+  // rather than as a misleading upright box.
+  if (!window.lineFinderPreviewRendererInitialized) {
+    window.lineFinderPreviewRendererInitialized = true;
+
+    const removePreview = function (nodeId) {
+      const existing = document.getElementById(
+        "line-finder-preview-container-" + nodeId,
+      );
+      if (existing) existing.remove();
+    };
+
+    RED.comms.subscribe("line-finder-preview", function (_event, data) {
+      if (!data || !data.id) return;
+      if (data.clear || !data.image) {
+        removePreview(data.id);
+        return;
+      }
+      const nodeElement = document.getElementById(data.id);
+      if (!nodeElement) return;
+      removePreview(data.id);
+
+      const width = Number(data.previewWidth) || 260;
+      const scale = width / data.imageWidth;
+      const height = Math.round(data.imageHeight * scale);
+
+      const container = document.createElementNS(
+        "http://www.w3.org/2000/svg",
+        "foreignObject",
+      );
+      container.id = "line-finder-preview-container-" + data.id;
+      container.setAttribute("x", "70");
+      container.setAttribute("y", "5");
+      container.setAttribute("width", String(width + 20));
+      container.setAttribute("height", String(height + 46));
+      container.style.overflow = "visible";
+
+      const body = document.createElementNS("http://www.w3.org/1999/xhtml", "div");
+      body.style.padding = "5px";
+      body.style.background = "rgba(32, 32, 32, 0.9)";
+      body.style.borderRadius = "4px";
+      body.style.color = "white";
+      body.style.font = "11px sans-serif";
+      body.style.cursor = "pointer";
+      body.title = "line-finder result (click to hide)";
+      body.onclick = function () {
+        removePreview(data.id);
+      };
+
+      const caption = document.createElementNS("http://www.w3.org/1999/xhtml", "div");
+      caption.style.paddingBottom = "3px";
+      caption.style.textAlign = "center";
+      caption.textContent = data.found
+        ? data.angleDeg.toFixed(2) +
+          "° · " + data.calipers.used + "/" + data.calipers.total +
+          " · score " + data.score.toFixed(2) +
+          " · resid " + data.residualPx.toFixed(2) + "px"
+        : "not found (" + data.reason + ")";
+      caption.style.color = data.found ? "#a5d6a7" : "#ffcc80";
+
+      const canvas = document.createElementNS("http://www.w3.org/1999/xhtml", "canvas");
+      canvas.width = width;
+      canvas.height = height;
+      canvas.style.display = "block";
+      canvas.style.width = width + "px";
+      canvas.style.height = height + "px";
+
+      const img = new Image();
+      img.onload = function () {
+        const ctx = canvas.getContext("2d");
+        ctx.drawImage(img, 0, 0, width, height);
+        const sx = function (v) { return v * scale; };
+
+        // the search region, as drawn
+        if (Array.isArray(data.region) && data.region.length === 4) {
+          ctx.strokeStyle = "#2196f3";
+          ctx.lineWidth = 1;
+          ctx.fillStyle = "rgba(33,150,243,0.15)";
+          ctx.beginPath();
+          ctx.moveTo(sx(data.region[0].x), sx(data.region[0].y));
+          for (let i = 1; i < 4; i++) {
+            ctx.lineTo(sx(data.region[i].x), sx(data.region[i].y));
+          }
+          ctx.closePath();
+          ctx.fill();
+          ctx.stroke();
+        }
+
+        // every caliper hit: green kept, red dropped by the outlier trim
+        for (const p of data.points || []) {
+          ctx.fillStyle = p.used ? "#66bb6a" : "#ef5350";
+          ctx.beginPath();
+          ctx.arc(sx(p.x), sx(p.y), 1.8, 0, Math.PI * 2);
+          ctx.fill();
+        }
+
+        // the fitted line
+        if (data.line) {
+          ctx.strokeStyle = "#ffeb3b";
+          ctx.lineWidth = 1.5;
+          ctx.beginPath();
+          ctx.moveTo(sx(data.line.p0.x), sx(data.line.p0.y));
+          ctx.lineTo(sx(data.line.p1.x), sx(data.line.p1.y));
+          ctx.stroke();
+        }
+      };
+      img.src = "data:image/" + (data.mimeType || "jpeg") + ";base64," + data.image;
+
+      body.appendChild(caption);
+      body.appendChild(canvas);
+      container.appendChild(body);
+      nodeElement.appendChild(container);
+    });
+  }
+</script>

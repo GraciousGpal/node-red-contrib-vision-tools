@@ -1,0 +1,73 @@
+{
+  "name": "@graciousstar/node-red-contrib-vision-tools",
+  "version": "1.0.0",
+  "description": "Machine-vision nodes for Node-RED on a fixed camera rig: golden-template AOI with position and blemish tolerances, mm/px calibration from a checkerboard, deskew-and-crop of a physical label, caliper edge and line finding over a drawn region, and barcode location and decoding restricted to known regions.",
+  "license": "Apache-2.0",
+  "author": "GraciousStar",
+  "keywords": [
+    "node-red",
+    "image",
+    "vision",
+    "machine-vision",
+    "qc",
+    "aoi",
+    "inspection",
+    "golden-template",
+    "calibration",
+    "checkerboard",
+    "caliper",
+    "edge-detection",
+    "line-finder",
+    "barcode",
+    "datamatrix",
+    "qr",
+    "code128",
+    "sharp"
+  ],
+  "repository": {
+    "type": "git",
+    "url": "git+https://github.com/GraciousGpal/node-red-contrib-vision-tools.git"
+  },
+  "bugs": {
+    "url": "https://github.com/GraciousGpal/node-red-contrib-vision-tools/issues"
+  },
+  "homepage": "https://github.com/GraciousGpal/node-red-contrib-vision-tools#readme",
+  "node-red": {
+    "version": ">=2.0.0",
+    "nodes": {
+      "golden-compare": "golden-compare.js",
+      "checkerboard-calibrate": "checkerboard-calibrate.js",
+      "label-crop": "label-crop.js",
+      "line-finder": "line-finder.js",
+      "barcode-locate": "barcode-locate.js"
+    }
+  },
+  "scripts": {
+    "test": "node --test"
+  },
+  "engines": {
+    "node": ">=18"
+  },
+  "dependencies": {
+    "sharp": "^0.35.3",
+    "zxing-wasm": "^3.1.3"
+  },
+  "optionalDependencies": {
+    "@rosepetal/node-red-contrib-image-tools": "^1.6.4"
+  },
+  "allowScripts": {
+    "sharp@0.35.3": true,
+    "@rosepetal/node-red-contrib-image-tools@1.6.4": true
+  },
+  "files": [
+    "*.js",
+    "*.html",
+    "lib/",
+    "icons/",
+    "examples/",
+    "README.md",
+    "ARCHITECTURE.md",
+    "CHANGELOG.md",
+    "LICENSE"
+  ]
+}

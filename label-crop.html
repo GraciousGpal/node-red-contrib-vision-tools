@@ -1,0 +1,1178 @@
+<script type="text/html" data-template-name="label-crop">
+  <div class="form-row">
+    <label for="node-input-name"><i class="fa fa-tag"></i> Name</label>
+    <input type="text" id="node-input-name" placeholder="Name" />
+  </div>
+  <div class="form-row">
+    <label for="node-input-boundaryMode"
+      ><i class="fa fa-object-ungroup"></i> Boundary</label
+    >
+    <select id="node-input-boundaryMode" style="width:180px;">
+      <option value="blob">blob (whole-frame threshold)</option>
+      <option value="calipers">calipers (four drawn regions)</option>
+    </select>
+  </div>
+
+  <div class="form-row" id="label-crop-regions-row">
+    <label for="node-input-edgeRegions"
+      ><i class="fa fa-minus"></i> Edge regions</label
+    >
+    <textarea
+      id="node-input-edgeRegions"
+      rows="8"
+      style="width:70%; font-family:monospace; font-size:12px;"
+      placeholder='{"left":{"x":55,"y":400,"width":60,"height":2800},...}'
+    ></textarea>
+    <div style="margin-left:105px; margin-top:4px; color:#999; font-size:12px;">
+      One region per edge, in <b>full-resolution frame pixels</b>. Tune each
+      one with a <code>line-finder</code> node - it has a drawing canvas and
+      reports the score - then paste the four here.
+      <span id="label-crop-regions-status" style="font-family:monospace;"></span>
+    </div>
+  </div>
+
+  <div class="form-row">
+    <label for="node-input-maxEdge"
+      ><i class="fa fa-arrows-alt"></i> Detection size</label
+    >
+    <input
+      type="number"
+      id="node-input-maxEdge"
+      min="64"
+      max="4096"
+      style="width:90px;"
+    />
+    <span class="node-input-hint" style="margin-left:10px; color:#999;"
+      >long edge, px - label finding runs on this copy, the crop does not</span
+    >
+  </div>
+  <div class="form-row">
+    <label for="node-input-polarity"
+      ><i class="fa fa-adjust"></i> Label polarity</label
+    >
+    <select id="node-input-polarity" style="width:130px;">
+      <option value="auto">auto</option>
+      <option value="light">light label</option>
+      <option value="dark">dark label</option>
+    </select>
+    <span class="node-input-hint" style="margin-left:10px; color:#999;"
+      >auto tries both Otsu polarities and keeps the better rectangle</span
+    >
+  </div>
+  <div class="form-row">
+    <label for="node-input-minAreaFraction"
+      ><i class="fa fa-percent"></i> Min area fraction</label
+    >
+    <input
+      type="number"
+      id="node-input-minAreaFraction"
+      min="0.001"
+      max="0.9"
+      step="0.01"
+      style="width:90px;"
+    />
+    <span class="node-input-hint" style="margin-left:10px; color:#999;"
+      >label must cover at least this fraction of the frame</span
+    >
+  </div>
+  <div class="form-row">
+    <label for="node-input-maxAreaFraction"
+      ><i class="fa fa-percent"></i> Max area fraction</label
+    >
+    <input
+      type="number"
+      id="node-input-maxAreaFraction"
+      min="0.01"
+      max="0.999"
+      step="0.01"
+      style="width:90px;"
+    />
+    <span class="node-input-hint" style="margin-left:10px; color:#999;"
+      >rejects foreground regions that implausibly fill the frame</span
+    >
+  </div>
+  <div class="form-row">
+    <label for="node-input-minRectangularity"
+      ><i class="fa fa-square-o"></i> Min rectangularity</label
+    >
+    <input
+      type="number"
+      id="node-input-minRectangularity"
+      min="0.05"
+      max="1"
+      step="0.05"
+      style="width:90px;"
+    />
+    <span class="node-input-hint" style="margin-left:10px; color:#999;"
+      >blob area / its exterior rectangle area; printed labels pass at
+      ~0.4+</span
+    >
+  </div>
+  <div class="form-row">
+    <label for="node-input-maxBorderContact"
+      ><i class="fa fa-border"></i> Max border contact</label
+    >
+    <input
+      type="number"
+      id="node-input-maxBorderContact"
+      min="0"
+      max="1"
+      step="0.1"
+      style="width:90px;"
+    />
+    <span class="node-input-hint" style="margin-left:10px; color:#999;"
+      >0.5 permits clipping at two opposite frame edges; 1 means all edges</span
+    >
+  </div>
+  <div class="form-row">
+    <label for="node-input-minDominance"
+      ><i class="fa fa-bullseye"></i> Min dominance</label
+    >
+    <input
+      type="number"
+      id="node-input-minDominance"
+      min="1.01"
+      max="100"
+      step="0.1"
+      style="width:90px;"
+    />
+    <span class="node-input-hint" style="margin-left:10px; color:#999;"
+      >best blob vs second-best area ratio; rejects two competing labels</span
+    >
+  </div>
+  <div class="form-row">
+    <label for="node-input-minConfidence"
+      ><i class="fa fa-check-circle-o"></i> Min confidence</label
+    >
+    <input
+      type="number"
+      id="node-input-minConfidence"
+      min="0.01"
+      max="1"
+      step="0.05"
+      style="width:90px;"
+    />
+  </div>
+  <div class="form-row">
+    <label for="node-input-aspectRatio"
+      ><i class="fa fa-arrows-h"></i> Expected aspect ratio</label
+    >
+    <input
+      type="number"
+      id="node-input-aspectRatio"
+      min="0.05"
+      max="20"
+      step="0.05"
+      style="width:90px;"
+    />
+    <span class="node-input-hint" style="margin-left:10px; color:#999;"
+      >label w/h in the deskewed frame; blank = any</span
+    >
+  </div>
+  <div class="form-row">
+    <label for="node-input-aspectTolerance"
+      ><i class="fa fa-arrows-h"></i> Aspect tolerance</label
+    >
+    <input
+      type="number"
+      id="node-input-aspectTolerance"
+      min="0.01"
+      max="1"
+      step="0.01"
+      style="width:90px;"
+    />
+    <span class="node-input-hint" style="margin-left:10px; color:#999;"
+      >log-ratio tolerance around the expected aspect</span
+    >
+  </div>
+  <div class="form-row">
+    <label for="node-input-expectedSizeFraction"
+      ><i class="fa fa-arrows-alt"></i> Expected label size</label
+    >
+    <input
+      type="number"
+      id="node-input-expectedSizeFraction"
+      min="0.001"
+      max="0.99"
+      step="0.01"
+      style="width:90px;"
+    />
+    <span class="node-input-hint" style="margin-left:10px; color:#999;"
+      >fraction of the frame the label covers; blank = no size gate. Draw it
+      below on a representative sample.</span
+    >
+  </div>
+  <div class="form-row">
+    <label for="node-input-sizeTolerance"
+      ><i class="fa fa-arrows-alt"></i> Size tolerance</label
+    >
+    <input
+      type="number"
+      id="node-input-sizeTolerance"
+      min="0.01"
+      max="1"
+      step="0.01"
+      style="width:90px;"
+    />
+    <span class="node-input-hint" style="margin-left:10px; color:#999;"
+      >log-ratio tolerance around the expected size</span
+    >
+  </div>
+  <div class="form-row" id="label-size-canvas-row">
+    <label style="vertical-align:top;"
+      ><i class="fa fa-crop"></i> Label size selector</label
+    >
+    <div style="display:inline-block; vertical-align:top;">
+      <canvas
+        id="label-crop-size-canvas"
+        width="320"
+        height="240"
+        title="Click to open the zoom viewer"
+        style="border:1px solid #888; background:#222; cursor:pointer; touch-action:none;"
+      ></canvas>
+      <div style="margin-top:4px;">
+        <button type="button" id="label-crop-load-image">
+          Load sample image
+        </button>
+        <input
+          type="file"
+          id="label-crop-image-file"
+          accept="image/*"
+          style="display:none;"
+        />
+        <button type="button" id="label-crop-open-viewer">Open viewer</button>
+        <button type="button" id="label-crop-clear-size">Clear</button>
+      </div>
+      <div
+        id="label-crop-size-readout"
+        style="color:#999; font-size:11px;"
+      ></div>
+      <div style="color:#999; font-size:11px; margin-top:2px;">
+        Load a representative photo (any size), then open the viewer to zoom in
+        and drag over the label: the drawn rectangle fills the aspect and size
+        fields above.
+      </div>
+    </div>
+  </div>
+  <div class="form-row">
+    <label for="node-input-cropMargin"
+      ><i class="fa fa-expand"></i> ROI margin</label
+    >
+    <input
+      type="number"
+      id="node-input-cropMargin"
+      min="0"
+      max="0.25"
+      step="0.01"
+      style="width:90px;"
+    />
+    <span class="node-input-hint" style="margin-left:10px; color:#999;"
+      >extra ring around the label before rotation, fraction of its long
+      edge</span
+    >
+  </div>
+  <div class="form-row">
+    <label for="node-input-minRotateAngleDeg"
+      ><i class="fa fa-repeat"></i> Min deskew angle</label
+    >
+    <input
+      type="number"
+      id="node-input-minRotateAngleDeg"
+      min="0"
+      max="10"
+      step="0.1"
+      style="width:90px;"
+    />
+    <span class="node-input-hint" style="margin-left:10px; color:#999;"
+      >below this, rotation is skipped and the label is cropped directly</span
+    >
+  </div>
+  <div class="form-row">
+    <label for="node-input-previewEnabled"
+      ><i class="fa fa-eye"></i> Preview</label
+    >
+    <input
+      type="checkbox"
+      id="node-input-previewEnabled"
+      style="display:inline-block; width:auto; vertical-align:baseline;"
+    />
+    <label for="node-input-previewEnabled" style="width:auto; margin-left:5px;"
+      >Show before and after on the flow canvas</label
+    >
+  </div>
+  <div class="form-row" id="label-crop-preview-width-row">
+    <label for="node-input-previewWidth"
+      ><i class="fa fa-arrows-h"></i> Preview width</label
+    >
+    <input
+      type="number"
+      id="node-input-previewWidth"
+      min="80"
+      max="600"
+      step="10"
+      style="width:90px;"
+    />
+    <span class="node-input-hint" style="margin-left:10px; color:#999;"
+      >pixels per image; preview encoding runs only when enabled</span
+    >
+  </div>
+  <div class="form-row">
+    <label for="node-input-outputFormat"
+      ><i class="fa fa-file-image-o"></i> Output format</label
+    >
+    <select id="node-input-outputFormat" style="width:130px;">
+      <option value="raw">raw</option>
+      <option value="jpg">jpeg</option>
+      <option value="png">png</option>
+      <option value="webp">webp</option>
+    </select>
+    <span class="node-input-hint" style="margin-left:10px; color:#999;"
+      >raw is a {data,width,height,channels} object; encoded is a Buffer</span
+    >
+  </div>
+  <div class="form-row">
+    <label for="node-input-outputQuality"
+      ><i class="fa fa-tasks"></i> Quality</label
+    >
+    <input
+      type="number"
+      id="node-input-outputQuality"
+      min="1"
+      max="100"
+      step="1"
+      style="width:90px;"
+    />
+  </div>
+  <div class="form-row">
+    <label for="node-input-pngOptimize"
+      ><i class="fa fa-compress"></i> Optimise PNG</label
+    >
+    <input type="checkbox" id="node-input-pngOptimize" style="width:auto;" />
+    <span class="node-input-hint" style="margin-left:10px; color:#999;"
+      >slower PNG compression; only matters for png output</span
+    >
+  </div>
+</script>
+
+<script type="text/html" data-help-name="label-crop">
+  <p>
+    Detects the physical label boundary on a low-resolution copy, then uses the
+    native OpenCV engine to deskew and tightly crop the label. It
+    performs rotation only, not perspective correction.
+  </p>
+  <h3>Input</h3>
+  <p>
+    <code>msg.payload</code> is an encoded image Buffer or a uint8 raw image
+    object with <code>data</code>, <code>width</code>, <code>height</code>, and
+    <code>channels</code>. Configuration fields may be overridden by same-named
+    <code>msg</code> properties.
+  </p>
+  <h3>Output</h3>
+  <p>
+    On success, <code>msg.payload</code> is the cropped label and
+    <code>msg.labelCrop</code> contains corners, angle, confidence, crop
+    geometry, and timings. A normal detection miss passes the original payload
+    through with <code>msg.labelCrop.detected</code> set to false. A missing
+    native engine is reported as an error.
+  </p>
+  <p>
+    Enable <i>Preview</i> to show labelled before/after images beside the node
+    on the flow canvas. Preview JPEG generation is diagnostic work and adds
+    latency; it does not alter <code>msg.payload</code>. Click the preview to
+    hide it.
+  </p>
+</script>
+
+<script type="text/javascript">
+  RED.nodes.registerType("label-crop", {
+    category: "vision",
+    color: "#a6bbcf",
+    defaults: {
+      name: { value: "" },
+      boundaryMode: { value: "blob" },
+      edgeRegions: { value: "" },
+      // number(true) = blank allowed, for the same reason as the
+      // golden-compare node: Node-RED does not backfill new defaults into
+      // saved node instances.
+      maxEdge: { value: 640, validate: RED.validators.number(true) },
+      polarity: { value: "auto" },
+      minAreaFraction: { value: 0.05, validate: RED.validators.number(true) },
+      maxAreaFraction: { value: 0.9, validate: RED.validators.number(true) },
+      minRectangularity: { value: 0.4, validate: RED.validators.number(true) },
+      maxBorderContact: { value: 0.5, validate: RED.validators.number(true) },
+      minDominance: { value: 1.5, validate: RED.validators.number(true) },
+      minConfidence: { value: 0.4, validate: RED.validators.number(true) },
+      aspectRatio: { value: "" },
+      aspectTolerance: { value: 0.15, validate: RED.validators.number(true) },
+      expectedSizeFraction: { value: "" },
+      sizeTolerance: { value: 0.2, validate: RED.validators.number(true) },
+      cropMargin: { value: 0.02, validate: RED.validators.number(true) },
+      minRotateAngleDeg: { value: 0.5, validate: RED.validators.number(true) },
+      previewEnabled: { value: false },
+      previewWidth: { value: 220, validate: RED.validators.number(true) },
+      outputFormat: { value: "raw" },
+      outputQuality: { value: 90, validate: RED.validators.number(true) },
+      pngOptimize: { value: false },
+    },
+    inputs: 1,
+    outputs: 1,
+    icon: "arrow-in.png",
+    oneditprepare: function () {
+      // ---- boundary mode: the blob gates and the caliper regions are
+      // mutually exclusive, so only ever show the set that is in use.
+      const boundaryField = document.getElementById("node-input-boundaryMode");
+      const regionsRow = document.getElementById("label-crop-regions-row");
+      const regionsField = document.getElementById("node-input-edgeRegions");
+      const regionsStatus = document.getElementById("label-crop-regions-status");
+      // every row that only means something to the blob search
+      const BLOB_ONLY = [
+        "polarity",
+        "minAreaFraction",
+        "maxAreaFraction",
+        "minRectangularity",
+        "maxBorderContact",
+        "minDominance",
+        "minConfidence",
+        "aspectRatio",
+        "aspectTolerance",
+        "expectedSizeFraction",
+        "sizeTolerance",
+        "maxEdge",
+      ];
+      const validateRegions = function () {
+        const raw = (regionsField.value || "").trim();
+        if (!raw) {
+          regionsStatus.textContent = "";
+          return;
+        }
+        try {
+          const parsed = JSON.parse(raw);
+          const missing = ["left", "right", "top", "bottom"].filter(function (k) {
+            return !parsed || !parsed[k];
+          });
+          regionsStatus.style.color = missing.length ? "#c62828" : "#2e7d32";
+          regionsStatus.textContent = missing.length
+            ? " missing: " + missing.join(", ")
+            : " all four edges configured";
+        } catch (err) {
+          regionsStatus.style.color = "#c62828";
+          regionsStatus.textContent = " not valid JSON: " + err.message;
+        }
+      };
+      const updateBoundaryVisibility = function () {
+        const calipers = boundaryField.value === "calipers";
+        regionsRow.style.display = calipers ? "" : "none";
+        for (const id of BLOB_ONLY) {
+          const el = document.getElementById("node-input-" + id);
+          const row = el && el.closest(".form-row");
+          if (row) row.style.display = calipers ? "none" : "";
+        }
+        const sizeRow = document.getElementById("label-size-canvas-row");
+        if (sizeRow) sizeRow.style.display = calipers ? "none" : "";
+        if (calipers) validateRegions();
+      };
+      boundaryField.addEventListener("change", updateBoundaryVisibility);
+      regionsField.addEventListener("change", validateRegions);
+      regionsField.addEventListener("blur", validateRegions);
+      updateBoundaryVisibility();
+
+      const checkbox = $("#node-input-previewEnabled");
+      const widthRow = $("#label-crop-preview-width-row");
+      const updatePreviewVisibility = function () {
+        widthRow.toggle(checkbox.is(":checked"));
+      };
+      checkbox.on("change", updatePreviewVisibility);
+      updatePreviewVisibility();
+
+      // ---- label size selector: draw the label on a loaded sample -------
+      // The thumbnail below is only a preview; drawing and fine-tuning happen
+      // in a zoomable modal viewer (openViewer).
+      const canvas = document.getElementById("label-crop-size-canvas");
+      const readout = document.getElementById("label-crop-size-readout");
+      const fileInput = document.getElementById("label-crop-image-file");
+      const ctx = canvas.getContext("2d");
+      let image = null; // HTMLImageElement
+      let imageW = 0;
+      let imageH = 0;
+      let rect = null; // {x,y,w,h} in image pixels
+      const MIN_RECT = 6; // image pixels below which a rect is ignored
+
+      const clampField = function (fieldId, value, min, max) {
+        $("#" + fieldId).val(Math.min(max, Math.max(min, value)).toFixed(3));
+      };
+
+      const applyRectToFields = function () {
+        if (!rect || rect.w < MIN_RECT || rect.h < MIN_RECT) return;
+        clampField("node-input-aspectRatio", rect.w / rect.h, 0.05, 20);
+        clampField(
+          "node-input-expectedSizeFraction",
+          (rect.w * rect.h) / (imageW * imageH),
+          0.001,
+          0.99,
+        );
+      };
+
+      const updateReadout = function () {
+        if (!image) {
+          readout.textContent = "";
+          return;
+        }
+        if (!rect || rect.w < MIN_RECT || rect.h < MIN_RECT) {
+          readout.textContent =
+            imageW +
+            " × " +
+            imageH +
+            " px loaded — open the viewer to draw the label";
+          return;
+        }
+        const fraction = (rect.w * rect.h) / (imageW * imageH);
+        readout.textContent =
+          Math.round(rect.w) +
+          " × " +
+          Math.round(rect.h) +
+          " px · covers " +
+          (fraction * 100).toFixed(1) +
+          "% of the frame · w/h " +
+          (rect.w / rect.h).toFixed(3);
+      };
+
+      const drawThumb = function () {
+        ctx.clearRect(0, 0, canvas.width, canvas.height);
+        if (!image) {
+          ctx.fillStyle = "#333";
+          ctx.font = "12px sans-serif";
+          ctx.textAlign = "center";
+          ctx.fillText("Load a sample image, then", canvas.width / 2, 112);
+          ctx.fillText("click here for the zoom viewer", canvas.width / 2, 130);
+          ctx.textAlign = "left";
+          return;
+        }
+        const s = Math.min(canvas.width / imageW, canvas.height / imageH);
+        const dw = imageW * s;
+        const dh = imageH * s;
+        const dx = (canvas.width - dw) / 2;
+        const dy = (canvas.height - dh) / 2;
+        ctx.drawImage(image, dx, dy, dw, dh);
+        if (rect && rect.w >= MIN_RECT && rect.h >= MIN_RECT) {
+          ctx.fillStyle = "rgba(79, 195, 247, 0.15)";
+          ctx.fillRect(
+            dx + rect.x * s,
+            dy + rect.y * s,
+            rect.w * s,
+            rect.h * s,
+          );
+          ctx.strokeStyle = "#4fc3f7";
+          ctx.lineWidth = 2;
+          ctx.strokeRect(
+            dx + rect.x * s,
+            dy + rect.y * s,
+            rect.w * s,
+            rect.h * s,
+          );
+        }
+      };
+
+      // ------------------- zoomable modal viewer ------------------------
+      let viewer = null;
+
+      const openViewer = function () {
+        if (!image) {
+          readout.textContent = "Load a sample image first.";
+          return;
+        }
+        if (viewer) return;
+
+        const dpr = window.devicePixelRatio || 1;
+        const overlay = document.createElement("div");
+        overlay.style.cssText =
+          "position:fixed;inset:0;z-index:100000;background:rgba(0,0,0,0.78);" +
+          "display:flex;flex-direction:column;align-items:center;justify-content:center;" +
+          "font:12px/1.4 sans-serif;color:#ddd;";
+
+        const mkButton = function (text, title) {
+          const b = document.createElement("button");
+          b.type = "button";
+          b.textContent = text;
+          b.title = title || "";
+          b.style.cssText =
+            "background:#4a4d54;color:#eee;border:1px solid #666;border-radius:3px;" +
+            "padding:3px 9px;cursor:pointer;font:12px sans-serif;";
+          return b;
+        };
+
+        const header = document.createElement("div");
+        header.style.cssText =
+          "display:flex;align-items:center;gap:6px;width:92vw;max-width:1200px;" +
+          "padding:6px 8px;background:#33353a;border:1px solid #555;border-bottom:none;" +
+          "border-radius:6px 6px 0 0;box-sizing:border-box;flex:0 0 auto;";
+
+        const btnZoomOut = mkButton(
+          "−",
+          "Zoom out (mouse wheel zooms to cursor)",
+        );
+        const btnZoomIn = mkButton("+", "Zoom in");
+        const btnFit = mkButton("Fit", "Fit the image into the window");
+        const btn100 = mkButton("100%", "Actual pixel size");
+        const btnMode = mkButton(
+          "Mode: Draw",
+          "Drag to draw the label rectangle; right-drag pans",
+        );
+        const imgInfo = document.createElement("span");
+        imgInfo.style.color = "#999";
+        const btnClose = mkButton("✕", "Close without applying");
+        btnClose.style.marginLeft = "auto";
+        header.append(
+          btnZoomOut,
+          btnZoomIn,
+          btnFit,
+          btn100,
+          btnMode,
+          imgInfo,
+          btnClose,
+        );
+
+        const body = document.createElement("div");
+        body.style.cssText =
+          "width:92vw;max-width:1200px;height:76vh;background:#232325;" +
+          "border:1px solid #555;position:relative;overflow:hidden;box-sizing:border-box;";
+
+        const viewCanvas = document.createElement("canvas");
+        viewCanvas.style.cssText =
+          "position:absolute;inset:0;width:100%;height:100%;display:block;" +
+          "touch-action:none;cursor:crosshair;";
+        body.appendChild(viewCanvas);
+        const vctx = viewCanvas.getContext("2d");
+
+        const footer = document.createElement("div");
+        footer.style.cssText =
+          "width:92vw;max-width:1200px;padding:6px 8px;background:#33353a;border:1px solid #555;" +
+          "border-top:none;border-radius:0 0 6px 6px;box-sizing:border-box;flex:0 0 auto;" +
+          "display:flex;align-items:center;gap:10px;";
+        const footReadout = document.createElement("span");
+        footReadout.style.color = "#bbb";
+        const btnApply = mkButton(
+          "Apply",
+          "Fill the aspect and size fields from this rectangle",
+        );
+        btnApply.style.background = "#3574f0";
+        btnApply.style.borderColor = "#3574f0";
+        btnApply.style.marginLeft = "auto";
+        const btnCancel = mkButton("Cancel", "Close without applying");
+        footer.append(footReadout, btnApply, btnCancel);
+
+        overlay.append(header, body, footer);
+        document.body.appendChild(overlay);
+        viewer = overlay;
+
+        // view state: view.scale/ox/oy map image space -> canvas (CSS px)
+        const view = { scale: 1, ox: 0, oy: 0 };
+        let mode = "draw"; // 'draw' | 'pan'
+        const clamp = function (v, lo, hi) {
+          return Math.min(hi, Math.max(lo, v));
+        };
+
+        const toImage = function (ev) {
+          const b = viewCanvas.getBoundingClientRect();
+          return {
+            x: (ev.clientX - b.left - view.ox) / view.scale,
+            y: (ev.clientY - b.top - view.oy) / view.scale,
+          };
+        };
+        const toScreen = function (x, y) {
+          return { x: view.ox + x * view.scale, y: view.oy + y * view.scale };
+        };
+        const fitView = function () {
+          const w = body.clientWidth;
+          const h = body.clientHeight;
+          view.scale = Math.min(w / imageW, h / imageH, 1) * 0.96;
+          view.ox = (w - imageW * view.scale) / 2;
+          view.oy = (h - imageH * view.scale) / 2;
+        };
+        const zoomAt = function (cx, cy, factor) {
+          const ix = (cx - view.ox) / view.scale;
+          const iy = (cy - view.oy) / view.scale;
+          view.scale = clamp(view.scale * factor, 0.02, 32);
+          view.ox = cx - ix * view.scale;
+          view.oy = cy - iy * view.scale;
+        };
+
+        const normalizedRect = function (x0, y0, x1, y1) {
+          let x = Math.min(x0, x1);
+          let y = Math.min(y0, y1);
+          let w = clamp(Math.abs(x1 - x0), 0, imageW);
+          let h = clamp(Math.abs(y1 - y0), 0, imageH);
+          x = clamp(x, 0, imageW - w);
+          y = clamp(y, 0, imageH - h);
+          return { x, y, w, h };
+        };
+        const clampRectToImage = function (r) {
+          return {
+            x: clamp(r.x, 0, Math.max(0, imageW - r.w)),
+            y: clamp(r.y, 0, Math.max(0, imageH - r.h)),
+            w: r.w,
+            h: r.h,
+          };
+        };
+        const resizeByHandle = function (handle, r, px, py) {
+          const nr = { x: r.x, y: r.y, w: r.w, h: r.h };
+          if (handle === 0) {
+            nr.x = clamp(
+              Math.min(px, r.x + r.w - MIN_RECT),
+              0,
+              r.x + r.w - MIN_RECT,
+            );
+            nr.w = r.x + r.w - nr.x;
+            nr.y = clamp(
+              Math.min(py, r.y + r.h - MIN_RECT),
+              0,
+              r.y + r.h - MIN_RECT,
+            );
+            nr.h = r.y + r.h - nr.y;
+          } else if (handle === 1) {
+            nr.w = clamp(px - r.x, MIN_RECT, imageW - r.x);
+            nr.y = clamp(
+              Math.min(py, r.y + r.h - MIN_RECT),
+              0,
+              r.y + r.h - MIN_RECT,
+            );
+            nr.h = r.y + r.h - nr.y;
+          } else if (handle === 2) {
+            nr.x = clamp(
+              Math.min(px, r.x + r.w - MIN_RECT),
+              0,
+              r.x + r.w - MIN_RECT,
+            );
+            nr.w = r.x + r.w - nr.x;
+            nr.h = clamp(py - r.y, MIN_RECT, imageH - r.y);
+          } else {
+            nr.w = clamp(px - r.x, MIN_RECT, imageW - r.x);
+            nr.h = clamp(py - r.y, MIN_RECT, imageH - r.y);
+          }
+          return nr;
+        };
+        const hitHandle = function (sx, sy) {
+          if (!rect || rect.w < MIN_RECT || rect.h < MIN_RECT) return -1;
+          const corners = [
+            [rect.x, rect.y],
+            [rect.x + rect.w, rect.y],
+            [rect.x, rect.y + rect.h],
+            [rect.x + rect.w, rect.y + rect.h],
+          ];
+          const TOL = 12;
+          for (let i = 0; i < corners.length; i++) {
+            const s = toScreen(corners[i][0], corners[i][1]);
+            if (Math.abs(s.x - sx) <= TOL && Math.abs(s.y - sy) <= TOL)
+              return i;
+          }
+          return -1;
+        };
+
+        let boardPattern = null;
+        const drawView = function () {
+          const w = body.clientWidth;
+          const h = body.clientHeight;
+          vctx.clearRect(0, 0, w, h);
+          if (!boardPattern) {
+            const p = document.createElement("canvas");
+            p.width = 28;
+            p.height = 28;
+            const pc = p.getContext("2d");
+            pc.fillStyle = "#26262a";
+            pc.fillRect(0, 0, 28, 28);
+            pc.fillStyle = "#2d2d32";
+            pc.fillRect(0, 0, 14, 14);
+            pc.fillRect(14, 14, 14, 14);
+            boardPattern = vctx.createPattern(p, "repeat");
+          }
+          vctx.fillStyle = boardPattern;
+          vctx.fillRect(0, 0, w, h);
+
+          vctx.save();
+          vctx.translate(view.ox, view.oy);
+          vctx.scale(view.scale, view.scale);
+          vctx.imageSmoothingEnabled = true;
+          vctx.imageSmoothingQuality = "high";
+          vctx.drawImage(image, 0, 0, imageW, imageH);
+          if (rect && rect.w >= MIN_RECT && rect.h >= MIN_RECT) {
+            vctx.lineJoin = "round";
+            vctx.fillStyle = "rgba(79, 195, 247, 0.12)";
+            vctx.fillRect(rect.x, rect.y, rect.w, rect.h);
+            vctx.lineWidth = 4 / view.scale;
+            vctx.strokeStyle = "rgba(0, 0, 0, 0.85)";
+            vctx.strokeRect(rect.x, rect.y, rect.w, rect.h);
+            vctx.lineWidth = 2 / view.scale;
+            vctx.strokeStyle = "#4fc3f7";
+            vctx.strokeRect(rect.x, rect.y, rect.w, rect.h);
+            const hs = 10 / view.scale;
+            const corners = [
+              [rect.x, rect.y],
+              [rect.x + rect.w, rect.y],
+              [rect.x, rect.y + rect.h],
+              [rect.x + rect.w, rect.y + rect.h],
+            ];
+            for (let i = 0; i < corners.length; i++) {
+              vctx.fillStyle = "#ffffff";
+              vctx.fillRect(
+                corners[i][0] - hs / 2,
+                corners[i][1] - hs / 2,
+                hs,
+                hs,
+              );
+              vctx.strokeStyle = "#4fc3f7";
+              vctx.lineWidth = 1.5 / view.scale;
+              vctx.strokeRect(
+                corners[i][0] - hs / 2,
+                corners[i][1] - hs / 2,
+                hs,
+                hs,
+              );
+            }
+          }
+          vctx.restore();
+        };
+
+        let drag = null;
+        viewCanvas.addEventListener("pointerdown", function (ev) {
+          if (ev.button !== 0 && ev.button !== 2) return;
+          viewCanvas.setPointerCapture(ev.pointerId);
+          const b = viewCanvas.getBoundingClientRect();
+          const sx = ev.clientX - b.left;
+          const sy = ev.clientY - b.top;
+          const p = toImage(ev);
+          const handle = hitHandle(sx, sy);
+          if (ev.button === 2 || mode === "pan") {
+            drag = { type: "pan", sx, sy, ox: view.ox, oy: view.oy };
+          } else if (handle >= 0) {
+            drag = { type: "handle", handle, startRect: { ...rect } };
+          } else if (
+            rect &&
+            rect.w >= MIN_RECT &&
+            rect.h >= MIN_RECT &&
+            p.x >= rect.x &&
+            p.x <= rect.x + rect.w &&
+            p.y >= rect.y &&
+            p.y <= rect.y + rect.h
+          ) {
+            drag = { type: "move", ix: p.x, iy: p.y, startRect: { ...rect } };
+          } else {
+            drag = { type: "rect", ix: p.x, iy: p.y, prevRect: rect };
+          }
+        });
+        viewCanvas.addEventListener("pointermove", function (ev) {
+          if (!drag) return;
+          const b = viewCanvas.getBoundingClientRect();
+          const sx = ev.clientX - b.left;
+          const sy = ev.clientY - b.top;
+          const p = toImage(ev);
+          if (drag.type === "pan") {
+            view.ox = drag.ox + (sx - drag.sx);
+            view.oy = drag.oy + (sy - drag.sy);
+          } else if (drag.type === "rect") {
+            rect = normalizedRect(drag.ix, drag.iy, p.x, p.y);
+          } else if (drag.type === "move") {
+            rect = clampRectToImage({
+              x: drag.startRect.x + (p.x - drag.ix),
+              y: drag.startRect.y + (p.y - drag.iy),
+              w: drag.startRect.w,
+              h: drag.startRect.h,
+            });
+          } else if (drag.type === "handle") {
+            rect = resizeByHandle(drag.handle, drag.startRect, p.x, p.y);
+          }
+          drawView();
+          updateFootReadout();
+        });
+        const endDrag = function () {
+          if (!drag) return;
+          if (
+            drag.type === "rect" &&
+            rect &&
+            (rect.w < MIN_RECT || rect.h < MIN_RECT)
+          ) {
+            rect = drag.prevRect;
+          }
+          drag = null;
+          drawView();
+          updateFootReadout();
+        };
+        viewCanvas.addEventListener("pointerup", endDrag);
+        viewCanvas.addEventListener("pointercancel", endDrag);
+        viewCanvas.addEventListener("contextmenu", function (ev) {
+          ev.preventDefault();
+        });
+        viewCanvas.addEventListener(
+          "wheel",
+          function (ev) {
+            ev.preventDefault();
+            const b = viewCanvas.getBoundingClientRect();
+            zoomAt(
+              ev.clientX - b.left,
+              ev.clientY - b.top,
+              ev.deltaY < 0 ? 1.25 : 0.8,
+            );
+            drawView();
+            updateFootReadout();
+          },
+          { passive: false },
+        );
+
+        const updateFootReadout = function () {
+          imgInfo.textContent = imageW + " × " + imageH + " px";
+          let txt = "zoom " + Math.round(view.scale * 100) + "%";
+          if (rect && rect.w >= MIN_RECT && rect.h >= MIN_RECT) {
+            const fraction = (rect.w * rect.h) / (imageW * imageH);
+            txt +=
+              " · rect " +
+              Math.round(rect.x) +
+              "," +
+              Math.round(rect.y) +
+              " " +
+              Math.round(rect.w) +
+              "×" +
+              Math.round(rect.h) +
+              " px · covers " +
+              (fraction * 100).toFixed(1) +
+              "% of frame · w/h " +
+              (rect.w / rect.h).toFixed(3);
+          } else {
+            txt += " · drag to draw the label rectangle";
+          }
+          footReadout.textContent = txt;
+        };
+
+        const setViewSize = function () {
+          viewCanvas.width = Math.round(body.clientWidth * dpr);
+          viewCanvas.height = Math.round(body.clientHeight * dpr);
+          vctx.setTransform(dpr, 0, 0, dpr, 0, 0);
+          drawView();
+        };
+
+        const closeViewer = function () {
+          if (!viewer) return;
+          window.removeEventListener("keydown", onKeyDown, true);
+          window.removeEventListener("resize", onResize);
+          overlay.remove();
+          viewer = null;
+        };
+        const onKeyDown = function (ev) {
+          if (ev.key === "Escape") {
+            ev.preventDefault();
+            ev.stopPropagation();
+            closeViewer();
+          } else if (
+            ev.key === "Enter" &&
+            !(
+              ev.target &&
+              ev.target instanceof Element &&
+              overlay.contains(ev.target)
+            )
+          ) {
+            // keep Enter from saving the whole edit dialog while the modal is open
+            ev.preventDefault();
+            ev.stopPropagation();
+          }
+        };
+        const onResize = function () {
+          setViewSize();
+        };
+
+        btnZoomIn.addEventListener("click", function () {
+          zoomAt(body.clientWidth / 2, body.clientHeight / 2, 1.5);
+          drawView();
+          updateFootReadout();
+        });
+        btnZoomOut.addEventListener("click", function () {
+          zoomAt(body.clientWidth / 2, body.clientHeight / 2, 1 / 1.5);
+          drawView();
+          updateFootReadout();
+        });
+        btnFit.addEventListener("click", function () {
+          fitView();
+          drawView();
+          updateFootReadout();
+        });
+        btn100.addEventListener("click", function () {
+          view.scale = 1;
+          view.ox = (body.clientWidth - imageW) / 2;
+          view.oy = (body.clientHeight - imageH) / 2;
+          drawView();
+          updateFootReadout();
+        });
+        btnMode.addEventListener("click", function () {
+          mode = mode === "draw" ? "pan" : "draw";
+          btnMode.textContent = "Mode: " + (mode === "draw" ? "Draw" : "Pan");
+          btnMode.title =
+            mode === "draw"
+              ? "Drag to draw the label rectangle; right-drag pans"
+              : "Drag to pan the image; switch back to Draw to edit the rectangle";
+          viewCanvas.style.cursor = mode === "draw" ? "crosshair" : "grab";
+        });
+        btnClose.addEventListener("click", closeViewer);
+        btnCancel.addEventListener("click", closeViewer);
+        btnApply.addEventListener("click", function () {
+          if (rect && rect.w >= MIN_RECT && rect.h >= MIN_RECT) {
+            applyRectToFields();
+            updateReadout();
+            drawThumb();
+          }
+          closeViewer();
+        });
+
+        window.addEventListener("keydown", onKeyDown, true);
+        window.addEventListener("resize", onResize);
+        overlay.addEventListener(
+          "wheel",
+          function (ev) {
+            ev.preventDefault();
+          },
+          { passive: false },
+        );
+
+        fitView();
+        setViewSize();
+        updateFootReadout();
+        updateReadout();
+        drawThumb();
+        btnApply.focus();
+      };
+
+      document
+        .getElementById("label-crop-load-image")
+        .addEventListener("click", function () {
+          fileInput.click();
+        });
+      document
+        .getElementById("label-crop-open-viewer")
+        .addEventListener("click", openViewer);
+      canvas.addEventListener("click", openViewer);
+      fileInput.addEventListener("change", function () {
+        const file = fileInput.files && fileInput.files[0];
+        if (!file) return;
+        const url = URL.createObjectURL(file);
+        const img = new Image();
+        img.onload = function () {
+          image = img;
+          imageW = img.naturalWidth;
+          imageH = img.naturalHeight;
+          rect = null;
+          URL.revokeObjectURL(url);
+          updateReadout();
+          drawThumb();
+        };
+        img.onerror = function () {
+          URL.revokeObjectURL(url);
+          readout.textContent = "Could not load that image.";
+        };
+        img.src = url;
+      });
+      document
+        .getElementById("label-crop-clear-size")
+        .addEventListener("click", function () {
+          rect = null;
+          image = null;
+          imageW = 0;
+          imageH = 0;
+          $("#node-input-aspectRatio").val("");
+          $("#node-input-expectedSizeFraction").val("");
+          updateReadout();
+          drawThumb();
+        });
+      updateReadout();
+      drawThumb();
+    },
+    label: function () {
+      return this.name || "label crop";
+    },
+    paletteLabel: function () {
+      return "label crop";
+    },
+  });
+
+  if (!window.labelCropPreviewRendererInitialized) {
+    window.labelCropPreviewRendererInitialized = true;
+
+    const removePreview = function (nodeId) {
+      const existing = document.getElementById(
+        "label-crop-preview-container-" + nodeId,
+      );
+      if (existing) existing.remove();
+    };
+
+    RED.comms.subscribe("label-crop-preview", function (_event, data) {
+      if (!data || !data.id) return;
+      if (data.clear || !data.before || !data.after) {
+        removePreview(data.id);
+        return;
+      }
+
+      const nodeElement = document.getElementById(data.id);
+      if (!nodeElement) return;
+      removePreview(data.id);
+
+      const width = Number(data.previewWidth) || 220;
+      const container = document.createElementNS(
+        "http://www.w3.org/2000/svg",
+        "foreignObject",
+      );
+      container.id = "label-crop-preview-container-" + data.id;
+      container.setAttribute("x", "70");
+      container.setAttribute("y", "5");
+      container.setAttribute("width", String(width * 2 + 30));
+      container.setAttribute("height", String(width * 2 + 45));
+      container.style.overflow = "visible";
+
+      const body = document.createElementNS(
+        "http://www.w3.org/1999/xhtml",
+        "div",
+      );
+      body.style.display = "flex";
+      body.style.gap = "6px";
+      body.style.padding = "5px";
+      body.style.background = "rgba(32, 32, 32, 0.9)";
+      body.style.borderRadius = "4px";
+      body.style.color = "white";
+      body.style.font = "11px sans-serif";
+      body.style.cursor = "pointer";
+      body.title = "Before / after label crop (click to hide)";
+      body.onclick = function () {
+        removePreview(data.id);
+      };
+
+      const addImage = function (caption, base64) {
+        const panel = document.createElementNS(
+          "http://www.w3.org/1999/xhtml",
+          "div",
+        );
+        panel.style.width = width + "px";
+        panel.style.flex = "0 0 auto";
+
+        const label = document.createElementNS(
+          "http://www.w3.org/1999/xhtml",
+          "div",
+        );
+        label.textContent = caption;
+        label.style.paddingBottom = "3px";
+        label.style.textAlign = "center";
+
+        const image = document.createElementNS(
+          "http://www.w3.org/1999/xhtml",
+          "img",
+        );
+        image.src = `data:image/${data.mimeType || "jpeg"};base64,${base64}`;
+        image.alt = caption;
+        image.style.display = "block";
+        image.style.width = "100%";
+        image.style.height = "auto";
+
+        panel.appendChild(label);
+        panel.appendChild(image);
+        body.appendChild(panel);
+      };
+
+      addImage("Before", data.before);
+      addImage("After", data.after);
+      container.appendChild(body);
+      nodeElement.appendChild(container);
+    });
+  }
+</script>
