@@ -698,7 +698,21 @@
       localAlignMax: { value: 3, validate: RED.validators.number(true) },
       transformFilePath: { value: "" },
       trainTransform: { value: false },
-      nuisancePath: { value: "" },
+      // A real default, not just a placeholder: ticking "Train the nuisance
+      // map" with this empty used to deploy cleanly and then throw on every
+      // frame, because a grey placeholder reads like a filled-in value.
+      nuisancePath: {
+        value: "/data/golden/nuisance.json",
+        // Training with nowhere to write is the case that failed silently at
+        // deploy time. Flag it in the editor instead.
+        validate: function (v) {
+          // `this` is the node under validation. Node-RED does not
+          // guarantee it on every call path, so an unknown state is
+          // treated as valid rather than blocking a deploy wrongly.
+          var training = this && this.trainNuisance;
+          return !training || String(v == null ? "" : v).trim() !== "";
+        },
+      },
       trainNuisance: { value: false },
       noveltyThreshold: { value: 0.3, validate: RED.validators.number(true) },
       scaleSearchMin: { value: 0.6, validate: RED.validators.number(true) },
