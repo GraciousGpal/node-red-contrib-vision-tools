@@ -58,6 +58,33 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   reporting how far the dirtiest block exceeded its trained baseline and
   whether that alone failed the frame. Both are 0/true without a map.
 
+### Fixed
+
+- **`allowScripts` pinned versions that no longer install.** The gate matches
+  on `name@version`, so both pins had quietly stopped matching: the OpenCV
+  engine was pinned at 1.6.4 against a lockfile resolving 1.7.0, and `sharp`
+  at 0.35.3 against 0.35.4. A stale pin means the install script either does
+  not run - which for a package that links a prebuilt binary means it never
+  sets itself up - or the gate reports an unrecognised package, and neither
+  surfaces until a clean install. `test/allowScripts.test.js` now fails the
+  suite when a pin drifts from the lockfile.
+
+- **`cvjs` resize read a small percentage as an upscale.** `pct` and `scale`
+  shared one branch that guessed between them by magnitude - values over 5
+  read as a percentage, the rest as a multiplier - so asking for 5% returned
+  a 5x enlargement. They are separate modes now and each rejects a
+  non-positive value. Nothing in this package asked for a downscale that
+  small, so it never bit; it was still a trap in the function every op
+  routes through.
+
+- **Dead code in the engine selector.** `select()` threaded a
+  `gatePlatform` flag that both call sites passed as true, so the ungated
+  branch was unreachable while reading as though some caller deliberately
+  bypassed the platform check. Removed. The unreachable `catch` on
+  `resolvePromise` is kept, now with a comment saying why: `resolve()`
+  encodes failures in its resolved value rather than rejecting, but if that
+  ever changes a cached rejection would block every retry.
+
 ## [1.1.0] - 2026-09-10
 
 ### Added

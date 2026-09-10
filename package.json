@@ -57,8 +57,8 @@
     "@techstark/opencv-js": "^5.0.0-release.1"
   },
   "allowScripts": {
-    "sharp@0.35.3": true,
-    "@rosepetal/node-red-contrib-image-tools@1.6.4": true
+    "sharp@0.35.4": true,
+    "@rosepetal/node-red-contrib-image-tools@1.7.0": true
   },
   "files": [
     "*.js",
