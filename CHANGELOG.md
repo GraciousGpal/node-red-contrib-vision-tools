@@ -4,7 +4,32 @@ All notable changes to this project are documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
-## [Unreleased]
+## [1.0.1] - 2026-09-10
+
+### Fixed
+
+- **The changelog described a different package.** This file was carried over
+  from the two packages these nodes were split out of, so a package published
+  at 1.0.0 shipped a history listing releases up to 1.1.3 - including a
+  `[1.0.1]` that would have collided with this entry. Those entries are still
+  here, under *Earlier history*, because they record how the code got to where
+  it is; they are now labelled as belonging to the predecessor packages rather
+  than to this one.
+- **`npm ci` could not install this package, with nothing to say why.** The
+  optional OpenCV engine declares a `darwin-x64` platform package that was
+  never published - the registry returns 404 for it while its four siblings
+  resolve - so `npm install` skips it, as an optional dependency should be
+  skipped, and `npm ci` then rejects the lockfile `npm install` wrote because
+  that phantom is "Missing from lock file". No lockfile satisfies both while
+  the engine is in the tree. The README now says so, and gives the two ways
+  round it. Nothing in this package can fix the upstream declaration.
+
+## [1.0.0] - 2026-09-09
+
+First release under this name. `golden-compare`, `checkerboard-calibrate` and
+`label-crop` come from `node-red-contrib-golden-compare`, `barcode-locate`
+from `node-red-contrib-barcode-locate`, and `line-finder` was new in the last
+weeks of that work. Everything below in this entry shipped in it.
 
 ### Added
 
@@ -163,7 +188,17 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   features - that needs validating against a real reject set before this
   can be trusted by default.
 
-## [1.1.3] - 2026-08-29
+---
+
+## Earlier history
+
+Everything below belongs to the two packages this one was split out of -
+`node-red-contrib-golden-compare` (versions 1.0.0-1.1.3) and
+`node-red-contrib-barcode-locate`. The version numbers are theirs, not this
+package's, and are kept because they record why the code is shaped the way it
+is. This package's own history starts at 1.0.0 above.
+
+## golden-compare 1.1.3 - 2026-08-29
 
 ### Changed
 
@@ -187,7 +222,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   blemish verdicts identical - `ox 232.97456593793459`, `score 0.040663`,
   on a clean part and on the one with a background defect.
 
-## [1.1.2] - 2026-08-29
+## golden-compare 1.1.2 - 2026-08-29
 
 ### Changed
 
@@ -203,7 +238,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   cores or fewer are unaffected, and an explicit `workers` setting is
   still taken literally.
 
-## [1.1.1] - 2026-08-29
+## golden-compare 1.1.1 - 2026-08-29
 
 ### Fixed
 
@@ -231,7 +266,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   otherwise invisible from the message alone - same shape, same pass or
   fail, silently slower.
 
-## [1.1.0] - 2026-08-29
+## golden-compare 1.1.0 - 2026-08-29
 
 The whole image pipeline moves off Node-RED's event loop into a worker.
 
@@ -291,7 +326,7 @@ observe.
 - A second ~13ms main-thread span per frame, alongside the payload copy,
   is measured but not yet attributed. It is not GC.
 
-## [1.0.2] - 2026-08-29
+## golden-compare 1.0.2 - 2026-08-29
 
 Concurrency and per-frame waste. Two of the fixes below are for bugs that
 produced a *confidently wrong answer* rather than an error, and both were
@@ -398,7 +433,7 @@ reachable on an ordinary flow.
   not physical squares: a standard 4x6 physical board must be configured
   as `cols: 2, rows: 6`. Unchanged, and documented in the node's help.
 
-## [1.0.1] - 2026-08-28
+## golden-compare 1.0.1 - 2026-08-28
 
 An adversarial review (five independent review lanes, verified by three
 verifying agents) surfaced nineteen distinct issues; every confirmed one
@@ -517,7 +552,7 @@ tests.
   board and will not detect a standard 4×6 one. Counting semantics are
   documented in the node's help text and intentionally unchanged.
 
-## [1.0.0] - 2026-05-06
+## golden-compare 1.0.0 - 2026-05-06
 
 Initial release: `golden-compare` (position + print/background blemish
 checks against a cached golden, worker-pool accelerated) and

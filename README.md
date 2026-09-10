@@ -58,6 +58,29 @@ npm i @graciousstar/node-red-contrib-vision-tools
 Node 18 or newer. `sharp` and `zxing-wasm` are required and ship prebuilt
 binaries for the usual platforms.
 
+### `npm ci` does not work with this package
+
+Use `npm install`. This is an upstream packaging bug and nothing here can fix
+it: the optional OpenCV engine declares
+`@rosepetal/node-red-contrib-image-tools-darwin-x64` in its
+`optionalDependencies`, and that package was never published — the registry
+404s it while its four sibling platform packages resolve fine. `npm install`
+skips it, which is what optional means; `npm ci` then refuses the lockfile
+`npm install` produced, because the phantom is `Missing from lock file`. No
+lockfile satisfies both while the engine is in the tree:
+
+```
+npm error `npm ci` can only install packages when your package.json and
+npm error package-lock.json ... are in sync.
+npm error Missing: @rosepetal/node-red-contrib-image-tools-darwin-x64@ from lock file
+```
+
+If your build has to use `npm ci`, install the engine's platform package for
+your own platform directly (`@rosepetal/node-red-contrib-image-tools-linux-x64`,
+`-linux-arm64`, `-linuxmusl-x64` or `-darwin-arm64`) and leave the engine
+itself out; or skip the engine entirely, which costs you `label-crop` and two
+opt-in `golden-compare` acceleration paths and nothing else.
+
 `label-crop` and two optional `golden-compare` acceleration paths need a
 native OpenCV addon, which is an **optional** dependency: the package
 installs and every other node works without it, and `label-crop` reports a
