@@ -29,6 +29,7 @@ const {
 	readTransformFile,
 	writeTransformFile,
 } = require("./lib/transformFile.js");
+const nuisance = require("./lib/nuisanceMap.js");
 
 module.exports = (RED) => {
 	const BOUNDS = {
@@ -505,6 +506,15 @@ module.exports = (RED) => {
 		node.scaleFilePath = String(config.scaleFilePath || "").trim();
 		node.transformFilePath = String(config.transformFilePath || "").trim();
 		node.trainTransform = !!config.trainTransform;
+		node.nuisancePath = String(config.nuisancePath || "").trim();
+		node.trainNuisance = !!config.trainNuisance;
+		// 0 disables the gate outright. Measured window on the reference
+		// run is 0.27-0.32; see lib/nuisanceMap.js on why it is that narrow
+		// and how the training set size moves the lower edge.
+		node.noveltyThreshold = clampFloat(config.noveltyThreshold, 0.3, UNIT_BOUNDS);
+		// Accumulates across frames for the life of the node, so a training
+		// run is "send the good frames through", not a single message.
+		node.nuisanceAcc = null;
 		// PROTOTYPES, default off - see lib/nativeSeed.js
 		node.nativeAlignSeed = !!config.nativeAlignSeed;
 		node.nativeFastAlign = !!config.nativeFastAlign;
@@ -938,6 +948,32 @@ module.exports = (RED) => {
 					}
 				}
 
+				// The nuisance map is independent of the trained transform:
+				// one pins magnification, the other says what "clean" looks
+				// like per block. A rig can sensibly have either alone.
+				const trainingNuisance =
+					msg.trainNuisance == null
+						? node.trainNuisance
+						: !!msg.trainNuisance;
+				cfg.trainNuisance = trainingNuisance;
+				cfg.noveltyThreshold = node.noveltyThreshold;
+				if (!trainingNuisance && node.nuisancePath) {
+					const map = await nuisance.readNuisanceMap(node.nuisancePath, {
+						goldenKey,
+						goldenContentKey,
+						workingSize: cfg.workingSize,
+						blockSize: cfg.blockSize,
+					});
+					if (map && map.error) {
+						// Same posture as a refused pin: run without it rather
+						// than subtract a baseline measured somewhere else,
+						// which would blind the check in the wrong places.
+						node.warn(`${map.error}; comparing without a nuisance map`);
+					} else if (map) {
+						cfg.nuisanceBaseline = map.baseline;
+					}
+				}
+
 				node.status({
 					fill: "blue",
 					shape: "dot",
@@ -1018,6 +1054,67 @@ module.exports = (RED) => {
 					);
 				}
 
+				// Nuisance-map training: fold this frame's background density
+				// grid into the running accumulator and rewrite the map. Every
+				// frame rewrites it, so a run can be stopped whenever it looks
+				// settled rather than having to declare its length up front -
+				// the file is ~66KB and training is not a production path.
+				//
+				// The operator's contract is the same one the golden itself
+				// has: these frames must be known-good. A defect trained in
+				// becomes a blind spot exactly where it sat.
+				if (trainingNuisance) {
+					const bg = result.backgroundBlemish;
+					if (!node.nuisancePath) {
+						throw new Error(
+							"training a nuisance map needs a Nuisance map path to write to - set one on the node",
+						);
+					}
+					if (!bg || !bg.densityBytes) {
+						throw new Error(
+							"nuisance training got no density grid back from the comparison",
+						);
+					}
+					if (
+						node.nuisanceAcc &&
+						(node.nuisanceAcc.gridW !== bg.gridW ||
+							node.nuisanceAcc.gridH !== bg.gridH)
+					) {
+						// geometry changed mid-run; the partial map describes a
+						// grid that no longer exists
+						node.warn(
+							`nuisance training restarted: grid changed to ${bg.gridW}x${bg.gridH}`,
+						);
+						node.nuisanceAcc = null;
+					}
+					if (!node.nuisanceAcc) {
+						node.nuisanceAcc = nuisance.createAccumulator(bg.gridW, bg.gridH);
+					}
+					nuisance.accumulate(
+						node.nuisanceAcc,
+						nuisance.dequantizeDensity(bg.densityBytes),
+					);
+					const baseline = nuisance.finalize(node.nuisanceAcc);
+					const record = nuisance.buildRecord(baseline, node.nuisanceAcc, {
+						channel: "background",
+						blockSize: cfg.blockSize,
+						workingSize: cfg.workingSize,
+						goldenKey,
+						goldenContentKey: await goldenContentKey(),
+					});
+					await nuisance.writeNuisanceMap(node.nuisancePath, record);
+					msg.trainedNuisance = {
+						frames: record.frames,
+						gridW: record.gridW,
+						gridH: record.gridH,
+						path: node.nuisancePath,
+					};
+					node.log(
+						`nuisance map: ${record.frames} frame(s), ` +
+							`${record.gridW}x${record.gridH} -> ${node.nuisancePath}`,
+					);
+				}
+
 				msg.payload = result.pass;
 				msg.result = {
 					pass: result.pass,
@@ -1042,6 +1139,11 @@ module.exports = (RED) => {
 						pass: result.backgroundBlemish.pass,
 						defectRatio: result.backgroundBlemish.defectRatio,
 						regions: result.backgroundBlemish.regions,
+						// How far the dirtiest block exceeded its trained
+						// baseline, and whether that alone failed the frame.
+						// 0 / true when no nuisance map is loaded.
+						worstExcess: result.backgroundBlemish.worstExcess,
+						noveltyPass: result.backgroundBlemish.noveltyPass,
 					},
 				};
 				msg.timings = {

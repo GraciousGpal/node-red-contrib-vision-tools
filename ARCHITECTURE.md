@@ -88,6 +88,7 @@ authoritative list.
 | `lib/engine.js` | picks the OpenCV engine (native addon or opencv.js WASM), honours `VISION_TOOLS_ENGINE`, warms it up |
 | `lib/cvjs.js` | the cpp-bridge op surface on `@techstark/opencv-js`: colorConvert, resize, filter (otsu/edge), crop, rotate — raw in, raw out |
 | `lib/cvjsAlign.js` | `imageAlign` on opencv.js: ORB + RANSAC affine, ECC refinement, one warp into the reference frame |
+| `lib/nuisanceMap.js` | trained per-block baseline of what "clean" looks like, so a recurring registration artifact stops masking a real blemish |
 
 ## The geometry model
 
@@ -761,6 +762,73 @@ WASM implementation recovers the shift at every size tested.
 
 `bench/engine-compare.js` runs both, on the same frames, on whichever
 host has them.
+
+### The blemish floor, and the nuisance map that lowers it
+
+The background blemish check counts pixels where the frame has ink and
+the golden does not. Registration is never exact, so wherever the golden
+carries a hard ink edge a sub-pixel misalignment paints a thin line of
+"extra ink" along it. That is not noise in the statistical sense - it is
+in the **same place on every frame**, because the feature causing it is
+always there.
+
+Measured on a 162-frame production run: an 8px-wide strip at (112, 168)
+reached density 0.25 in 78 of 148 good frames, and one at (72, 2088) in
+143 of them. `failThreshold` has to sit above that floor, which puts it at
+0.5 - and a real blemish measured 0.39. It was invisible not because it
+was weak but because the floor was high.
+
+**Nothing aggregate could separate them.** Over that run the good frames
+scored *worse* than the two defective ones on every metric the verdict had
+access to:
+
+| metric | good (148) max | the two being accepted |
+| --- | ---: | ---: |
+| worst block density | 0.422 | 0.391 |
+| largest region, cells | 24 | 23 |
+| region mass | 8.19 | 5.69 |
+| defect ratio | 0.00042 | 0.00019 |
+
+So the separating signal is not magnitude, it is **location**. The corner
+blemish sat where *no good frame ever flags* - 0 of 148 - while the
+artifacts setting the floor recur in most of them.
+
+`lib/nuisanceMap.js` trains a per-block baseline from known-good frames
+and scores each block against its own history:
+
+```
+excess[i] = max(0, density[i] - baseline[i])
+```
+
+A recurring artifact scores ~0 however dark it is, because its baseline is
+just as dark. A blemish on normally-clean substrate scores its full
+density. The gate is layered on the existing density and ratio checks and
+is inert until a map exists, so an untrained rig is unchanged.
+
+Held out - each good frame scored against a map trained without it, since
+a map validated on its own training frames reports a gap it cannot
+reproduce:
+
+| training frames | worst good | the two defects |
+| ---: | ---: | --- |
+| 37 | 0.2655 | 0.3281, 0.3906 |
+| 74 | 0.2500 | 0.3281, 0.3906 |
+
+End to end through the real handler: 0 of 148 good rejected, 0 of 14 bad
+accepted, against 2 accepted before.
+
+**Two limits worth knowing.** It cannot see a defect landing exactly on a
+chronically dirty spot - there the baseline is the artifact’s own, which
+is the deliberate trade: a known false-accept mechanism suppressed at the
+cost of desensitising blocks that were never trustworthy. And the usable
+threshold window is narrow, ~0.27-0.32, with its lower edge set by the
+training set size. More training frames is the fix for a false reject, not
+a higher threshold - that trades directly against the defect this exists
+to catch.
+
+The accumulator keeps the 8 largest values per cell and takes the second,
+so a single contaminated training frame cannot blind a cell for good. Two
+can; `test/nuisanceMap.test.js` pins both halves of that.
 
 ### Confidence gates: a miss is safer than a wrong crop
 

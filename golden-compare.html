@@ -116,6 +116,37 @@
     />
   </div>
   <div class="form-row">
+    <label for="node-input-nuisancePath"
+      ><i class="fa fa-map-o"></i> Nuisance map</label
+    >
+    <input
+      type="text"
+      id="node-input-nuisancePath"
+      placeholder="/data/golden/nuisance.json"
+    />
+  </div>
+  <div class="form-row">
+    <label for="node-input-noveltyThreshold">Novelty threshold</label>
+    <input type="number" step="0.01" min="0" max="1" id="node-input-noveltyThreshold" />
+    <span class="node-input-hint" style="margin-left:10px; color:#999;"
+      >fail when a block exceeds its trained baseline by this much. 0 disables</span
+    >
+  </div>
+  <div class="form-row">
+    <label for="node-input-trainNuisance" style="width:auto;"
+      ><input
+        type="checkbox"
+        id="node-input-trainNuisance"
+        style="width:auto; vertical-align:top;"
+      />
+      Train the nuisance map from incoming frames</label
+    >
+    <span class="node-input-hint" style="margin-left:10px; color:#999;"
+      >every frame must be known-good; the map is rewritten as each arrives, so
+      turn this off when the run looks settled</span
+    >
+  </div>
+  <div class="form-row">
     <label for="node-input-trainTransform" style="width:auto;"
       ><input
         type="checkbox"
@@ -555,7 +586,7 @@
     <code>msg.backgroundTolerance</code>, <code>msg.alignSearch</code>,
     <code>msg.thresholdMode</code>, <code>msg.sauvolaRadius</code>,
     <code>msg.sauvolaK</code>, <code>msg.inkMargin</code>,
-    <code>msg.trainTransform</code>, <code>msg.nativeAlignSeed</code>,
+    <code>msg.trainNuisance</code>, <code>msg.trainTransform</code>, <code>msg.nativeAlignSeed</code>,
     <code>msg.nativeFastAlign</code>, <code>msg.workers</code>,
     <code>msg.localAlign</code>, <code>msg.localAlignTile</code>,
     <code>msg.localAlignMax</code>, <code>msg.scaleSearchMin</code>,
@@ -667,6 +698,9 @@
       localAlignMax: { value: 3, validate: RED.validators.number(true) },
       transformFilePath: { value: "" },
       trainTransform: { value: false },
+      nuisancePath: { value: "" },
+      trainNuisance: { value: false },
+      noveltyThreshold: { value: 0.3, validate: RED.validators.number(true) },
       scaleSearchMin: { value: 0.6, validate: RED.validators.number(true) },
       scaleSearchMax: { value: 2.5, validate: RED.validators.number(true) },
       scaleSearchSteps: { value: 19, validate: RED.validators.number(true) },

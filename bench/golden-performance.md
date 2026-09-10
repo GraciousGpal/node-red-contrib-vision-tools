@@ -63,7 +63,7 @@ All 12 variants returned identical result objects on the 10 fixtures. Timing noi
 
 At 12 workers with a named golden, the isolated Wasm-backed source snapshot measured **456.1 ms median / 1566.1 ms p95**, versus native **100.7 / 1102.5 ms**. Both classified this sample identically, but their transforms and native/fallback paths differ. This is a comparison of these two implementations, **not proof that Wasm itself has a universal 4.5× penalty**. Wasm was staged under `/tmp`; it was not installed into the live runtime.
 
-## Accuracy finding — not fixed by speeding up counting
+## Accuracy finding — not fixed by speeding up counting (since FIXED, see below)
 
 All variants accept all 148 good-folder images and reject **12/14** bad-folder images. These two bad-folder images are accepted by both the original and optimized node, including the downstream `grade === "good"` check:
 
@@ -89,3 +89,25 @@ docker exec -e NODE_PATH=/usr/src/node-red/node_modules -e VISION_BENCH_ROOT=/us
 For an isolated source snapshot, set `VISION_BENCH_ROOT` to its directory. Use `--named 1`, `--workers 16`, and `--working 2656` to reproduce the combined configuration; `--limit 5 --iterations 3` reproduces the sample sweep. In Git Bash, prefix Docker commands with `MSYS_NO_PATHCONV=1` to avoid rewriting container paths.
 
 The safe next deployment is the small `lib/compare.js` change. Keep raw input, local alignment and diagnostics-off settings; retain 12 workers unless reject-heavy testing justifies 16. Correct training and carry a stable golden key for additional gains. Removing upstream repeated golden resizing could help whole-flow latency, but that cost was not measured here. These results establish improvements, not a claim of absolute maximum possible performance.
+
+
+## Update: the two false accepts are fixed
+
+Both images were being accepted because the background blemish floor is set
+by fixed-location registration artifacts, not by random noise — an 8px strip
+at (112, 168) reaches density 0.25 in 78 of the 148 good frames. No aggregate
+metric separated the classes; the good frames scored worse than the two
+defective ones on all of them.
+
+`lib/nuisanceMap.js` trains a per-block baseline from known-good frames and
+scores blocks by excess over their own history rather than by magnitude.
+Re-running this same 162-image set end to end through the real handler:
+**0 of 148 good rejected, 0 of 14 bad accepted.**
+
+Held out (each good frame scored against a map trained without it): worst
+good frame 0.2500 at 74 training frames, 0.2655 at 37; the two defects score
+0.3281 and 0.3906. Default gate is 0.30.
+
+Reproduce with `bench/nuisance-e2e.js --holdout 2` (trains through the node,
+then re-inspects everything) or `bench/nuisance-validate.js` (library-level,
+two-way split). Both need the container's flow and fixtures.

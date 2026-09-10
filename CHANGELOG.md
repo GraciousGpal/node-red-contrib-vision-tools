@@ -4,6 +4,60 @@ All notable changes to this project are documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [Unreleased]
+
+### Added
+
+- **A trained nuisance map, and the two false accepts it fixes.** The
+  background blemish check asks whether a block carries more ink than the
+  golden says it should, and that question has a floor it cannot see past:
+  wherever the golden has a hard ink edge, sub-pixel misregistration paints
+  a thin line of "extra ink" that is not a defect. Those artifacts are not
+  random - they land in the *same place on every frame*, because the thing
+  causing them is a printed feature that is always there. On the reference
+  run an 8px strip at (112, 168) reached density 0.25 in 78 of 148 good
+  frames and one at (72, 2088) in 143 of them, which is the floor
+  `failThreshold` has to clear. A real defect measured 0.39 and was
+  therefore invisible - not because it was weak, but because the floor was
+  high. Every aggregate metric agreed: the good frames scored *worse* than
+  the two that were slipping through (maxCells 24 vs 23, defectRatio
+  0.00042 vs 0.00019), so no threshold on any of them could separate the
+  classes.
+
+  `lib/nuisanceMap.js` trains a per-block baseline from known-good frames
+  and scores each block by how far it exceeds its own history rather than
+  by magnitude: `excess = max(0, density - baseline)`. A recurring artifact
+  scores ~0 however dark it is; a blemish where the part is normally clean
+  scores its full density. Held out - every good frame scored against a map
+  trained without it - the worst good frame reaches 0.2500 (74 training
+  frames) or 0.2655 (37), while the two defects reach 0.3281 and 0.3906.
+
+  Driven end to end through the real `golden-compare` handler over the same
+  162 images: **0 of 148 good rejected, 0 of 14 bad accepted**, down from 2
+  accepted. Set a *Nuisance map* path and tick *Train the nuisance map* to
+  build one; `noveltyThreshold` (default 0.30, 0 disables) is the gate.
+
+  Layered on the existing density and ratio gates, never replacing them,
+  and inert until a map is trained - an untrained rig behaves exactly as it
+  did. Maps carry the same identity guards a trained transform does and are
+  refused, with a warning, against a different golden, working size, block
+  size or grid shape.
+
+  **Its limit, stated plainly:** it cannot see a defect that lands exactly
+  on a chronically dirty spot, because there the baseline it is measured
+  against is the artifact’s own. And the usable threshold window is narrow
+  (~0.27-0.32), with its lower edge set by how many frames trained the map.
+  Train on as many good frames as the line will give you - 100+ is
+  comfortable, below ~40 a false reject becomes likelier than a miss. If
+  false rejects appear, add training frames rather than raising the
+  threshold, which trades directly against the defect this exists to catch.
+
+### Changed
+
+- `msg.result.backgroundBlemish` gained `worstExcess` and `noveltyPass`,
+  reporting how far the dirtiest block exceeded its trained baseline and
+  whether that alone failed the frame. Both are 0/true without a map.
+
 ## [1.1.0] - 2026-09-10
 
 ### Added
