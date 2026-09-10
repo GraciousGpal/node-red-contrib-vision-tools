@@ -1,6 +1,6 @@
 {
   "name": "@graciousstar/node-red-contrib-vision-tools",
-  "version": "1.2.0-rc.2",
+  "version": "1.2.0",
   "description": "Machine-vision nodes for Node-RED on a fixed camera rig: golden-template AOI with position and blemish tolerances, mm/px calibration from a checkerboard, deskew-and-crop of a physical label, caliper edge and line finding over a drawn region, and barcode location and decoding restricted to known regions.",
   "license": "Apache-2.0",
   "author": "GraciousStar",
