@@ -4,6 +4,136 @@ All notable changes to this project are documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [Unreleased]
+
+### Added
+
+- **A second OpenCV engine: `@techstark/opencv-js`, the WASM build
+  (prototype).** `label-crop` and `golden-compare`'s two opt-in
+  acceleration paths needed the native `@rosepetal/node-red-contrib-image-tools`
+  addon, which has no win32 binary. Because `label-crop` treats a missing
+  engine as a setup error rather than a fallback, that made the node
+  unrunnable on Windows - and made every integration test of it
+  unrunnable too, which is why the suite only ever exercised it against a
+  fake engine there.
+
+  `lib/cvjs.js` implements the same op surface the callers were written
+  against - `colorConvert`, `resize`, `filter` (otsu, edge), `crop`,
+  `rotate` - on opencv.js, and `lib/cvjsAlign.js` adds `imageAlign` (ORB
+  + RANSAC affine, ECC refinement, one warp into the reference frame).
+  Argument positions, the raw descriptor shape and the return values
+  match the bridge, so it drops into the `engine` seam both callers
+  already had.
+
+  Raw in, raw out: opencv.js ships without image codecs, and the rig
+  feeds raw frames anyway. The two points the bridge contract genuinely
+  needs a codec - an encoded Buffer at `colorConvert`, a non-raw
+  `outputFormat` on the final crop - delegate to `sharp`, already a
+  direct dependency.
+
+- **`lib/engine.js` chooses between them.** Native where a prebuilt
+  binary exists, WASM everywhere else; `VISION_TOOLS_ENGINE=native` or
+  `=opencv-js` pins one, and a pinned engine that cannot load is an error
+  rather than a silent substitution - a benchmark should not be able to
+  quietly measure the wrong engine. Detecting the native addon is
+  asynchronous (its `require()` always succeeds and every op rejects
+  later instead), so the module answers synchronously on a platform gate
+  and asynchronously on a probe. The probe is not `bridge.ready()`:
+  cpp-bridge 1.6.4, which our own `^1.6.4` range allows and which the
+  Node-RED test image actually has, does not expose it, so asking would
+  throw and demote a perfectly good native engine. It calls the cheapest
+  real op instead.
+
+- **Benchmarks and probes that need both engines.**
+  `bench/engine-compare.js` times them over the same frames;
+  `bench/engine-parity.js` checks they decide the same thing;
+  `bench/resize-probe.js` and `bench/blur-probe.js` identify what the
+  native engine's `resize` and `filter("otsu")` actually do, which is how
+  the two matched below were found.
+
+- **`test/cvjs.test.js` and `test/engine.test.js`.** The first exercises
+  the ops against the geometry `label-crop` predicts independently, then
+  runs the real deskew-and-crop pipeline and `golden-compare`'s
+  `nativeFastAlign` path against a real OpenCV - on any platform, which
+  was the point.
+
+### Changed
+
+- **The blemish heat-map grid no longer builds a summed-area table.**
+  `buildHeatmapGrid` allocated and filled a full-resolution `Uint32`
+  integral table just to read non-overlapping blocks out of it - every
+  pixel is counted exactly once, so the table buys nothing. Measured in the
+  Node-RED test container against the real golden-compare handler over 162
+  images (see `bench/golden-performance.md`): the grid/region stage drops
+  from **22.5ms to 8.7ms median** and whole-frame comparison latency from
+  **110.6ms to 96.2ms (13%)**, avoiding ~25MB of temporary table allocation
+  per frame at a 1475x2125 golden. All 162 complete result objects were
+  byte-identical before and after, and `test/heatmapGrid.test.js` pins the
+  densities against the old implementation as an exact oracle over clipped
+  edge blocks, empty and full masks, block sizes 4-256 and the deployed
+  geometry. The common path only - the unpinned-search tail (p99/max) is
+  unaffected and was not improved.
+
+### Fixed
+
+- **The alignment warp invented ink at the frame border.** OpenCV fills
+  what the warp does not cover with 0, the darkest possible ink, and
+  `nativeSeed.blankOutsideSource` rewrites the pixels whose source
+  coordinate fell outside back to 255. It cannot reach the covered pixels
+  one step inside that boundary, whose value bilinear interpolation has
+  already mixed with the black fill - leaving a one-pixel dark rim the
+  background check reads as ink the part does not have. On a 512x640
+  synthetic shifted 6px that rim alone is a 0.24% defect ratio, over the
+  0.2% `failRatio`, failing a frame the JS aligner passes.
+  `lib/cvjsAlign.js` fills 255 instead - blank substrate, the convention
+  `lib/warp.js` already uses for exactly this reason. This is a
+  divergence from the native engine, which has no border-value parameter
+  to pass.
+
+### Notes
+
+- **The two engines produce identical `label-crop` results.** Verified on
+  Alpine x64 with both installed, over a sweep of angles and label shapes:
+  every field matches exactly. Two undocumented native behaviours had to be
+  matched to get there, both found by running the engines side by side:
+
+  - `resize` is `INTER_LINEAR` (100% of pixels reproduced; `INTER_AREA`,
+    the textbook choice for a detection copy and the first implementation
+    here, differs by 34 mean absolute and cropped a 1200x750 label at
+    angle 0 169px short);
+  - `filter(img, "otsu", kernel, ...)` GaussianBlurs `img` (kernel x
+    kernel, sigma 0) and writes the result back **over the caller's
+    buffer** before thresholding. `label-crop` then runs its edge filter
+    and its whole boundary refinement on that blurred copy, and depends on
+    it - the blur is what stops an axis-aligned label refining onto its own
+    printed rules. `lib/cvjs.js` reproduces the side effect deliberately;
+    the real fix belongs in `label-crop`, which should ask for the blurred
+    copy rather than inherit one.
+
+- **Timing, same host:** `label-crop` 34ms native vs 64ms WASM at 3MP,
+  162ms vs 375ms at 24MP; `imageAlign` 12ms vs 30ms at 768px, 18ms vs 53ms
+  at 1024px. Roughly 2-3x, plus ~200ms once per process for the WASM
+  runtime. The WASM engine is single-threaded and runs on the event loop;
+  the native addon threads.
+
+- **Two bad-folder images are still accepted, and speeding up counting did
+  not change that.** Over the container’s 162-image set every variant
+  accepts all 148 good images and rejects only 12 of 14 bad ones; the two
+  false accepts pass the downstream `grade === "good"` check on both the
+  old and the new code. No threshold was relaxed for performance - this is
+  a pre-existing defect/ground-truth question, and the current settings
+  should not be called production-validated until it is investigated. See
+  `bench/golden-performance.md`.
+
+- **The native `imageAlign` returns identity above ~1536px.** On both
+  1.6.4 and 1.7.0 it recovers an 11px shift at 1280 and reports no shift
+  at all at 1536, 2048 and 2656, with `success: true`.
+  `golden-compare`'s fast-align bench runs at `workingSize: 2656`, inside
+  that range - the score guard catches the bad transform and falls back to
+  the JS aligner, which is presumably why it was never noticed. The WASM
+  implementation recovers the shift at every size tested. Both fast-align
+  paths remain opt-in prototypes, off by default.
+
 ## [1.0.1] - 2026-09-10
 
 ### Fixed

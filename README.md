@@ -75,18 +75,69 @@ npm error package-lock.json ... are in sync.
 npm error Missing: @rosepetal/node-red-contrib-image-tools-darwin-x64@ from lock file
 ```
 
-If your build has to use `npm ci`, install the engine's platform package for
-your own platform directly (`@rosepetal/node-red-contrib-image-tools-linux-x64`,
-`-linux-arm64`, `-linuxmusl-x64` or `-darwin-arm64`) and leave the engine
-itself out; or skip the engine entirely, which costs you `label-crop` and two
-opt-in `golden-compare` acceleration paths and nothing else.
+If your build has to use `npm ci`, use `@techstark/opencv-js` as the OpenCV
+engine instead (see below) and leave the native one out of the tree
+entirely. Failing that, install the native engine's platform package for
+your own platform directly
+(`@rosepetal/node-red-contrib-image-tools-linux-x64`, `-linux-arm64`,
+`-linuxmusl-x64`, `-darwin-x64` or `-darwin-arm64`) without the engine
+package itself; or
+skip OpenCV altogether, which costs you `label-crop` and two opt-in
+`golden-compare` acceleration paths and nothing else.
 
-`label-crop` and two optional `golden-compare` acceleration paths need a
-native OpenCV addon, which is an **optional** dependency: the package
-installs and every other node works without it, and `label-crop` reports a
-clear setup error rather than failing a part. Prebuilt binaries for that
-engine cover Linux x64/arm64, Alpine x64 and macOS arm64 — there is no
-win32 build, which is why the test suite never touches it.
+### The OpenCV engine
+
+`label-crop` and two optional `golden-compare` acceleration paths need
+OpenCV. Two engines can provide it, both **optional** dependencies — the
+package installs and every other node works without either, and
+`label-crop` reports a clear setup error rather than failing a part:
+
+| | `@rosepetal/node-red-contrib-image-tools` | `@techstark/opencv-js` |
+|---|---|---|
+| kind | native C++ addon | opencv.js, WASM |
+| platforms | Linux x64/arm64, Alpine x64, macOS x64/arm64 | anywhere Node runs, **including win32** |
+| threading | native threads | single-threaded, on the event loop |
+| start-up | dlopen | ~200ms to instantiate, once per process |
+| codecs | decodes and encodes jpg/png/webp | none; raw in, raw out (this package delegates the two encode/decode points it needs to `sharp`) |
+
+Which one answers is `lib/engine.js`'s decision. The default is the native
+addon where it has a prebuilt binary and the WASM build everywhere else.
+Set `VISION_TOOLS_ENGINE=native` or `VISION_TOOLS_ENGINE=opencv-js` to pin
+one — a pinned engine that cannot load is an error, never a silent
+substitution, so a benchmark cannot quietly measure the wrong one.
+
+The WASM engine is also the answer to the `npm ci` problem above: install
+`@techstark/opencv-js` instead of the native engine and the phantom
+platform package never enters the tree.
+
+On a host with both installed, the two produce **identical** `label-crop`
+results — `node bench/engine-parity.js` sweeps angles and label shapes and
+every field matches exactly. The one deliberate difference is the
+alignment warp's border fill, described in `lib/cvjsAlign.js`; it removes
+a false background defect the native fill produces at the frame edge.
+
+Measured on Alpine x64 (Node 24), same host, same frames:
+
+| | native | opencv-js |
+|---|---|---|
+| `label-crop`, 3MP frame | 34ms | 64ms |
+| `label-crop`, 24MP frame | 162ms | 375ms |
+| `imageAlign`, 768px | 12ms | 30ms |
+| `imageAlign`, 1024px | 18ms | 53ms |
+
+So roughly **2–3× slower** on those ops, plus ~200ms once per process to
+instantiate the WASM runtime. Run `node bench/engine-compare.js` to measure
+your own hardware.
+
+End to end the gap can be wider. Replaying the real `golden-compare`
+handler in the Node-RED test container (`bench/golden-performance.md`), the
+WASM-backed snapshot measured **456ms median** against native’s **101ms** —
+about 4.5× — at 12 workers with a named golden. Both graded that sample
+identically, but their transforms and native/fallback paths differ, so read
+it as a comparison of these two implementations rather than a universal
+WASM penalty. The identical-results claim above is about `label-crop`;
+`golden-compare`’s alignment is where the two engines can reach the same
+verdict by different routes.
 
 ## How `golden-compare` works
 

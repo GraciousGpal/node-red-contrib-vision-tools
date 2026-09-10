@@ -84,7 +84,10 @@ authoritative list.
 | `lib/scaleFile.js` | mm/px calibration file, shared with `checkerboard-calibrate` |
 | `lib/checkerboard.js` | checkerboard detection for mm/px calibration |
 | `label-crop.js` | Node-RED wiring for the label-crop node: config/clamping, engine availability gate, `msg.labelCrop` attachment, optional before/after preview publish |
-| `lib/labelCrop.js` | deskew-and-crop op: decode-once, low-res Otsu mask analysis (connected component + exterior minimum-area rectangle) + brightness/Sobel boundary refinement, ROI-only rotation, native final crop; composes the native OpenCV engine |
+| `lib/labelCrop.js` | deskew-and-crop op: decode-once, low-res Otsu mask analysis (connected component + exterior minimum-area rectangle) + brightness/Sobel boundary refinement, ROI-only rotation, final crop in the engine; composes the OpenCV engine |
+| `lib/engine.js` | picks the OpenCV engine (native addon or opencv.js WASM), honours `VISION_TOOLS_ENGINE`, warms it up |
+| `lib/cvjs.js` | the cpp-bridge op surface on `@techstark/opencv-js`: colorConvert, resize, filter (otsu/edge), crop, rotate — raw in, raw out |
+| `lib/cvjsAlign.js` | `imageAlign` on opencv.js: ORB + RANSAC affine, ECC refinement, one warp into the reference frame |
 
 ## The geometry model
 
@@ -322,6 +325,16 @@ Measured on the demo pair at `workingSize` 3072, transform pinned
 | **verdict path total** | **858** | **605** | |
 | debug stages | — | — | **+690** when enabled |
 | heat maps | — | — | **+223** when enabled |
+
+Those numbers predate the block-density rewrite: `buildHeatmapGrid` used
+to build a full-resolution summed-area table per blemish channel to read
+non-overlapping blocks out of it. Blocks never overlap, so every pixel is
+counted exactly once and the table bought nothing. Measured in the Node-RED
+test container over 162 images (`bench/golden-performance.md`), the
+grid/region stage goes 22.5ms -> 8.7ms median and whole-frame comparison
+110.6ms -> 96.2ms, avoiding ~25MB of temporary allocation per frame at a
+1475x2125 golden, with byte-identical results. The common path only: the
+unpinned-search tail is unaffected.
 
 The working size is not negotiable: 3072 is the only setting at which the
 demo scratch survives decoding at all — 2560 and below miss it entirely,
@@ -588,11 +601,12 @@ So the typical flow is label-crop first, golden-compare second — and
 label-crop's output can be previewed or saved on its own, which the
 inline alignment inside golden-compare cannot be.
 
-### Shape: native pixels, JS only on the small mask
+### Shape: engine pixels, JS only on the small mask
 
-The pixel work is delegated to the optional native OpenCV addon — the same
-engine `lib/nativeSeed.js` uses — through its promisified `cpp-bridge`. `lib/labelCrop.js` composes five
-engine calls and does everything else in JS:
+The pixel work is delegated to an OpenCV engine — the same one
+`lib/nativeSeed.js` uses — through the promisified `cpp-bridge` op
+surface. `lib/labelCrop.js` composes five engine calls and does everything
+else in JS:
 
 1. **decode once** — an encoded Buffer becomes a full-res raw object via
    `colorConvert(buffer, RGB, raw)`; a raw object input skips this.
@@ -655,11 +669,98 @@ engine calls and does everything else in JS:
    output format, so encoded outputs never round-trip through JS.
 
 The engine is a **setup dependency, not a fallback**: `getBridge()`
-throws when the binary is missing, and the node reports a setup error
+throws when no engine is available, and the node reports a setup error
 instead of silently passing every frame through (which would look like
 "no label found"). `available()` gates the node; the unit tests inject a
 fake engine through `_setBridge` so the suite stays hermetic on
 platforms without a binary.
+
+### Two engines behind one op surface
+
+`lib/engine.js` chooses which OpenCV actually answers these calls:
+
+| | native | opencv-js |
+|---|---|---|
+| package | `@rosepetal/node-red-contrib-image-tools` | `@techstark/opencv-js` |
+| form | C++ addon over the promisified `cpp-bridge` | opencv.js, WASM, wrapped by `lib/cvjs.js` + `lib/cvjsAlign.js` |
+| platforms | linux-x64/arm64, linuxmusl-x64, darwin-x64/arm64 | anywhere Node runs, win32 included |
+| threading | native threads | single-threaded, on the event loop |
+| codecs | decodes and encodes jpg/png/webp | none — raw in, raw out |
+
+The default is native where a prebuilt binary exists and WASM everywhere
+else; `VISION_TOOLS_ENGINE` pins one, and a pinned engine that will not
+load is an error rather than a silent substitution.
+
+**Why the WASM engine exists.** The native addon has no win32 build, and
+`label-crop` treats a missing engine as a setup error — so on Windows the
+node could not run at all, and neither could any integration test of it.
+The WASM build removes that cliff: `test/cvjs.test.js` exercises the real
+deskew-and-crop pipeline, and golden-compare's `nativeFastAlign` path,
+against a real OpenCV on every platform.
+
+**Raw only.** `@techstark/opencv-js` is built without image codecs, and
+the rig feeds raw frames anyway, so every op in `lib/cvjs.js` takes and
+returns `{ data, width, height, channels, colorSpace, dtype }`. The two
+points where the bridge contract genuinely needs a codec — an encoded
+Buffer arriving at `colorConvert`, and a non-raw `outputFormat` on the
+final crop — delegate to `sharp`, which is a direct dependency already.
+Nothing on the hot path touches them.
+
+**Where the engines differ.** Verified on Alpine x64 with both installed
+(`bench/engine-parity.js`); over a sweep of angles and label shapes the two
+now agree on every label-crop field exactly, to the last decimal. Getting
+there took matching two things that are not in the bridge's contract:
+
+- **the resize filter.** `INTER_LINEAR`, which `bench/resize-probe.js`
+  identifies by elimination: over a random-texture downscale it reproduces
+  the native engine on 100% of pixels, where `INTER_AREA` differs by 34
+  mean absolute and `INTER_CUBIC` by 14. `INTER_AREA` is the textbook
+  choice for a detection copy and was the first implementation; it is
+  wrong here, because `refineRectBoundary` decides between the label's own
+  boundary and a printed rule running parallel to it, and a sub-pixel
+  difference picks the loser. Measured: a 1200x750 label at angle 0
+  cropped 169px short.
+
+- **filter("otsu")'s side effect on its input.** The native engine
+  GaussianBlurs the image (kernel x kernel, sigma 0) and writes that back
+  over *the caller's buffer* before thresholding - confirmed bit-for-bit
+  by `bench/blur-probe.js`. label-crop calls `filter(det, "otsu")` and
+  then `filter(det, "edge")` on the same `det`, and passes `det` to
+  `refineRectBoundary` as its grey image, so the refinement has always run
+  on a blurred copy it never asked for. The blur is load-bearing: it
+  softens thin printed rules more than the label's own boundary step,
+  which is the discrimination the refinement needs. `lib/cvjs.js`
+  reproduces it, and says so at length, because an engine that did not
+  would silently crop differently. **The real fix belongs in label-crop**,
+  which should ask for the blurred copy it wants instead of inheriting one
+  by accident; until it does, the side effect is part of the contract.
+
+One difference is deliberate and remains:
+
+- **the alignment warp's border fill.** The native `imageAlign` fills
+  uncovered pixels with 0, the darkest possible ink, and
+  `nativeSeed.blankOutsideSource` rewrites the pixels that mapped outside
+  the frame back to 255. It cannot reach the covered pixels one step
+  inside that boundary, whose value bilinear interpolation has already
+  mixed with the black fill - leaving a one-pixel dark rim that the
+  background check reads as ink the part does not have. On a 512x640
+  synthetic shifted 6px that rim alone is a 0.24% background defect ratio,
+  over the 0.2% `failRatio`, failing a frame the JS aligner passes.
+  `lib/cvjsAlign.js` fills 255 instead - blank substrate, the convention
+  `lib/warp.js` already uses for exactly this reason.
+
+**A native `imageAlign` limit worth knowing.** On both 1.6.4 and 1.7.0,
+the native `imageAlign` returns the identity transform with
+`success: true` for images from about 1536px up - it recovers an 11px
+shift correctly at 1280 and reports no shift at all at 1536, 2048 and
+2656. `golden-compare`'s own fast-align bench runs at `workingSize: 2656`,
+squarely inside that range, so the native fast path there cannot be doing
+anything; `compare.js`'s score guard catches the bad transform and falls
+back to the JS aligner, which is presumably why it went unnoticed. The
+WASM implementation recovers the shift at every size tested.
+
+`bench/engine-compare.js` runs both, on the same frames, on whichever
+host has them.
 
 ### Confidence gates: a miss is safer than a wrong crop
 
@@ -710,9 +811,9 @@ operator can claim.
 
 **The engine has nothing to offer here.** The work is a few thousand
 bilinear samples, a box filter and a 2x2 eigenproblem. Shipping that
-through the native bridge would cost more in marshalling than it saves,
-and would make the module untestable on win32, where the native
-bridge has no binary.
+through an engine would cost more in marshalling than it saves, and would
+tie the module to whichever backend is installed - it has none of the
+per-pixel bulk that makes the engine worth its call overhead elsewhere.
 
 **A drawn region is the algorithm, not a convenience.** The reason the
 blob search fails on the Inspection rig is not that it is badly tuned; it

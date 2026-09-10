@@ -15,6 +15,9 @@ transform.json
 # npm pack output
 *.tgz
 
+# agent session scratch
+.pi/
+
 # editor / OS noise
 .DS_Store
 Thumbs.db

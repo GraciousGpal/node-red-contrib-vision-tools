@@ -356,9 +356,9 @@
 
 <script type="text/html" data-help-name="label-crop">
   <p>
-    Detects the physical label boundary on a low-resolution copy, then uses the
-    native OpenCV engine to deskew and tightly crop the label. It
-    performs rotation only, not perspective correction.
+    Detects the physical label boundary on a low-resolution copy, then uses an
+    OpenCV engine to deskew and tightly crop the label. It performs rotation
+    only, not perspective correction.
   </p>
   <h3>Input</h3>
   <p>
@@ -372,8 +372,11 @@
     On success, <code>msg.payload</code> is the cropped label and
     <code>msg.labelCrop</code> contains corners, angle, confidence, crop
     geometry, and timings. A normal detection miss passes the original payload
-    through with <code>msg.labelCrop.detected</code> set to false. A missing
-    native engine is reported as an error.
+    through with <code>msg.labelCrop.detected</code> set to false. Having no
+    OpenCV engine at all is reported as an error, not as a miss: install
+    either <code>@rosepetal/node-red-contrib-image-tools</code> (native,
+    fastest, no win32 build) or <code>@techstark/opencv-js</code> (WASM, runs
+    anywhere).
   </p>
   <p>
     Enable <i>Preview</i> to show labelled before/after images beside the node

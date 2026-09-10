@@ -12,18 +12,28 @@
  * msg.labelCrop.detected === false, so a flow downstream keeps working
  * while the detection is getting tuned.
  *
- * The heavy pixel work runs in the @rosepetal/node-red-contrib-image-tools
- * native OpenCV engine (decoded once, low-res Otsu, ROI-only rotation,
- * native final crop); see lib/labelCrop.js. If that engine is not
- * installed or cannot be loaded, this is a **setup error** (done(err)),
- * never a silent pass-through - otherwise a missing binary would look
- * like "no label found" on every frame.
+ * The heavy pixel work runs in OpenCV (decoded once, low-res Otsu,
+ * ROI-only rotation, final crop in the engine): either the
+ * @rosepetal/node-red-contrib-image-tools native addon or the
+ * @techstark/opencv-js WASM build, whichever lib/engine.js finds. If
+ * neither can be loaded, this is a **setup error** (done(err)), never a
+ * silent pass-through - otherwise a missing binary would look like "no
+ * label found" on every frame.
  */
 
 const { performance } = require("node:perf_hooks");
 
 module.exports = (RED) => {
 	const { labelCrop, available, getBridge } = require("./lib/labelCrop.js");
+
+	// Settle the engine choice and pay its start-up cost now rather than on
+	// the first frame: the WASM build takes ~200ms to instantiate, and the
+	// native addon's own load result is only knowable asynchronously.
+	require("./lib/engine.js")
+		.warmup()
+		.catch(() => {
+			// availability is reported per message, where it can reach a flow
+		});
 
 	const POLARITIES = ["auto", "light", "dark"];
 	const BOUNDARY_MODES = ["blob", "calipers"];
@@ -182,9 +192,10 @@ module.exports = (RED) => {
 			try {
 				if (!available()) {
 					throw new Error(
-						"label-crop: OpenCV engine unavailable - install " +
-							"@rosepetal/node-red-contrib-image-tools (prebuilt binaries ship " +
-							"for Linux x64/arm64, Alpine x64, and macOS arm64)",
+						"label-crop: OpenCV engine unavailable - install either " +
+							"@rosepetal/node-red-contrib-image-tools (native, fastest, " +
+							"prebuilt for Linux x64/arm64, Alpine x64, macOS x64/arm64) " +
+							"or @techstark/opencv-js (WASM, runs anywhere)",
 					);
 				}
 				const options = { ...defaults };
