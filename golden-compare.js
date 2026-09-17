@@ -16,7 +16,8 @@
  * msg.positionToleranceYMm, msg.positionToleranceXPx,
  * msg.positionToleranceYPx, msg.blockSize, msg.blockThreshold,
  * msg.failThreshold, msg.failRatio, msg.outputPrintHeatmap,
- * msg.outputBackgroundHeatmap, msg.debugStages.
+ * msg.outputBackgroundHeatmap, msg.debugStages, msg.heatmapFormat,
+ * msg.heatmapQuality.
  */
 
 const fs = require("fs");
@@ -502,6 +503,14 @@ module.exports = (RED) => {
 		node.failRatio = clampFloat(config.failRatio, 0.002, UNIT_BOUNDS);
 		node.outputPrintHeatmap = config.outputPrintHeatmap !== false;
 		node.outputBackgroundHeatmap = config.outputBackgroundHeatmap !== false;
+		// JPEG unless asked for PNG: a heat map is a picture for a person,
+		// and PNG was ~150ms per image at working size (see encodeImage in
+		// lib/compare.js). Also applies to msg.stages.
+		node.heatmapFormat =
+			config.heatmapFormat === "png" || config.heatmapFormat === "raw"
+				? config.heatmapFormat
+				: "jpg";
+		node.heatmapQuality = clampInt(config.heatmapQuality, 85, [1, 100]);
 		node.debugStages = !!config.debugStages;
 		node.scaleFilePath = String(config.scaleFilePath || "").trim();
 		node.transformFilePath = String(config.transformFilePath || "").trim();
@@ -678,6 +687,14 @@ module.exports = (RED) => {
 							: !!msg.outputBackgroundHeatmap,
 					debugStages:
 						msg.debugStages == null ? node.debugStages : !!msg.debugStages,
+					heatmapFormat: ["png", "jpg", "raw"].includes(msg.heatmapFormat)
+						? msg.heatmapFormat
+						: node.heatmapFormat,
+					heatmapQuality: clampInt(
+						msg.heatmapQuality,
+						node.heatmapQuality,
+						[1, 100],
+					),
 					// PROTOTYPE. Seeds the pinned search from a native ORB+ECC
 					// alignment instead of the staged sweeps, when the optional
 					// @rosepetal/node-red-contrib-image-tools engine is
@@ -748,8 +765,11 @@ module.exports = (RED) => {
 							// golden.fgAmbiguous is baked in at prepare time
 							cfg.inkMargin,
 							cfg.backgroundTolerance,
-							// whether the golden's debug-stage PNGs were baked in
+							// whether the golden's debug-stage images were baked in,
+							// and in which format
 							cfg.debugStages,
+							cfg.heatmapFormat,
+							cfg.heatmapQuality,
 							cfg.mmPerPixelNative,
 							// the calibration photo's size, which the mm/px conversion is
 							// expressed against

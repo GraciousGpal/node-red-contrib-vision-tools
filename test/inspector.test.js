@@ -110,13 +110,43 @@ test("heatmaps arrive as real Buffers, not Uint8Arrays", async () => {
 		assert.ok(v, `${key} missing`);
 		assert.ok(Buffer.isBuffer(v), `${key} is ${v.constructor.name}, not a Buffer`);
 		// the observable, not the type name: a Uint8Array here yields
-		// "137,80,78,71,..." instead of base64, and a viewer renders nothing
+		// "255,216,255,..." instead of base64, and a viewer renders nothing.
+		// JPEG by default (see encodeImage in lib/compare.js)
 		assert.match(
-			v.toString("base64").slice(0, 12),
+			v.toString("base64").slice(0, 4),
+			/^\/9j\//,
+			`${key} does not base64 as a JPEG`,
+		);
+	}
+	// and PNG on request, through the same path
+	const asPng = makeNode({ ...CFG, heatmapFormat: "png" });
+	await asPng.run({ payload: frame, golden, goldenKey: "hm-png" });
+	for (const key of ["printHeatmap", "backgroundHeatmap"]) {
+		assert.match(
+			asPng.sent[0][key].toString("base64").slice(0, 12),
 			/^iVBORw0KGgo/,
 			`${key} does not base64 as a PNG`,
 		);
 	}
+	// raw: no codec, the package's raw object, its data a real Buffer even
+	// after the trip out of the inspector worker
+	const asRaw = makeNode({ ...CFG, heatmapFormat: "raw" });
+	await asRaw.run({ payload: frame, golden, goldenKey: "hm-raw" });
+	for (const key of ["printHeatmap", "backgroundHeatmap"]) {
+		const v = asRaw.sent[0][key];
+		assert.ok(Buffer.isBuffer(v.data), `${key}.data is ${v.data && v.data.constructor.name}`);
+		assert.strictEqual(v.channels, 3);
+		assert.strictEqual(v.colorSpace, "RGB");
+		assert.strictEqual(v.dtype, "uint8");
+		assert.strictEqual(v.data.length, v.width * v.height * 3);
+	}
+	// the background heat map has the mark painted red: R up, G and B down
+	const bg = asRaw.sent[0].backgroundHeatmap;
+	let red = 0;
+	for (let i = 0; i < bg.data.length; i += 3) {
+		if (bg.data[i] > bg.data[i + 1] + 40) red++;
+	}
+	assert.ok(red > 0, "no red block in the raw background heat map");
 });
 
 test("debug stages arrive as real Buffers", async () => {
@@ -126,9 +156,30 @@ test("debug stages arrive as real Buffers", async () => {
 	await run({ payload: frame, golden, goldenKey: "stages" });
 	const stages = sent[0].stages;
 	assert.ok(stages && Object.keys(stages).length >= 8, "expected the stage set");
+	// grey stages follow heatmapFormat (JPEG by default); masks are always
+	// PNG - see renderMaskPng
+	const isMask = (name) => /Fg|Defect/.test(name);
 	for (const [name, v] of Object.entries(stages)) {
 		assert.ok(Buffer.isBuffer(v), `stages.${name} is ${v.constructor.name}`);
-		assert.match(v.toString("base64").slice(0, 12), /^iVBORw0KGgo/);
+		if (isMask(name)) {
+			assert.match(v.toString("base64").slice(0, 12), /^iVBORw0KGgo/, `stages.${name} not PNG`);
+		} else {
+			assert.match(v.toString("base64").slice(0, 4), /^\/9j\//, `stages.${name} not JPEG`);
+		}
+	}
+	// the format is baked into the golden's cached stages, so flipping it
+	// must re-prepare rather than serve the old encodes
+	const asPng = makeNode({ ...CFG, debugStages: true, heatmapFormat: "png" });
+	await asPng.run({ payload: frame, golden, goldenKey: "stages" });
+	for (const [name, v] of Object.entries(asPng.sent[0].stages)) {
+		assert.match(v.toString("base64").slice(0, 12), /^iVBORw0KGgo/, `stages.${name} not PNG`);
+	}
+	const asRaw = makeNode({ ...CFG, debugStages: true, heatmapFormat: "raw" });
+	await asRaw.run({ payload: frame, golden, goldenKey: "stages" });
+	for (const [name, v] of Object.entries(asRaw.sent[0].stages)) {
+		assert.ok(Buffer.isBuffer(v.data), `stages.${name}.data not a Buffer`);
+		assert.strictEqual(v.channels, 1, `stages.${name} is grey`);
+		assert.strictEqual(v.data.length, v.width * v.height);
 	}
 });
 

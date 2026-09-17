@@ -531,6 +531,30 @@
     <span style="margin-left:4px;">background</span>
   </div>
   <div class="form-row">
+    <label for="node-input-heatmapFormat"
+      ><i class="fa fa-file-image-o"></i> Image format</label
+    >
+    <select id="node-input-heatmapFormat" style="width:90px;">
+      <option value="jpg">jpg</option>
+      <option value="png">png</option>
+      <option value="raw">raw</option>
+    </select>
+    <span style="margin:0 6px 0 12px;">quality</span>
+    <input
+      type="number"
+      id="node-input-heatmapQuality"
+      min="1"
+      max="100"
+      style="width:70px;"
+    />
+    <span class="node-input-hint" style="margin-left:10px; color:#999;"
+      >heat maps and pipeline stages. At working size: jpg ~22ms/350KB, png
+      (lossless, zlib level 1) ~25ms/3.7MB, raw 0ms/9.4MB as a
+      <code>{ data, width, height, channels }</code> object for a flow that
+      resizes before displaying; quality applies to jpg only</span
+    >
+  </div>
+  <div class="form-row">
     <label for="node-input-debugStages"
       ><i class="fa fa-eye"></i> Output pipeline stages</label
     >
@@ -600,7 +624,10 @@
     <code>msg.blockSize</code>, <code>msg.blockThreshold</code>,
     <code>msg.failThreshold</code>, <code>msg.failRatio</code>,
     <code>msg.outputPrintHeatmap</code>,
-    <code>msg.outputBackgroundHeatmap</code>, <code>msg.debugStages</code>.
+    <code>msg.outputBackgroundHeatmap</code>, <code>msg.debugStages</code>,
+    <code>msg.heatmapFormat</code> (<code>jpg</code> / <code>png</code> /
+    <code>raw</code>),
+    <code>msg.heatmapQuality</code>.
   </p>
 
   <h3>Output</h3>
@@ -624,7 +651,7 @@
       maps)
     </li>
     <li>
-      <code>msg.printHeatmap</code> / <code>msg.backgroundHeatmap</code> — PNG
+      <code>msg.printHeatmap</code> / <code>msg.backgroundHeatmap</code> — JPEG (or PNG / raw, per <i>Image format</i>)
       <code>Buffer</code> overlays (only if the matching
       <i>Output heat maps</i> checkbox is on)
     </li>
@@ -633,7 +660,7 @@
       <code>{ decodeMs, alignMs, diffMs, heatmapMs, stagesMs, totalMs }</code>
     </li>
     <li>
-      <code>msg.stages</code> — only if <i>Output pipeline stages</i> is on: PNG
+      <code>msg.stages</code> — only if <i>Output pipeline stages</i> is on: image
       <code>Buffer</code>s for each pipeline step (<code>goldenGray</code>,
       <code>goldenFg</code>, <code>goldenFgDilatedBackground</code>,
       <code>targetGray</code>, <code>targetFg</code>,
@@ -746,6 +773,8 @@
       failRatio: { value: 0.002, validate: RED.validators.number(true) },
       outputPrintHeatmap: { value: true },
       outputBackgroundHeatmap: { value: true },
+      heatmapFormat: { value: "jpg" },
+      heatmapQuality: { value: 85, validate: RED.validators.number(true) },
       debugStages: { value: false },
     },
     inputs: 1,
