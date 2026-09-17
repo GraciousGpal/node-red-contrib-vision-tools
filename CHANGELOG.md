@@ -4,6 +4,109 @@ All notable changes to this project are documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [Unreleased]
+
+### Changed
+
+- **Heat maps and debug stages are JPEG by default, and encoded
+  concurrently.** Turning on the two heat maps cost ~317ms a frame and
+  the seven debug stages ~734ms, on a 460ms inspection - not the compose
+  (11ms) or the block grid (5ms), but PNG at zlib's default level 6:
+  153ms per image on real frame content at working size, awaited one
+  image at a time while the codec threads idled. A heat map is a picture
+  for a person, so it is now JPEG q85 (22ms, 350KB against 2.4MB), the
+  independent encodes run together, and the binary mask stages stay PNG
+  (two-level content deflates in a few ms; JPEG ringing would put grey
+  where the pipeline has none). Measured through the real handler in the
+  container: heat maps 317 → ~80ms, stages 734 → ~95ms, image bytes per
+  frame 10.3MB → 2.2MB. `heatmapFormat: "png"` keeps PNG, lossless at
+  zlib level 1 (25ms per image, 3.7MB - the fastest deflate worth
+  having; level 0 stores 9.2MB in 11ms); `"raw"` skips the codec
+  entirely and hands the overlay over as the same `{ data, width,
+  height, channels }` object label-crop emits, for a flow that resizes
+  before it displays. `heatmapQuality` sets the JPEG quality; all take
+  `msg.` overrides and are part of the golden cache key, since the
+  golden's own stages are baked in.
+
+### Fixed
+
+- **`label-crop` cut into the label on the production rig.** The boundary
+  refinement defined "label tone" as the frame's brightest 2% (98th
+  percentile − 8 = 246 here). Under the rig's lighting the label's left
+  edge reads 214 and only reaches 250 across the label, so the whole dim
+  third was "not label" and the left side walked ~100 columns in, past
+  the barcode, on three frames in four. The same physical label on a
+  fixed rig came out anywhere from 1165 to 1272px wide and 1688 to 1824
+  tall — placement variation *added* by the node meant to remove it.
+
+  The refinement now looks for a **step**: the innermost place where the
+  mean tone rises ≥ 12 levels across three bins and everything outside it
+  is darker than the label past it. A halo's inner edge qualifies, a
+  barcode band's inner edge does not (the label's own margin sits in its
+  outside strip), and a lighting ramp (~0.6 levels/bin) is not a step.
+  Tone profiles are taken over the central 60% of the rect so the sides
+  not yet trimmed cannot dilute them. Over the 162-frame run: width spread
+  96px → 17px, height wobble gone, every frame keeps its barcode, no frame
+  changed between hit and miss, and every existing fixture (halo, seam,
+  print-inside-label, clipped) still passes. A boundary fainter than 12
+  levels — this rig's label liner, 4 levels off — is left in: the crop
+  errs outward, never into the label.
+- **`label-crop` in front of `golden-compare` measured on the production
+  rig — and left out of the flow.** `bench/nuisance-e2e.js --labelcrop 1`
+  runs the 162 frames both ways: 0 → 79 of 148 good frames rejected, no
+  change on the 14 bad. The golden artwork is wider than the cropped label,
+  so the position gate loses the frame margin it measures against and the
+  clamped alignment search lands ~10% worse (6× the background ratio).
+  When the label is the frame there is nothing for label-crop to remove;
+  README, ARCHITECTURE and the bench doc now say so with the numbers.
+- **`label-crop` misses report what the gate measured.** A
+  `border-contact` miss carried `borderContact: 0` and `dominance: NaN`;
+  it now carries `borderContact: 0.75`, and fields a gate never reached
+  are `null` rather than 0. On this rig that reads straight off as
+  "raise `maxBorderContact` to 0.75", which takes the run from 137 to 151
+  of 151 full frames detected.
+
+### Added
+
+- **The camera's perspective, measured once and applied per frame.**
+  `checkerboard-calibrate` now fits a plane homography to the same
+  square centroids it measures the pitch from: an ideal lattice is placed
+  over the photo with a similarity, so the board's own placement stays
+  put, and what remains between the measured squares and the lattice is
+  the keystone. It is reported as `msg.result.perspective` — before/after
+  reprojection in pixels, so the operator can see whether there is any
+  perspective worth correcting — and saved with the scale as
+  `homography`. On a square-on camera it is the identity. Existing scale
+  files keep working; `readScaleFile` validates the homography only when
+  one is present.
+
+  The new **`perspective-rectify`** node reads that record and resamples
+  each frame through it, in front of `label-crop`. Bilinear, edge
+  replicated rather than filled, pure JS split across the worker pool by
+  rows like the golden warp (~20ms on a 1500×1850 RGB frame, ~140ms on
+  24MP; neither OpenCV engine offered a faster `warpPerspective`),
+  rescaled to the frame's resolution
+  when it differs from the calibration photo's. A frame it cannot
+  rectify (a different aspect ratio, an undecodable payload) passes
+  through unchanged with `msg.rectify.applied === false` and a reason, so
+  the inspection behind it still grades the part; setup problems (no
+  scale file, no homography in it) are errors, since no frame could ever
+  pass. On a synthetic
+  board keystoned by 12% the measurement reads 3.9px rms before and
+  0.16px after; rectifying with it brings the board back to 0.23px. On
+  this project's real rig it reads 1.6px before, 1.3px after: square-on,
+  the rest lens distortion. The lattice takes x and y pitch separately,
+  so a board with rectangular cells (the real one measures 0.855) is left
+  as the aspect it is rather than "corrected" into a stretch of every
+  frame.
+
+  This is deliberately not a document-scanner style per-frame quad
+  detection: that re-solves the camera geometry on every part, from four
+  contour corners, and does so least reliably on exactly the damaged
+  label the inspection exists to catch. It is also not a change to
+  `golden-compare`'s alignment model, whose residual is the label bowing
+  on the tray (a homography removes 18% of it), not the camera.
+
 ## [1.2.0] - 2026-09-10
 
 ### Added

@@ -58,8 +58,9 @@ flowchart TD
 Golden preparation is cached on the node and keyed by everything baked
 into it: the source fingerprint, `workingSize`, `threshold`,
 `thresholdMode`, `sauvolaRadius`, `sauvolaK`, `inkMargin`,
-`backgroundTolerance`, `debugStages` (the golden's stage PNGs are
-rendered only when it is on), the calibrated scale — including the
+`backgroundTolerance`, `debugStages` (the golden's stage images are
+rendered only when it is on) and `heatmapFormat`/`heatmapQuality` (the
+format they were rendered in), the calibrated scale — including the
 calibration photo's native size, which the mm conversion is expressed
 against — and the raw geometry when the golden arrived as raw pixels.
 Settings applied fresh per frame (`printTolerance`, `alignSearch`,
@@ -81,8 +82,11 @@ authoritative list.
 | `lib/integral.js` | summed-area tables — O(1) box sums; binary masks stay `Uint32`, grey tables use a `Float64` accumulator (a `Uint32` grey table wraps past ~16.8M bright pixels and silently corrupts the warp) |
 | `lib/components.js` | connected components for region extraction |
 | `lib/transformFile.js` | trained-transform persistence and its validity guards |
-| `lib/scaleFile.js` | mm/px calibration file, shared with `checkerboard-calibrate` |
-| `lib/checkerboard.js` | checkerboard detection for mm/px calibration |
+| `lib/scaleFile.js` | mm/px calibration file, shared with `checkerboard-calibrate` and `perspective-rectify`; validates the homography when one is stored |
+| `lib/checkerboard.js` | checkerboard detection for mm/px calibration, and the plane homography from the same centroids (`measurePerspective`) |
+| `lib/homography.js` | similarity and normalised-DLT homography fits, inversion, rescaling between capture resolutions |
+| `lib/rectify.js` | `warpPerspective`: bilinear inverse-mapped resample with border replication, pure JS |
+| `perspective-rectify.js` | Node-RED wiring: reads the scale file's homography, resolves the frame to raw, warps it on the inspector worker |
 | `label-crop.js` | Node-RED wiring for the label-crop node: config/clamping, engine availability gate, `msg.labelCrop` attachment, optional before/after preview publish |
 | `lib/labelCrop.js` | deskew-and-crop op: decode-once, low-res Otsu mask analysis (connected component + exterior minimum-area rectangle) + brightness/Sobel boundary refinement, ROI-only rotation, final crop in the engine; composes the OpenCV engine |
 | `lib/engine.js` | picks the OpenCV engine (native addon or opencv.js WASM), honours `VISION_TOOLS_ENGINE`, warms it up |
@@ -585,6 +589,65 @@ background region on a good part. No test in the suite can see that
 distinction — both forms tie the walk on the spec fixture — so it is
 measured in `bench/`, not asserted.
 
+## perspective-rectify: the camera's keystone, measured once
+
+The alignment model above has no perspective term, and the reason is
+measured: a homography fitted to the residual of a correctly aligned pair
+removes 18% of it. That residual is the label bowing on its tray, not the
+camera. But a camera that is mounted a degree or two off-axis *does*
+produce a perspective, and it produces the same one on every frame - a
+trapezoid that `label-crop`'s minimum-area rectangle fits badly and that
+`golden-compare` then absorbs into `mx`/`my` as best it can, leaving the
+ends of the label a few pixels out.
+
+That is a property of the rig, so it is handled the way the rig's other
+properties are: measured once at commissioning, applied per frame without
+re-solving. The document-scanner shape - Canny, `findContours`,
+`approxPolyDP` to a quad, `warpPerspective` - re-solves it per image from
+four contour corners, and does so least reliably on exactly the damaged
+label the inspection exists to catch. Here the checkerboard already on
+the tray for the mm/px calibration gives dozens of exact correspondences
+instead.
+
+`measurePerspective` in `lib/checkerboard.js`: the detected centroids say
+where each dark square *is*; the pitch says where each *would be* on a
+board seen square-on - a lattice with rows half a y-pitch apart and
+squares an x-pitch apart along a row, alternate rows shifted by half a
+pitch, the shift read off the data rather than assumed from which colour
+leads. A similarity (uniform scale, rotation, translation) places that
+lattice over the photo, so the board's own placement is left in the
+image, and the homography from the measured centroids to the placed
+lattice is what remains: on a square-on camera, the identity, and
+production frames are not moved or rotated for no reason.
+
+The two pitches enter separately, and the first real rig is why: it
+measures `pitchY/pitchX = 0.855`, a rectangular print or the camera's own
+aspect, and one photo cannot say which. A square lattice put that
+difference into the homography as a 10% anisotropic scale - 46px rms of
+"keystone" - and rectifying with it would have stretched every frame.
+Aspect is scale; `golden-compare`'s independent `mx`/`my` absorb it per
+label and the mm/px figure averages it, so it is left alone here. With
+that fixed the same rig reads 1.6px rms before and 1.3px after: square-on
+for practical purposes, the remainder lens distortion. `lib/homography.js` does the fitting - Umeyama for the
+similarity, a Hartley-normalised inhomogeneous DLT for the homography,
+both closed-form on a handful of points.
+
+The record is saved with the scale, in the calibration photo's native
+pixels, alongside its before/after reprojection in pixels so the operator
+can see whether there is any keystone worth correcting. `readScaleFile`
+validates it when present and refuses a file that has one without the
+geometry it is expressed in. `perspective-rectify` rescales it to the
+frame's resolution (`H' = S H S^-1`; a different aspect ratio is a
+different crop and is refused), and `lib/rectify.js` resamples the frame
+through the inverse: bilinear, whole frame, border replicated because a
+filled band along the edge is a fake feature downstream. It is pure JS -
+neither engine is required, the native cpp-bridge has no
+`warpPerspective`, and opencv.js's single WASM thread measured no faster
+than the loop - and it is split across the nested pool by rows
+(`rectifyParallel`, the `rectify` kernel in `poolWorker.js`, tested
+byte-identical to the serial warp): 127ms serial to ~20ms on a 1500x1850
+RGB frame, ~1s to ~140ms on 24MP.
+
 ## label-crop: a fast deskew-crop node on the native engine
 
 `label-crop` solves a different problem from golden-compare's own
@@ -601,6 +664,19 @@ and flood both blemish checks with a defect the print did not make.
 So the typical flow is label-crop first, golden-compare second — and
 label-crop's output can be previewed or saved on its own, which the
 inline alignment inside golden-compare cannot be.
+
+**Typical, not universal — and measured the other way on this project's
+rig.** When the label fills the frame (85% here, touching three edges when
+it shifts), there is no placement variation worth removing: the wobble is
+±11px, which golden-compare's translation search absorbs at 63ms. Worse,
+the golden artwork (1475px at working scale) is wider than the cropped
+label (1457), so after the crop the golden no longer fits inside the
+frame — the position gate loses the margin it measures against and the
+clamped search aligns ~10% worse. Run end to end over the 162-frame set,
+label-crop in front took good-rejected from 0 of 148 to 79 of 148 with no
+gain on the 14 bad frames (`bench/golden-performance.md`). The rule that
+falls out: label-crop belongs in front of golden-compare when the frame
+holds tray and table around a label, not when the frame *is* the label.
 
 ### Shape: engine pixels, JS only on the small mask
 
@@ -625,26 +701,38 @@ else in JS:
    Because the label is part of the bright blob, that rectangle always
    *contains* the label. The blob extent is therefore an upper bound, and
    the real boundary is found by snapping each side inward. Two signals
-   are accumulated into 1-D histograms along the rect's axes:
+   are accumulated into 1-D profiles along the rect's axes:
 
-   - **brightness** — for each column/row, the fraction of the rect's
-     extent that is label-tone (≥ the 98th-percentile gray for a light
-     label, ≤ it for a dark label). The label interior is solidly
-     label-tone while a bright halo or bright table patch outside it is
-     not, so the boundary is where a run of three reaches ~70% of the
-     frame's own maximum fraction (self-adapting to how much of the rect
-     the label actually fills). This is what separates "proper white"
-     from "grayish" on these photos.
+   - **tone step** — each bin is the mean grey (inverted for a dark
+     label) over the central 60% of the rect's perpendicular extent, so
+     the rows the other sides have yet to trim cannot dilute it. The
+     boundary is the *innermost* bin where the mean rises by ≥ 12 levels
+     across 3 bins going inward and every bin between it and the region
+     side is darker than the interior just past it. A halo on the table
+     has two steps, table→halo and halo→label; the inner one wins and its
+     outside strip (the halo) is darker than the label. A barcode band
+     inside the label also has an inner step, but the strip outside it
+     holds the label's white margin, as bright as the interior — refused.
+     A lighting ramp is ~0.6 levels per bin: not a step.
    - **edges** (fallback) — native Sobel (`filter(gray, "edge", 3, 1)`);
-     a full-length boundary line becomes one tall bin. Only trusted when
-     the strip between the candidate and the region side is weaker than
-     the label tone, so a printed barcode band inside the label is never
-     mistaken for its edge — but a seam/shadow on an equally-toned
-     surface (e.g. the label bottom on a bright table) still snaps.
+     a full-length boundary line becomes one tall bin, accepted under the
+     same outside-strip rule, for a seam on an equally-toned surface.
 
-   A side whose region position is confirmed (label tone reaches the frame
-   edge — a clipped label) stays put. `refinedSides` reports which sides
-   moved.
+   A clipped side has no outside to step from and its inward strip is
+   label tone, so it stays put. `refinedSides` reports which sides moved.
+
+   The step rule replaced an absolute one — "label tone" = the frame's
+   98th-percentile grey − 8 — after the production run showed what an
+   absolute level does under vignetting. The label's left edge sits at
+   214 and rises to 250 across the label; the rule's level was 246, so the
+   whole dim third was "not label" and the left side walked ~100 columns
+   in, past the barcode, on three frames in four. Crop widths on a fixed
+   rig ranged 1165–1272px; with the step rule, 1454–1471. The old rule
+   had also been finding the label's liner (4 levels off the label) at the
+   top by luck — its level happened to fall between the two — and the step
+   rule does not: a boundary fainter than 12 levels is left in. Outward
+   is the safe direction; a crop into the label is the failure this
+   stage exists to prevent.
 
    After refinement an optional **size gate** compares the refined
    rectangle's area (as a fraction of the frame) against
@@ -847,7 +935,10 @@ operator what to adjust:
 | combined confidence ≥ `minConfidence` | 0.4 | `low-confidence` |
 
 A miss returns the original input unchanged (`detected: false`), so a
-flow keeps running while the gates are being tuned. `rectangularity` is
+flow keeps running while the gates are being tuned, and it carries the
+value the gate measured — `border-contact` with `borderContact: 0.75`
+says which setting to move; fields a gate never reached are `null`,
+where they used to be 0 (and `dominance` NaN). `rectangularity` is
 the one gate that must tolerate printed labels: the ink inside a label
 turns into holes in the mask (both polarities hole the label, since
 content is darker than the substrate), so the default is a lenient 0.4

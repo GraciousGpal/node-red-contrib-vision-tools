@@ -27,7 +27,14 @@ guide: what the settings do and how to use them. Version history is in
   known pitch, measure the pixel pitch, and save or compare the resulting
   mm/px scale. Run once at commissioning and again after camera or
   mechanical maintenance, not per frame — the whole point of a fixed
-  camera rig is that this doesn't need re-running per part.
+  camera rig is that this doesn't need re-running per part. The same
+  photo also measures how far off-axis the camera looks at the tray, as
+  a plane homography saved next to the scale.
+- **`perspective-rectify`** — flattens each frame through that
+  homography, so a camera that is a degree or two off-axis hands
+  `label-crop` and `golden-compare` the keystone-free view a square-on
+  camera would. Measured once, applied per frame; nothing is detected on
+  the production image.
 - **`label-crop`** — deskews and crops a physical label out of a frame,
   either by thresholding the whole frame and taking the dominant blob or,
   when the label's own boundary is fainter than its printed artwork, by
@@ -515,10 +522,17 @@ trusting it.
   press does, and its normal value depends on media and machine, so any
   default threshold would be a guess that fails good parts. It is worth
   trending, though: a stretch that moves is a press drifting.
-- `msg.printHeatmap` / `msg.backgroundHeatmap` — PNG `Buffer` overlays
+- `msg.printHeatmap` / `msg.backgroundHeatmap` — JPEG `Buffer` overlays.
+  `heatmapFormat` picks the encoding, measured at working size on real
+  content: `jpg` ~22ms/350KB (default), `png` ~25ms/3.7MB (lossless,
+  zlib level 1), `raw` 0ms/9.4MB — no codec, a
+  `{ data, width, height, channels, colorSpace, dtype }` object like
+  `label-crop`'s output, for a flow that resizes or overlays before
+  anything is displayed. The same setting governs the grey `msg.stages`
+  images; mask stages are PNG or raw, never JPEG.
   (only if the matching `outputPrintHeatmap`/`outputBackgroundHeatmap` is on)
 - `msg.timings` — `{ decodeMs, alignMs, diffMs, heatmapMs, stagesMs, totalMs }`
-- `msg.stages` — only if `debugStages` is on: PNG `Buffer`s for each
+- `msg.stages` — only if `debugStages` is on: `Buffer`s for each
   pipeline step (`goldenGray`, `goldenFg`, `goldenFgDilatedBackground`,
   `targetGray`, `targetFg`, `targetGrayAligned`, `targetFgAligned`,
   `targetFgDilatedPrint`, `printDefect`, `backgroundDefect`) — for
@@ -547,9 +561,7 @@ trusting it.
 2. Arrange the blob centroids into a `checkerboardRows × checkerboardCols`
    grid and measure the median pixel pitch between adjacent same-colour
    squares, in both axes (`lib/checkerboard.js`). Centroid/pitch-based
-   only — no sub-pixel corner refinement, no lens-distortion or
-   perspective correction, consistent with `golden-compare`'s
-   translation-only scope.
+   only — no sub-pixel corner refinement and no lens-distortion model.
 3. `mm/px = targetPitchMm / measured pitch`. Compared against the baseline
 saved in `scaleFilePath` (`deviationPercent`, `pass` if within
 `allowedErrorPercent`). With no baseline yet, the result is
@@ -570,6 +582,35 @@ defaults (`4 × 6`) in fact describe an 8×6 board.
    resolution. If the golden's native resolution differs from the
    calibration photo's (e.g. a PDF render at a different dpi), the node
    warns once; the mm conversion itself stays exact either way.
+5. The same centroids give the camera's **perspective**. A lattice of
+   where the squares *would* sit on a board seen square-on is fitted over
+   the photo with a similarity (scale, rotation, translation — so the
+   board's own placement is left alone), and the homography from the
+   measured centroids to that lattice is what remains: the keystone. It is
+   reported as `msg.result.perspective` and saved with the scale as
+   `homography`, for `perspective-rectify` to apply per frame. On a
+   square-on camera it is the identity.
+
+   Read it in pixels: `rmsBeforePx`/`maxBeforePx` is how far the squares
+   sit from where a flat board would put them — under a pixel and the
+   camera is square-on for practical purposes; `rmsAfterPx`/`maxAfterPx`
+   is what the homography could not explain (centroid noise, lens
+   distortion) and should be well under a pixel; `maxCornerShiftPx` is how
+   far the frame's own corners move when rectified. On a synthetic board
+   with a 12% keystone the measurement reads 3.9px rms before, 0.16px
+   after, and rectifying with it brings the board back to 0.23px. On this
+   project's real rig it reads 1.6px before and 1.3px after — the camera
+   is square-on, and what is left is lens distortion no homography
+   reaches.
+
+   The lattice takes the x and y pitch separately, so a board with
+   rectangular cells (this project's measures `pitchY/pitchX = 0.855`) is
+   **not** "corrected": one photo cannot tell a rectangular print from the
+   camera's own aspect, and aspect is scale, which `golden-compare`'s
+   independent `mx`/`my` already absorb and the mm/px figure averages. A
+   square lattice had turned that into a 10% anisotropic scale in the
+   homography — 46px rms of "keystone" that would have stretched every
+   frame.
 
 ### Input
 
@@ -582,11 +623,89 @@ baseline. Optional per-message overrides: `msg.targetPitchMm`,
 
 - `msg.payload` — `true`/`false` pass
 - `msg.result` —
-  `{ checkerboardDetected, currentScale, detectedScale, deviationPercent, bootstrap, pass, saved, pitchXPx, pitchYPx, nativeWidth, nativeHeight }`
-  (scales in mm/px)
+  `{ checkerboardDetected, currentScale, detectedScale, deviationPercent, bootstrap, pass, saved, pitchXPx, pitchYPx, nativeWidth, nativeHeight, perspective }`
+  (scales in mm/px; `perspective` is
+  `{ homography, rmsBeforePx, maxBeforePx, rmsAfterPx, maxAfterPx, maxCornerShiftPx, boardAngleDeg, points }`)
 - `msg.timings` — `{ totalMs }`
 
+## How `perspective-rectify` works
+
+Wire it between the camera and `label-crop`. It reads the `homography`
+`checkerboard-calibrate` saved and resamples every frame through it, so
+the label reaches the rest of the flow as a square-on camera would have
+seen it. Nothing is detected on the production frame — a document-scanner
+style "find the quad and warp it" would re-solve the camera geometry on
+every part, and is likeliest to solve it wrongly on exactly the damaged
+label the inspection exists to catch. Here the geometry is a property of
+the rig, measured once from a board with dozens of exact correspondences,
+and every frame gets the same warp.
+
+Whether it is worth wiring in is what `checkerboard-calibrate`'s
+`perspective` numbers say (above). It is not a substitute for
+`golden-compare`'s own alignment: the residual that node measures on a
+correctly aligned pair is not keystone (a homography fitted to it removes
+18%, see Notes), it is the label bowing on the tray, which is what
+per-tile refinement is for. Rectification is for the case where the
+*camera* is off-axis and the same trapezoid shows up on every frame.
+
+The warp is bilinear, inverse-mapped, with the frame edge replicated
+outward rather than filled — a black or white band along the edge would be
+a fake feature to `label-crop`'s blob search and `golden-compare`'s
+background check. Pure JS, so it runs the same on either OpenCV engine and
+on a host with neither — the native addon exports no `warpPerspective`,
+and opencv.js's single WASM thread measured no faster than the serial
+loop (114ms vs 127ms on a 1500×1850 RGB frame). What makes it fast is
+the same worker pool `golden-compare`'s warp runs on: rows split across
+`workers` threads (0 = one per core), ~20ms on that frame with 16
+workers and ~140ms on 24MP RGB against ~1s serial, off the Node-RED
+event loop either way. A homography that is the identity passes the frame
+through untouched.
+
+A frame at a different resolution from the calibration photo is fine as
+long as it is the same field of view (the homography is rescaled). A
+frame that cannot be rectified — a different aspect ratio (a different
+crop of the sensor), or a payload that will not decode — **passes through
+unchanged** with `msg.rectify.applied === false` and a `reason`
+(`aspect-mismatch` / `input`), yellow status, one warning per distinct
+reason; the inspection behind the node still runs on it. That is the
+same rule `label-crop` applies to a miss: one odd frame is a per-frame
+outcome, not a reason to stall the line.
+`label-crop` regions drawn in calipers mode should be drawn on a
+rectified frame, since that is what the node will see.
+
+### Input
+
+`msg.payload` — an encoded image Buffer, a file path, or a raw
+`{ data, width, height, channels }` object (a bare raw Buffer with
+`msg.rawInfo` is accepted too). `msg.outputFormat` overrides the
+configured output.
+
+### Output
+
+- `msg.payload` — the rectified frame, same size and channel count as the
+  input: a raw `{ data, width, height, channels, colorSpace, dtype }`
+  object by default (what `label-crop` and `golden-compare` want), or an
+  encoded jpg/png Buffer
+- `msg.rectify` —
+  `{ applied, reason, homography, width, height, channels, rescaledFrom, perspective, timings: { decodeMs, warpMs, encodeMs, totalMs } }`
+  (`reason` is `ok`, `identity`, or on a pass-through `input` /
+  `aspect-mismatch` with `error` carrying the message)
+
+Setup problems are errors (`done(err)`), because no frame could ever pass
+them: no scale file path, no calibration on disk, a calibration with no
+homography (one saved before this node existed — re-run
+`checkerboard-calibrate` with `msg.save: true`), or a corrupt file.
+
 ## How `label-crop` works
+
+> **When it helps, measured.** On this project's rig the label fills 85%
+> of the frame, and putting `label-crop` in front of `golden-compare`
+> took good parts rejected from 0 of 148 to 79 of 148: the golden artwork
+> is wider than the cropped label, so the position gate loses the margin
+> it measures against and the alignment search is clamped. label-crop is
+> for a frame with tray and table around a small label — see
+> `bench/golden-performance.md` for the numbers, and leave it out when
+> the frame is already the label.
 
 `label-crop` deskews and tightly crops a physical label out of a camera
 frame, so the rest of a flow sees the label straight and centred even when
@@ -618,16 +737,31 @@ Because the label is part of the bright blob, that rectangle always *contains*
 the label. A boundary pass then snaps each side inward to the label's real
 edge, so a label that is clipped by the frame or blends into a similarly-bright
 table crops to its true boundary instead of the whole bright region. The
-primary signal is the **brightness step** — the fraction of the rect that is
-label-tone (the "proper white" versus the grayish table, or the inverse for a
-dark label) — with the native Sobel **edge** accumulator as fallback for a
-seam/shadow boundary on an equally-toned surface. A Sobel line is only trusted
-when the strip between it and the region side is dimmer than the label itself,
-so a printed barcode band inside the label is never mistaken for its edge.
-Clipped sides (label tone reaching the frame edge) stay put. `refinedSides`
-lists which sides moved.
+boundary is a **tone step**: scanning inward, the innermost place where the
+mean tone rises by at least 12 grey levels across three columns/rows *and*
+everything outside it is darker than the label just past it. A bright halo
+on the table qualifies (its inner edge is a step, and the halo is darker than
+the label); the inner edge of a printed barcode band does not (the label's
+own white margin sits in its outside strip); a smooth lighting ramp across
+the label is not a step at all. The native Sobel **edge** accumulator is the
+fallback for a seam on an equally-toned surface, under the same outside-strip
+rule. Clipped sides stay put. `refinedSides` lists which sides moved.
 
-Confidence gates turn bad evidence into a **miss**, never a wrong crop:
+The step rule replaced one that defined "label tone" as the frame's
+brightest 2%. On this project's 162-frame production run the label is lit
+unevenly — 214 at its left edge rising to 250 — so that rule called the dim
+third "not label" and walked the left side ~100 columns in, past the
+barcode, on three frames in four: the same physical label on a fixed rig
+came out anywhere from 1165 to 1272px wide. With the step rule the width
+spread is 17px, every frame keeps its barcode, and no frame changed from
+hit to miss. A boundary fainter than 12 levels (this rig's label liner, 4
+levels off the label) is left in — the crop errs outward, never into the
+label.
+
+Confidence gates turn bad evidence into a **miss**, never a wrong crop,
+and a miss reports the value its gate measured (`borderContact: 0.75`
+against a 0.5 limit says exactly which setting to move; a field the gate
+never reached is `null`, not 0):
 the blob must fall between `minAreaFraction` and `maxAreaFraction` of the
 frame, fill at least `minRectangularity` of its exterior rectangle, and not
 exceed `maxBorderContact`. The 0.5 border default permits a label clipped at
@@ -1019,18 +1153,22 @@ that barcode's region. If nothing is found at all, one message with
 
 ## Tests
 
-`npm test` (Node 18+, no test framework needed — `node --test`), 290
+`npm test` (Node 18+, no test framework needed — `node --test`), 382
 tests. Fixtures are generated with `sharp` rather than read from
 `data/sample_images`, so the suite runs anywhere; the real QC photos are
 gitignored. Coverage spans the lib pipeline (`compare`, `align`, `warp`,
 `localAlign`, `checkerboard`, `threshold`), the worker pool (byte-identity
 against serial, mid-flight termination, oversized pools, and two
 overlapping dispatches), and the Node-RED glue itself —
-`golden-compare.js` and `checkerboard-calibrate.js` are exercised through
-a fake-RED harness (`test/glue.test.js`,
-`test/checkerboardCalibrate.test.js`) so image resolution, cache
+`golden-compare.js`, `checkerboard-calibrate.js` and
+`perspective-rectify.js` are exercised through a fake-RED harness
+(`test/glue.test.js`, `test/checkerboardCalibrate.test.js`,
+`test/perspectiveRectify.test.js`) so image resolution, cache
 invalidation, `msg.rawInfo` handling and calibration files are tested
-without a running Node-RED.
+without a running Node-RED. `test/homography.test.js` checks the
+perspective fit against transforms with known answers, and the
+checkerboard suite keystones a synthetic board, measures it, rectifies
+it with the measurement, and measures it again.
 
 Three of the suites assert something other than a value:
 
