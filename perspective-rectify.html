@@ -1,0 +1,157 @@
+<script type="text/html" data-template-name="perspective-rectify">
+  <div class="form-row">
+    <label for="node-input-name"><i class="fa fa-tag"></i> Name</label>
+    <input type="text" id="node-input-name" placeholder="Name" />
+  </div>
+  <div class="form-row">
+    <label for="node-input-scaleFilePath"
+      ><i class="fa fa-save"></i> Scale file path</label
+    >
+    <input
+      type="text"
+      id="node-input-scaleFilePath"
+      placeholder="/data/golden/calibration.json (container path)"
+    />
+    <span class="node-input-hint" style="margin-left:10px; color:#999;"
+      >the file checkerboard-calibrate saved - the homography lives next to
+      the mm/px scale</span
+    >
+  </div>
+  <div class="form-row">
+    <label for="node-input-outputFormat"
+      ><i class="fa fa-file-image-o"></i> Output</label
+    >
+    <select id="node-input-outputFormat" style="width:110px;">
+      <option value="raw">raw</option>
+      <option value="jpg">jpg</option>
+      <option value="png">png</option>
+    </select>
+    <span style="margin:0 6px 0 12px;">quality</span>
+    <input
+      type="number"
+      id="node-input-outputQuality"
+      min="1"
+      max="100"
+      style="width:70px;"
+    />
+    <span class="node-input-hint" style="margin-left:10px; color:#999;"
+      >raw is what label-crop and golden-compare want; jpg quality only</span
+    >
+  </div>
+  <div class="form-row">
+    <label for="node-input-workers"><i class="fa fa-tasks"></i> Workers</label>
+    <input type="number" id="node-input-workers" min="0" max="64" style="width:70px;" />
+    <span class="node-input-hint" style="margin-left:10px; color:#999;"
+      >worker threads the warp is split across; 0 = one per core, 1 = serial
+      (same meaning as golden-compare's)</span
+    >
+  </div>
+</script>
+
+<script type="text/html" data-help-name="perspective-rectify">
+  <p>
+    Flatten each camera frame through the perspective
+    <code>checkerboard-calibrate</code> measured, so a camera that looks
+    at the tray slightly off-axis hands <code>label-crop</code> and
+    <code>golden-compare</code> the keystone-free view a square-on camera
+    would. Wire it between the camera and <code>label-crop</code>.
+  </p>
+  <p>
+    Nothing is detected per frame. The homography is a property of the rig,
+    measured once from the checkerboard photo and read from the same scale
+    file the mm/px baseline lives in; every frame gets the same warp. On a
+    square-on camera the stored homography is the identity and frames pass
+    through untouched (<code>msg.rectify.applied === false</code>).
+  </p>
+
+  <h3>Is it worth switching on?</h3>
+  <p>
+    <code>checkerboard-calibrate</code> reports the perspective in pixels:
+    <code>msg.result.perspective.rmsBeforePx</code> is how far the board's
+    squares sit from where a flat board would put them, and
+    <code>rmsAfterPx</code> is what the homography could not explain. Below
+    about a pixel before, the camera is square-on for practical purposes
+    and this node buys nothing; several pixels before and well under one
+    after is the case it exists for.
+  </p>
+
+  <h3>Input</h3>
+  <p>
+    <code>msg.payload</code> — an encoded image Buffer, a file path, or a
+    raw <code>{ data, width, height, channels }</code> object (a bare raw
+    Buffer with <code>msg.rawInfo</code> is accepted too). A frame at a
+    different resolution from the calibration photo is fine as long as it
+    is the same field of view; a different aspect ratio is refused.
+    <code>msg.outputFormat</code> overrides the configured output.
+  </p>
+  <p>
+    A frame that cannot be rectified - a payload that will not decode, or
+    a frame whose aspect ratio is not the calibration photo's (a different
+    crop of the sensor) - is <b>passed through unchanged</b> with
+    <code>msg.rectify.applied === false</code> and a <code>reason</code>
+    (<code>input</code> / <code>aspect-mismatch</code>), the node status
+    yellow, and one warning per distinct reason. The inspection behind
+    this node still runs on it. Setup problems (no scale file, no
+    homography in it, a corrupt file) are errors: no frame could pass.
+  </p>
+
+  <h3>Output</h3>
+  <ul>
+    <li>
+      <code>msg.payload</code> — the rectified frame, the same size and
+      channel count as the input: a raw
+      <code>{ data, width, height, channels, colorSpace, dtype }</code>
+      object by default, or an encoded jpg/png Buffer
+    </li>
+    <li>
+      <code>msg.rectify</code> —
+      <code
+        >{ applied, reason, homography, width, height, channels,
+        rescaledFrom, perspective, timings: { decodeMs, warpMs, encodeMs,
+        totalMs } }</code
+      >
+      - <code>reason</code> is <code>ok</code>, <code>identity</code>, or on
+      a pass-through <code>input</code> / <code>aspect-mismatch</code> with
+      <code>error</code> carrying the message
+    </li>
+  </ul>
+
+  <h3>Notes</h3>
+  <p>
+    The warp is bilinear with the frame edge replicated outward, not filled
+    - a black or white band along the edge would be a fake feature to
+    label-crop's blob search and golden-compare's background check. It
+    runs on the inspector's worker pool, off the Node-RED event loop and
+    split across <i>Workers</i> threads like golden-compare's own warp:
+    ~20ms on a 1500x1850 RGB frame with 16 workers, ~130ms serial; a 24MP
+    RGB frame ~140ms against ~1s.
+  </p>
+  <p>
+    A scale file without a homography (one saved before this node
+    existed) is a setup error: re-run <code>checkerboard-calibrate</code>
+    with <code>msg.save: true</code>.
+  </p>
+</script>
+
+<script type="text/javascript">
+  RED.nodes.registerType("perspective-rectify", {
+    category: "vision",
+    color: "#5DADE2",
+    defaults: {
+      name: { value: "" },
+      scaleFilePath: { value: "" },
+      outputFormat: { value: "raw" },
+      outputQuality: { value: 90, validate: RED.validators.number(true) },
+      workers: { value: 0, validate: RED.validators.number(true) },
+    },
+    inputs: 1,
+    outputs: 1,
+    icon: "perspective-rectify.svg",
+    label: function () {
+      return this.name || "perspective rectify";
+    },
+    paletteLabel: function () {
+      return "perspective rectify";
+    },
+  });
+</script>

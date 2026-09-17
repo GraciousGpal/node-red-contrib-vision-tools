@@ -78,9 +78,18 @@
   </p>
   <p>
     Detection is centroid/pitch-based (no sub-pixel corner refinement, no
-    lens-distortion or perspective correction) - it answers "has the
-    scale/geometry drifted since the last calibration," consistent with
-    <code>golden-compare</code>'s translation-only, fixed-rig scope.
+    lens-distortion model) - it answers "has the scale/geometry drifted
+    since the last calibration," consistent with the fixed-rig scope.
+  </p>
+  <p>
+    The same photo also measures the camera's <b>perspective</b>: how far
+    the squares sit from where a board seen square-on would put them, and
+    the plane homography that flattens it. It is reported as
+    <code>msg.result.perspective</code> (<code>rmsBeforePx</code> is the
+    keystone, <code>rmsAfterPx</code> what the homography could not
+    explain - under a pixel before means the camera is square-on for
+    practical purposes) and saved with the scale as <code>homography</code>
+    for <code>perspective-rectify</code> to apply per frame.
   </p>
 
   <h3>Checkerboard requirements</h3>
@@ -122,11 +131,15 @@
       <code
         >{ checkerboardDetected, currentScale, detectedScale,
         deviationPercent, bootstrap, pass, saved, pitchXPx, pitchYPx,
-        nativeWidth, nativeHeight }</code
+        nativeWidth, nativeHeight, perspective }</code
       >
       (scales in mm/px; <code>bootstrap</code> is true when there's no saved
       baseline yet to compare against - always passes, since there's
-      nothing to deviate from)
+      nothing to deviate from; <code>perspective</code> is
+      <code
+        >{ homography, rmsBeforePx, maxBeforePx, rmsAfterPx, maxAfterPx,
+        maxCornerShiftPx, boardAngleDeg, points }</code
+      >)
     </li>
     <li><code>msg.timings</code> — <code>{ totalMs }</code></li>
   </ul>

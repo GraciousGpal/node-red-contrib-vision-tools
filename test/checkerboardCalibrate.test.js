@@ -139,3 +139,32 @@ test("a failure is reported through done once, not through node.error as well", 
 	assert.strictEqual(doneErrors.length, 1);
 	assert.strictEqual(errors.length, 0, "done(err) must be the only report");
 });
+
+test("saving writes the homography and perspective stats next to the scale", async () => {
+	const dir = await tmpDir();
+	const scaleFilePath = path.join(dir, "scale.json");
+	const { run, sent, doneErrors } = makeNode({ scaleFilePath });
+	await run({ payload: await png(boardSvg(8, 6, 40)), save: true });
+	assert.strictEqual(doneErrors.length, 0, doneErrors.join("\n"));
+	assert.strictEqual(sent.length, 1);
+
+	const p = sent[0].result.perspective;
+	assert.ok(Array.isArray(p.homography) && p.homography.length === 9);
+	assert.strictEqual(p.homography[8], 1);
+	assert.strictEqual(typeof p.rmsBeforePx, "number");
+	assert.strictEqual(typeof p.rmsAfterPx, "number");
+	assert.strictEqual(typeof p.maxCornerShiftPx, "number");
+	assert.strictEqual(p.points, 24);
+
+	const saved = JSON.parse(await fsp.readFile(scaleFilePath, "utf8"));
+	assert.deepStrictEqual(saved.homography, p.homography);
+	assert.strictEqual(saved.perspective.rmsBeforePx, p.rmsBeforePx);
+	assert.strictEqual(saved.perspective.homography, undefined, "stored once, at the top level");
+	assert.strictEqual(saved.nativeWidth, 320);
+	assert.strictEqual(saved.nativeHeight, 240);
+	// and it reads back through the validator
+	const { readScaleFile } = require("../lib/scaleFile.js");
+	const back = await readScaleFile(scaleFilePath);
+	assert.strictEqual(back.error, undefined);
+	assert.deepStrictEqual(back.homography, p.homography);
+});

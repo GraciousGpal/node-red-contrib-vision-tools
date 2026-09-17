@@ -1,7 +1,7 @@
 {
   "name": "@graciousstar/node-red-contrib-vision-tools",
   "version": "1.2.0",
-  "description": "Machine-vision nodes for Node-RED on a fixed camera rig: golden-template AOI with position and blemish tolerances, mm/px calibration from a checkerboard, deskew-and-crop of a physical label, caliper edge and line finding over a drawn region, and barcode location and decoding restricted to known regions.",
+  "description": "Machine-vision nodes for Node-RED on a fixed camera rig: golden-template AOI with position and blemish tolerances, mm/px calibration and camera perspective from a checkerboard, deskew-and-crop of a physical label, caliper edge and line finding over a drawn region, and barcode location and decoding restricted to known regions.",
   "license": "Apache-2.0",
   "author": "GraciousStar",
   "keywords": [
@@ -37,6 +37,7 @@
     "nodes": {
       "golden-compare": "golden-compare.js",
       "checkerboard-calibrate": "checkerboard-calibrate.js",
+      "perspective-rectify": "perspective-rectify.js",
       "label-crop": "label-crop.js",
       "line-finder": "line-finder.js",
       "barcode-locate": "barcode-locate.js"

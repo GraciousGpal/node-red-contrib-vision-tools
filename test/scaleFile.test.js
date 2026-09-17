@@ -79,3 +79,45 @@ test("nativeWidth/nativeHeight must be positive integers when present", async ()
 		assert.match(got.error, /nativeWidth\/nativeHeight/);
 	}
 });
+
+// ---- homography ----------------------------------------------------------
+
+test("a homography is validated when present and ignored when absent", async () => {
+	const p = await tmp();
+	const base = { mmPerPixelNative: 0.05, nativeWidth: 2000, nativeHeight: 1000 };
+	await fsp.writeFile(p, JSON.stringify(base));
+	assert.strictEqual((await readScaleFile(p)).homography, undefined);
+
+	const H = [1.01, 0.002, -3, -0.001, 1.02, 4, 1e-6, 2e-6, 1];
+	await fsp.writeFile(p, JSON.stringify({ ...base, homography: H }));
+	assert.deepStrictEqual((await readScaleFile(p)).homography, H);
+});
+
+test("a corrupt homography is refused with a reason, not applied", async () => {
+	const p = await tmp();
+	const base = { mmPerPixelNative: 0.05, nativeWidth: 2000, nativeHeight: 1000 };
+	for (const bad of [
+		[1, 2, 3],
+		[1, 0, 0, 0, 1, 0, 0, 0, 2],
+		[0, 0, 0, 0, 0, 0, 0, 0, 1],
+		"1,0,0,0,1,0,0,0,1",
+	]) {
+		await fsp.writeFile(p, JSON.stringify({ ...base, homography: bad }));
+		const got = await readScaleFile(p);
+		assert.match(got.error, /homography/, JSON.stringify(bad));
+		assert.match(got.error, /re-run checkerboard-calibrate/);
+	}
+});
+
+test("a homography without the geometry it is expressed in is refused", async () => {
+	const p = await tmp();
+	await fsp.writeFile(
+		p,
+		JSON.stringify({
+			mmPerPixelNative: 0.05,
+			homography: [1, 0, 0, 0, 1, 0, 0, 0, 1],
+		}),
+	);
+	const got = await readScaleFile(p);
+	assert.match(got.error, /nativeWidth\/nativeHeight/);
+});

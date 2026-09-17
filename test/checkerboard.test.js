@@ -175,3 +175,149 @@ test("allowing alternating rows does not let a wrong column count through", asyn
 	assert.strictEqual(r.detected, false);
 	assert.match(r.reason, /grid shape mismatch/);
 });
+
+// ---- perspective ---------------------------------------------------------
+
+const { warpPerspective } = require("../lib/rectify.js");
+const { fitHomography } = require("../lib/homography.js");
+
+/** The board with a light margin around it, so a keystone warp has room
+ * to move the squares without pushing them off the canvas. */
+function paddedBoardSvg(cols, rows, size, margin) {
+	let cells = "";
+	for (let r = 0; r < rows; r++) {
+		for (let c = 0; c < cols; c++) {
+			const dark = (r + c) % 2 === 1;
+			cells += `<rect x="${margin + c * size}" y="${margin + r * size}" width="${size}" height="${size}" fill="${dark ? "#000" : "#fff"}"/>`;
+		}
+	}
+	const w = cols * size + 2 * margin;
+	const h = rows * size + 2 * margin;
+	return Buffer.from(
+		`<svg xmlns="http://www.w3.org/2000/svg" width="${w}" height="${h}">` +
+			`<rect width="100%" height="100%" fill="#fff"/>${cells}</svg>`,
+	);
+}
+
+const rawPng = (r) =>
+	sharp(Buffer.from(r.data.buffer, r.data.byteOffset, r.data.byteLength), {
+		raw: { width: r.width, height: r.height, channels: r.channels },
+	})
+		.png()
+		.toBuffer();
+
+const CFG = { checkerboardCols: 4, checkerboardRows: 6, targetPitchMm: 10 };
+
+test("a square-on board measures no perspective and an identity homography", async () => {
+	const r = await measureCheckerboard(await png(paddedBoardSvg(8, 6, 40, 60)), CFG);
+	assert.strictEqual(r.detected, true, r.reason);
+	const p = r.perspective;
+	assert.ok(p.rmsBeforePx < 0.01, `rmsBefore ${p.rmsBeforePx}`);
+	assert.ok(p.rmsAfterPx < 0.01, `rmsAfter ${p.rmsAfterPx}`);
+	assert.ok(p.maxCornerShiftPx < 0.01, `corner shift ${p.maxCornerShiftPx}`);
+	assert.strictEqual(p.points, 24);
+	const I = [1, 0, 0, 0, 1, 0, 0, 0, 1];
+	p.homography.forEach((v, i) =>
+		assert.ok(Math.abs(v - I[i]) < 1e-6, `H[${i}] = ${v}`),
+	);
+	assert.strictEqual(p.homography[8], 1);
+});
+
+test("a keystoned board is measured, and its homography flattens it", async () => {
+	const { data, info } = await sharp(paddedBoardSvg(8, 6, 40, 80))
+		.raw()
+		.toBuffer({ resolveWithObject: true });
+	const flat = { data, width: info.width, height: info.height, channels: info.channels };
+	const W = info.width;
+	const Hh = info.height;
+	// the camera looks up at the board: the top edge appears 12% narrower
+	const truth = fitHomography(
+		[{ x: 0, y: 0 }, { x: W, y: 0 }, { x: W, y: Hh }, { x: 0, y: Hh }],
+		[{ x: W * 0.06, y: 0 }, { x: W * 0.94, y: 0 }, { x: W, y: Hh }, { x: 0, y: Hh }],
+	);
+	const photo = warpPerspective(flat, truth);
+
+	const r = await measureCheckerboard(await rawPng(photo), CFG);
+	assert.strictEqual(r.detected, true, r.reason);
+	const p = r.perspective;
+	// several pixels of keystone across a 480px board, explained to a
+	// fraction of a pixel by the homography
+	assert.ok(p.rmsBeforePx > 2, `rmsBefore ${p.rmsBeforePx}`);
+	assert.ok(p.maxBeforePx > 4, `maxBefore ${p.maxBeforePx}`);
+	assert.ok(p.rmsAfterPx < 0.3, `rmsAfter ${p.rmsAfterPx}`);
+	assert.ok(p.maxAfterPx < 0.5, `maxAfter ${p.maxAfterPx}`);
+	assert.ok(p.maxCornerShiftPx > 10, `corner shift ${p.maxCornerShiftPx}`);
+	assert.ok(Math.abs(p.boardAngleDeg) < 0.5, `angle ${p.boardAngleDeg}`);
+
+	// the acceptance test: rectify the photo with what was measured and
+	// measure again - the board must now read as square-on
+	const rectified = warpPerspective(photo, p.homography);
+	const r2 = await measureCheckerboard(await rawPng(rectified), CFG);
+	assert.strictEqual(r2.detected, true, r2.reason);
+	assert.ok(r2.perspective.rmsBeforePx < 0.4, `rmsBefore after rectify ${r2.perspective.rmsBeforePx}`);
+	assert.ok(r2.perspective.maxBeforePx < 0.6, `maxBefore after rectify ${r2.perspective.maxBeforePx}`);
+	// The keystone also pulled the two pitches apart (the top edge is
+	// narrower, so the median x pitch shrinks). That part is deliberately
+	// NOT corrected: one photo cannot tell a keystone's apparent aspect
+	// from a rectangular print, and aspect is scale, which golden-compare's
+	// independent mx/my absorb - see the rectangular-cell test below.
+});
+
+test("a rotated board leaves the rotation out of the homography", async () => {
+	// the operator laid the board 4 degrees off: that is placement, not
+	// camera geometry, and the homography must not undo it - production
+	// frames would otherwise be rotated for no reason
+	const { data, info } = await sharp(paddedBoardSvg(8, 6, 40, 80))
+		.rotate(4, { background: "#fff" })
+		.raw()
+		.toBuffer({ resolveWithObject: true });
+	const r = await measureCheckerboard(
+		await rawPng({ data, width: info.width, height: info.height, channels: info.channels }),
+		CFG,
+	);
+	assert.strictEqual(r.detected, true, r.reason);
+	const p = r.perspective;
+	assert.ok(Math.abs(Math.abs(p.boardAngleDeg) - 4) < 0.3, `angle ${p.boardAngleDeg}`);
+	// rotation-free: the linear part is close to the identity, and the
+	// frame corners barely move
+	assert.ok(Math.abs(p.homography[0] - 1) < 0.01, `H[0] ${p.homography[0]}`);
+	assert.ok(Math.abs(p.homography[1]) < 0.01, `H[1] ${p.homography[1]}`);
+	assert.ok(p.maxCornerShiftPx < 3, `corner shift ${p.maxCornerShiftPx}`);
+	assert.ok(p.rmsBeforePx < 0.5, `rmsBefore ${p.rmsBeforePx}`);
+});
+
+test("measurePerspective handles an odd-column board's alternating rows", async () => {
+	// 9 physical columns, top-left light: rows alternate 4 and 5 dark
+	// squares, so the lattice must place each row on its own half-pitch
+	// offset or the fit sees a 40px "perspective" that is not there
+	const r = await measureCheckerboard(await png(paddedBoardSvg(9, 6, 40, 60)), {
+		checkerboardCols: 5,
+		checkerboardRows: 6,
+		targetPitchMm: 10,
+	});
+	assert.strictEqual(r.detected, true, r.reason);
+	assert.strictEqual(r.perspective.points, 27);
+	assert.ok(r.perspective.rmsBeforePx < 0.01, `rmsBefore ${r.perspective.rmsBeforePx}`);
+});
+
+test("a board with rectangular cells is aspect, not perspective: the homography stays the identity", async () => {
+	// The first real rig this ran on measured pitchY/pitchX = 0.855. A
+	// square lattice turned that into a 10% anisotropic scale in the
+	// homography - 46px rms of "keystone" - and rectifying with it would
+	// have stretched every frame. Aspect is scale and is left alone.
+	const { data, info } = await sharp(paddedBoardSvg(8, 6, 40, 60))
+		.resize({ width: 440, height: Math.round(360 * 0.85), fit: "fill" })
+		.raw()
+		.toBuffer({ resolveWithObject: true });
+	const r = await measureCheckerboard(
+		await rawPng({ data, width: info.width, height: info.height, channels: info.channels }),
+		CFG,
+	);
+	assert.strictEqual(r.detected, true, r.reason);
+	assert.ok(Math.abs(r.pitchYPx / r.pitchXPx - 0.85) < 0.01, `ratio ${r.pitchYPx / r.pitchXPx}`);
+	const p = r.perspective;
+	assert.ok(p.rmsBeforePx < 0.3, `rmsBefore ${p.rmsBeforePx}`);
+	assert.ok(Math.abs(p.homography[0] - 1) < 0.005, `H[0] ${p.homography[0]}`);
+	assert.ok(Math.abs(p.homography[4] - 1) < 0.005, `H[4] ${p.homography[4]}`);
+	assert.ok(p.maxCornerShiftPx < 1, `corner shift ${p.maxCornerShiftPx}`);
+});

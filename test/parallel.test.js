@@ -401,3 +401,26 @@ test("a frame compares identically with and without workers", {
 	assert.strictEqual(parallel.position.dyPx, serial.position.dyPx);
 	assert.strictEqual(parallel.pass, serial.pass);
 });
+
+// ---- rectify -------------------------------------------------------------
+
+test("rectifyParallel is byte-identical to the serial warpPerspective", async () => {
+	const { rectifyParallel } = require("../lib/parallel.js");
+	const { warpPerspective } = require("../lib/rectify.js");
+	const width = 900;
+	const height = 700; // 630k px, above MIN_PIXELS_TO_SPLIT
+	for (const channels of [1, 3]) {
+		const data = new Uint8Array(width * height * channels);
+		let seed = 3;
+		for (let i = 0; i < data.length; i++) {
+			seed = (seed * 1103515245 + 12345) & 0x7fffffff;
+			data[i] = seed & 255;
+		}
+		const src = { data, width, height, channels };
+		const H = [1.02, 0.004, -3.5, -0.003, 0.98, 6.25, 2e-6, -3e-6, 1];
+		const serial = warpPerspective(src, H);
+		const pooled = await rectifyParallel(src, H, 4);
+		assert.notStrictEqual(pooled, serial);
+		assert.strictEqual(Buffer.compare(Buffer.from(pooled.data), Buffer.from(serial.data)), 0, `${channels}ch differs`);
+	}
+});

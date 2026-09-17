@@ -124,6 +124,7 @@ const NO_RUNTIME_EQUIVALENT = new Set([
 const NODES = [
 	{ html: "golden-compare.html", js: "golden-compare.js" },
 	{ html: "checkerboard-calibrate.html", js: "checkerboard-calibrate.js" },
+	{ html: "perspective-rectify.html", js: "perspective-rectify.js" },
 	{ html: "label-crop.html", js: "label-crop.js" },
 	{ html: "line-finder.html", js: "line-finder.js" },
 	{ html: "barcode-locate.html", js: "barcode-locate.js" },

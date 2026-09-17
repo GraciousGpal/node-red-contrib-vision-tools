@@ -15,6 +15,11 @@
  * the printed checkerboard.
  * msg.save (bool): persist the freshly detected scale as the new
  * baseline (their "Match New Scale" + "Save").
+ *
+ * The same photo also yields the camera's plane homography - how far
+ * off-axis it looks at the tray - which is saved alongside the scale for
+ * perspective-rectify to apply per frame. See measurePerspective in
+ * lib/checkerboard.js.
  */
 
 const fs = require("fs");
@@ -122,6 +127,10 @@ module.exports = (RED) => {
 		throw new Error(`unsupported ${label} type: ${typeof source}`);
 	}
 
+	function round(v) {
+		return Math.round(v * 1000) / 1000;
+	}
+
 	function fmtMs(ms) {
 		return ms < 1000 ? `${Math.round(ms)}ms` : `${(ms / 1000).toFixed(2)}s`;
 	}
@@ -225,12 +234,29 @@ module.exports = (RED) => {
 					: (Math.abs(detectedScale - currentScale) / currentScale) * 100;
 				const pass = bootstrap || deviationPercent <= cfg.allowedErrorPercent;
 
+				// The homography is stored as measured; whether it is worth
+				// applying is the flow author's call, made on the
+				// before/after pixels reported here. Rounded so the file
+				// reads as a record rather than sixteen digits of float.
+				const { homography, ...perspectiveStats } = measured.perspective;
+				const perspective = {
+					rmsBeforePx: round(perspectiveStats.rmsBeforePx),
+					maxBeforePx: round(perspectiveStats.maxBeforePx),
+					rmsAfterPx: round(perspectiveStats.rmsAfterPx),
+					maxAfterPx: round(perspectiveStats.maxAfterPx),
+					maxCornerShiftPx: round(perspectiveStats.maxCornerShiftPx),
+					boardAngleDeg: round(perspectiveStats.boardAngleDeg),
+					points: perspectiveStats.points,
+				};
+
 				let saved = false;
 				if (msg.save) {
 					await writeScaleFile(node.scaleFilePath, {
 						mmPerPixelNative: detectedScale,
 						nativeWidth: measured.width,
 						nativeHeight: measured.height,
+						homography,
+						perspective,
 						calibratedAt: new Date().toISOString(),
 					});
 					saved = true;
@@ -249,6 +275,7 @@ module.exports = (RED) => {
 					pitchYPx: measured.pitchYPx,
 					nativeWidth: measured.width,
 					nativeHeight: measured.height,
+					perspective: { homography, ...perspective },
 				};
 				msg.timings = { totalMs: Math.round(performance.now() - totalStart) };
 				send(msg);
@@ -265,7 +292,10 @@ module.exports = (RED) => {
 					`checkerboard-calibrate: detected=${detectedScale.toFixed(6)}mm/px ` +
 						`current=${currentScale == null ? "none" : currentScale.toFixed(6)} ` +
 						`deviation=${deviationPercent == null ? "n/a" : deviationPercent.toFixed(2) + "%"} ` +
-						`pass=${pass} saved=${saved} total ${fmtMs(msg.timings.totalMs)}`,
+						`pass=${pass} saved=${saved} ` +
+						`keystone=${perspective.rmsBeforePx}px rms (${perspective.maxBeforePx}px max), ` +
+						`${perspective.rmsAfterPx}px left after the homography · ` +
+						`total ${fmtMs(msg.timings.totalMs)}`,
 				);
 				done();
 			} catch (err) {
