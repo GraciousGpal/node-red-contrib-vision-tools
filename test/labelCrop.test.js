@@ -863,3 +863,84 @@ test("the bridge seam resets cleanly", () => {
 	_resetBridge();
 	assert.ok(true);
 });
+
+// ---- the production run: vignetting, a barcode band, and a faint liner --
+
+test("refineRectBoundary keeps a vignetted label edge and does not snap past a barcode", () => {
+	// The 162-frame production run at 0.5x: frame margin ~100, the label's
+	// left edge at 214 rising ~0.6 per column to 250 (lighting), a white
+	// margin of 12 columns, then a 30-column barcode band (mean ~205), then
+	// the label body. The blob's left side is already at the label edge.
+	// The previous rule defined "label tone" as the frame's brightest 2%
+	// (>= 246) and called the whole dim third "not label", snapping the
+	// left side ~100 columns in, past the barcode, on 3 frames in 4 - the
+	// same physical label came out anywhere from 1165 to 1272 wide.
+	const W = 519;
+	const H = 640;
+	const g = new Uint8Array(W * H).fill(100);
+	const x0 = 8;
+	const x1 = 511;
+	for (let y = 0; y < H; y++) {
+		for (let x = x0; x < x1; x++) {
+			const ramp = Math.min(250, 214 + (x - x0) * 0.6);
+			let v = ramp;
+			if (x >= x0 + 12 && x < x0 + 42 && (x & 1)) v = 160; // barcode bars
+			g[y * W + x] = Math.round(v);
+		}
+	}
+	const r = refineRectBoundary(
+		g,
+		null,
+		W,
+		H,
+		{ cx: (x0 + x1) / 2, cy: H / 2, w: x1 - x0, h: H, theta: 0 },
+		"light",
+	);
+	const left = r.cx - r.w / 2;
+	const right = r.cx + r.w / 2;
+	assert.ok(Math.abs(left - x0) <= 1, `left stays at the label edge: ${left}`);
+	assert.ok(Math.abs(right - (x1 - 1)) <= 1, `right stays at the label edge: ${right}`);
+	assert.ok(Math.abs(r.cy - r.h / 2) <= 1 && Math.abs(r.cy + r.h / 2 - (H - 1)) <= 1, "clipped top/bottom stay");
+});
+
+test("refineRectBoundary snaps past a halo on a vignetted label", () => {
+	// The halo rule and the vignetting rule have to hold at once: a 240
+	// halo outside a label that itself ramps 214..250. The halo->label
+	// edge is a step (>= 12 levels over 3 columns); the ramp is not.
+	const W = 400;
+	const H = 200;
+	const g = new Uint8Array(W * H).fill(40);
+	for (let y = 20; y < 180; y++) {
+		for (let x = 40; x < 60; x++) g[y * W + x] = 215; // halo, dimmer than the label edge
+		for (let x = 60; x < 360; x++) g[y * W + x] = Math.round(Math.min(250, 232 + (x - 60) * 0.6));
+	}
+	const r = refineRectBoundary(
+		g,
+		null,
+		W,
+		H,
+		{ cx: 200, cy: 100, w: 320, h: 160, theta: 0 },
+		"light",
+	);
+	assert.ok(Math.abs(r.cx - r.w / 2 - 60) <= 1, `left snaps past the halo: ${r.cx - r.w / 2}`);
+	assert.ok(Math.abs(r.cx + r.w / 2 - 359) <= 1, `right: ${r.cx + r.w / 2}`);
+});
+
+test("a miss reports the value the gate measured, not a placeholder", () => {
+	// a blob touching three frame edges against the default 0.5 limit
+	const W = 200;
+	const H = 150;
+	const mask = new Uint8Array(W * H);
+	for (let y = 0; y < H; y++) for (let x = 0; x < 150; x++) mask[y * W + x] = 255;
+	const r = analyzeMask(mask, W, H, {});
+	assert.strictEqual(r.detected, false);
+	assert.strictEqual(r.reason, "border-contact");
+	assert.strictEqual(r.borderContact, 0.75);
+	assert.strictEqual(r.areaFraction, 0.75);
+	assert.strictEqual(r.dominance, Infinity);
+	assert.strictEqual(r.rectangularity, undefined, "not measured, not reported");
+	// and the too-large gate reports the area that tripped it
+	const big = analyzeMask(mask, W, H, { maxAreaFraction: 0.5 });
+	assert.strictEqual(big.reason, "too-large");
+	assert.strictEqual(big.areaFraction, 0.75);
+});

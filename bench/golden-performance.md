@@ -111,3 +111,34 @@ good frame 0.2500 at 74 training frames, 0.2655 at 37; the two defects score
 Reproduce with `bench/nuisance-e2e.js --holdout 2` (trains through the node,
 then re-inspects everything) or `bench/nuisance-validate.js` (library-level,
 two-way split). Both need the container's flow and fixtures.
+
+## label-crop in front of golden-compare: measured, and worse
+
+`bench/nuisance-e2e.js --labelcrop 1` runs the same 162 frames through
+`lib/labelCrop.js` (blob mode, `maxBorderContact` 0.75) before the handler,
+so the two ways the flow could be wired are compared on the same frames
+and the same trained map:
+
+| | raw frames | label-crop first |
+| --- | ---: | ---: |
+| good rejected | 0 / 148 | **79 / 148** |
+| bad accepted | 0 / 14 | 0 / 14 |
+| align score, good p50 | 0.0194 | 0.0202 |
+| background ratio, good p50 | 0.00018 | 0.00111 |
+| align ms, good p50 | 63 | 58 |
+| label-crop | — | 156 detected, 6 `too-large`, 57ms p50 |
+
+Two gates fail after cropping and neither is a tuning matter. The golden
+artwork renders 1475px wide at this scale and the cropped label is 1457,
+so the golden no longer fits inside the frame: the position gate measures
+the matched window against the frame's margin and there is none left (dx
+reads −2.2mm where the raw frame reads −0.5mm), and the clamped
+translation search aligns ~10% worse, which the background check reads as
+ink — a 6× ratio, over `failRatio` on some frames. The crop itself is
+consistent (width 1454–1474 across the run), so this is not label-crop
+misbehaving; it is the composition. On this rig the label *is* the frame
+(85% of it), its placement wobble is ±11px, and golden-compare's own
+alignment absorbs that at 63ms. label-crop earns its place when the label
+is a small part of a frame with tray and table around it, and there its
+output is what golden-compare should see; here it removes the margin the
+position gate is defined against.

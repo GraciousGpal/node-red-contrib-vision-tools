@@ -13,6 +13,12 @@
  * is scored against a map trained on itself, which flatters the result.
  *
  *   node bench/nuisance-e2e.js --holdout 2 --threshold 0.27
+ *
+ * --labelcrop 1 runs every frame through lib/labelCrop.js first (blob
+ * mode, maxBorderContact 0.75 - this rig's label touches three frame
+ * edges when it shifts), so the two pipelines the flow could be wired as
+ * can be compared on the same frames: verdicts, the alignment score,
+ * the blemish ratios, and the time per frame.
  */
 
 "use strict";
@@ -35,10 +41,13 @@ const bridge = require(
 	`${installed}/@rosepetal/node-red-contrib-image-tools/node-red-contrib-image-tools/lib/cpp-bridge.js`,
 );
 const inspector = require(path.join(root, "lib/inspector.js"));
+const { labelCrop } = require(path.join(root, "lib/labelCrop.js"));
 
 const threshold = Number(arg("threshold", 0.27));
 const holdout = Number(arg("holdout", 2));
 const mapPath = arg("map", "/tmp/nuisance-map.json");
+const useLabelCrop = arg("labelcrop", "0") === "1";
+const labelCropCfg = { maxBorderContact: 0.75, outputFormat: "raw" };
 const hash = (b) => crypto.createHash("sha256").update(b).digest("hex");
 
 /** The minimal RED seam golden-compare needs, same shape the other benches use. */
@@ -134,6 +143,7 @@ async function main() {
 	const bad = listFixtures("bad");
 
 	const frames = new Map();
+	const cropMeta = new Map();
 	async function frameFor(file) {
 		if (!frames.has(file)) {
 			const decoded = await bridge.colorConvert(
@@ -141,7 +151,19 @@ async function main() {
 				"RGB",
 				"raw",
 			);
-			frames.set(file, await half(decoded.image));
+			let frame = await half(decoded.image);
+			if (useLabelCrop) {
+				const res = await labelCrop(frame, labelCropCfg, bridge);
+				cropMeta.set(file, {
+					detected: res.detected,
+					reason: res.metadata.reason,
+					width: res.metadata.width,
+					height: res.metadata.height,
+					cropMs: Math.round(res.metadata.timings.totalMs),
+				});
+				if (res.detected) frame = res.image;
+			}
+			frames.set(file, frame);
 		}
 		return frames.get(file);
 	}
@@ -202,6 +224,12 @@ async function main() {
 				graded: r.pass && r.match.grade === "good",
 				excess: r.backgroundBlemish.worstExcess,
 				noveltyPass: r.backgroundBlemish.noveltyPass,
+				align: r.match.score,
+				printRatio: r.printBlemish.defectRatio,
+				backgroundRatio: r.backgroundBlemish.defectRatio,
+				alignMs: out.timings.alignMs,
+				totalMs: out.timings.totalMs,
+				crop: cropMeta.get(f) || null,
 			});
 		}
 	}
@@ -230,6 +258,39 @@ async function main() {
 			`  ${r.excess.toFixed(4)}  ${r.graded ? "ACCEPTED" : "rejected"}` +
 				`${r.noveltyPass ? "" : "  (novelty gate fired)"}  ${r.file}`,
 		);
+	}
+	const q = (a, f) => {
+		const s = [...a].sort((x, y) => x - y);
+		return s.length ? s[Math.floor((s.length - 1) * f)] : NaN;
+	};
+	const stat = (name, arr, digits = 4) =>
+		console.log(
+			`  ${name.padEnd(22)} p10 ${q(arr, 0.1).toFixed(digits)}  p50 ${q(arr, 0.5).toFixed(digits)}  p90 ${q(arr, 0.9).toFixed(digits)}  max ${q(arr, 1).toFixed(digits)}`,
+		);
+	console.log(`\n=== per-frame, good (${goodRows.length}) ===`);
+	stat("align score", goodRows.map((r) => r.align));
+	stat("print ratio", goodRows.map((r) => r.printRatio), 5);
+	stat("background ratio", goodRows.map((r) => r.backgroundRatio), 5);
+	stat("excess", goodRows.map((r) => r.excess));
+	stat("align ms", goodRows.map((r) => r.alignMs), 0);
+	stat("total ms", goodRows.map((r) => r.totalMs), 0);
+	const badRows = rows.filter((r) => r.label === "bad");
+	console.log(`=== per-frame, bad (${badRows.length}) ===`);
+	stat("align score", badRows.map((r) => r.align));
+	stat("excess", badRows.map((r) => r.excess));
+	console.log(
+		`separation: worst good excess ${q(goodRows.map((r) => r.excess), 1).toFixed(4)} vs ` +
+			`weakest bad excess ${q(badRows.map((r) => r.excess), 0).toFixed(4)}`,
+	);
+	if (useLabelCrop) {
+		const crops = rows.map((r) => r.crop).filter(Boolean);
+		const missed = crops.filter((c) => !c.detected);
+		console.log(`=== label-crop (${crops.length} frames) ===`);
+		console.log(`  detected ${crops.length - missed.length}, missed ${missed.length}` +
+			(missed.length ? ` (${[...new Set(missed.map((c) => c.reason))].join(", ")})` : ""));
+		stat("crop width", crops.filter((c) => c.detected).map((c) => c.width), 0);
+		stat("crop height", crops.filter((c) => c.detected).map((c) => c.height), 0);
+		stat("crop ms", crops.map((c) => c.cropMs), 0);
 	}
 	console.log("\n=== verdict ===");
 	console.log(`trained on ............. ${trainFiles.length} of ${good.length} good frames`);
