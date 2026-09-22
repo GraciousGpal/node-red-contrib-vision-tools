@@ -36,59 +36,21 @@
  *    the line on one odd frame is the wrong failure mode.
  */
 
-const fs = require("fs");
-const fsp = fs.promises;
 const sharp = require("sharp");
 const inspector = require("./lib/inspector.js");
 const { toShared } = require("./lib/shared.js");
 const { readScaleFile } = require("./lib/scaleFile.js");
 const { rescaleHomography, isIdentityLike } = require("./lib/homography.js");
+const {
+	clampInt,
+	pickMode,
+	isBytes,
+	assertUnderCap,
+	readRegularFile,
+} = require("./lib/nodeInput.js");
 
 module.exports = (RED) => {
 	const OUTPUT_FORMATS = ["raw", "jpg", "png"];
-	const MAX_IMAGE_BYTES = 512 * 1024 * 1024;
-
-	function clampInt(value, fallback, min, max) {
-		const n = parseInt(value, 10);
-		if (isNaN(n)) return fallback;
-		return Math.min(max, Math.max(min, n));
-	}
-
-	function pickMode(value, fallback, allowed) {
-		return allowed.includes(value) ? value : fallback;
-	}
-
-	// The guarded single-handle read golden-compare.js and
-	// checkerboard-calibrate.js use, for the same reasons (see there).
-	async function readRegularFile(p, label) {
-		let fd;
-		try {
-			fd = await fsp.open(p, fs.constants.O_RDONLY);
-		} catch (err) {
-			if (err && (err.code === "ENOENT" || err.code === "ENOTDIR")) return null;
-			throw err;
-		}
-		try {
-			const stat = await fd.stat();
-			if ((stat.mode & fs.constants.S_IFMT) !== fs.constants.S_IFREG) {
-				throw new Error(
-					`${label} is not a regular file: "${p}" - refusing to read it`,
-				);
-			}
-			if (stat.size > MAX_IMAGE_BYTES) {
-				throw new Error(
-					`${label} is ${stat.size} bytes, above the ${MAX_IMAGE_BYTES}-byte cap: "${p}"`,
-				);
-			}
-			return await fd.readFile();
-		} finally {
-			await fd.close();
-		}
-	}
-
-	function isBytes(v) {
-		return Buffer.isBuffer(v) || v instanceof Uint8Array || v instanceof ArrayBuffer;
-	}
 
 	// A Buffer over the same memory, never a copy: a 24MP frame is copied
 	// once into shared memory for the worker and that is enough.
@@ -111,14 +73,6 @@ module.exports = (RED) => {
 		return { width, height, channels };
 	}
 
-	function checkBytes(data, label) {
-		if (data.byteLength > MAX_IMAGE_BYTES) {
-			throw new Error(
-				`${label} is ${data.byteLength} bytes, above the ${MAX_IMAGE_BYTES}-byte cap`,
-			);
-		}
-	}
-
 	/**
 	 * Resolve msg.payload to raw pixels: { data, width, height, channels }.
 	 * Raw input is used as-is (no copy beyond what shared memory needs);
@@ -132,7 +86,7 @@ module.exports = (RED) => {
 		let geometry;
 		let bytes;
 		if (isBytes(source)) {
-			checkBytes(source, label);
+			assertUnderCap(source, label);
 			bytes = asBuffer(source);
 			geometry = rawGeometry(msg.rawInfo);
 		} else if (typeof source === "string") {
@@ -141,7 +95,7 @@ module.exports = (RED) => {
 		} else if (typeof source === "object") {
 			const data = source.data || source.buffer;
 			if (isBytes(data)) {
-				checkBytes(data, label);
+				assertUnderCap(data, label);
 				bytes = asBuffer(data);
 				geometry = rawGeometry(source);
 			} else if (typeof source.path === "string") {
@@ -190,10 +144,10 @@ module.exports = (RED) => {
 
 		node.scaleFilePath = String(config.scaleFilePath || "").trim();
 		node.outputFormat = pickMode(config.outputFormat, "raw", OUTPUT_FORMATS);
-		node.outputQuality = clampInt(config.outputQuality, 90, 1, 100);
+		node.outputQuality = clampInt(config.outputQuality, 90, [1, 100]);
 		// same meaning as golden-compare's: pool size for the row split,
 		// 0 = one per core
-		node.workers = clampInt(config.workers, 0, 0, 64);
+		node.workers = clampInt(config.workers, 0, [0, 64]);
 
 		node.on("input", async (msg, send, done) => {
 			send =
@@ -285,7 +239,7 @@ module.exports = (RED) => {
 							height: frame.height,
 							channels: frame.channels,
 							homography,
-							workers: clampInt(msg.workers, node.workers, 0, 64),
+							workers: clampInt(msg.workers, node.workers, [0, 64]),
 						})
 					).result;
 				}

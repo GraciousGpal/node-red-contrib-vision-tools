@@ -14,36 +14,18 @@ const test = require("node:test");
 const assert = require("node:assert");
 const { _setBridge, _resetBridge } = require("../lib/labelCrop.js");
 const { makeRectMask, rawImage } = require("./helpers/synthetic.js");
+const { loadNode } = require("./helpers/fakeRed.js");
 
 function makeNode(config = {}) {
 	const published = [];
-	const RED = {
+	const node = loadNode("label-crop.js", config, {
+		id: "label-crop-test",
 		comms: {
 			publish(topic, data) {
 				published.push({ topic, data });
 			},
 		},
-		nodes: {
-			createNode(node, cfg) {
-				node.id = "label-crop-test";
-				node.config = cfg;
-				node.listeners = {};
-				node.on = (evt, fn) => {
-					node.listeners[evt] = fn;
-				};
-				node.send = () => {};
-				node.error = () => {};
-				node.warn = () => {};
-				node.log = () => {};
-				node.status = () => {};
-			},
-			registerType(_name, ctor) {
-				RED.nodes.ctor = ctor;
-			},
-		},
-	};
-	require("../label-crop.js")(RED);
-	const node = new RED.nodes.ctor(config);
+	});
 	const sent = [];
 	const errors = [];
 	const statuses = [];

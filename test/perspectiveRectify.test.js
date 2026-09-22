@@ -20,29 +20,10 @@ const fsp = require("node:fs/promises");
 const sharp = require("sharp");
 const inspector = require("../lib/inspector.js");
 const { applyHomography } = require("../lib/homography.js");
+const { loadNode } = require("./helpers/fakeRed.js");
 
 function makeNode(config = {}) {
-	const RED = {
-		nodes: {
-			createNode(node, cfg) {
-				node.config = cfg;
-				node.listeners = {};
-				node.on = (evt, fn) => {
-					node.listeners[evt] = fn;
-				};
-				node.send = () => {};
-				node.error = () => {};
-				node.warn = () => {};
-				node.log = () => {};
-				node.status = () => {};
-			},
-			registerType(name, ctor) {
-				RED.nodes.ctor = ctor;
-			},
-		},
-	};
-	require("../perspective-rectify.js")(RED);
-	const node = new RED.nodes.ctor(config);
+	const node = loadNode("perspective-rectify.js", config);
 	const sent = [];
 	const errors = [];
 	const doneErrors = [];

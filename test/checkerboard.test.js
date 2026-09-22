@@ -15,26 +15,7 @@ const test = require("node:test");
 const assert = require("node:assert");
 const sharp = require("sharp");
 const { measurePitch, measureCheckerboard } = require("../lib/checkerboard.js");
-
-/** Synthetic checkerboard: `cols` x `rows` physical squares, top-left
- * light unless `darkFirst`, each square `size` px. The corner colour only
- * matters on an odd-column board, where it decides whether the long rows
- * are the even-indexed ones or the odd-indexed ones. */
-function boardSvg(cols, rows, size, darkFirst = false) {
-	let cells = "";
-	for (let r = 0; r < rows; r++) {
-		for (let c = 0; c < cols; c++) {
-			const dark = (r + c) % 2 === (darkFirst ? 0 : 1);
-			cells += `<rect x="${c * size}" y="${r * size}" width="${size}" height="${size}" fill="${dark ? "#000" : "#fff"}"/>`;
-		}
-	}
-	return Buffer.from(
-		`<svg xmlns="http://www.w3.org/2000/svg" width="${cols * size}" height="${rows * size}">` +
-			`<rect width="100%" height="100%" fill="#fff"/>` +
-			cells +
-			`</svg>`,
-	);
-}
+const { boardSvg } = require("./helpers/synthetic.js");
 
 const png = (svg) => sharp(svg).png().toBuffer();
 
@@ -149,7 +130,7 @@ test("an odd-column board is detected whichever colour its corner is", async () 
 	const S = 40;
 	// top-left dark: row 0 is now the long one, so the alternation starts
 	// on the other parity and the shape check has to accept both
-	const buf = await png(boardSvg(17, 25, S, true));
+	const buf = await png(boardSvg(17, 25, S, { darkFirst: true }));
 	const r = await measureCheckerboard(buf, {
 		checkerboardCols: 9,
 		checkerboardRows: 25,
@@ -181,24 +162,6 @@ test("allowing alternating rows does not let a wrong column count through", asyn
 const { warpPerspective } = require("../lib/rectify.js");
 const { fitHomography } = require("../lib/homography.js");
 
-/** The board with a light margin around it, so a keystone warp has room
- * to move the squares without pushing them off the canvas. */
-function paddedBoardSvg(cols, rows, size, margin) {
-	let cells = "";
-	for (let r = 0; r < rows; r++) {
-		for (let c = 0; c < cols; c++) {
-			const dark = (r + c) % 2 === 1;
-			cells += `<rect x="${margin + c * size}" y="${margin + r * size}" width="${size}" height="${size}" fill="${dark ? "#000" : "#fff"}"/>`;
-		}
-	}
-	const w = cols * size + 2 * margin;
-	const h = rows * size + 2 * margin;
-	return Buffer.from(
-		`<svg xmlns="http://www.w3.org/2000/svg" width="${w}" height="${h}">` +
-			`<rect width="100%" height="100%" fill="#fff"/>${cells}</svg>`,
-	);
-}
-
 const rawPng = (r) =>
 	sharp(Buffer.from(r.data.buffer, r.data.byteOffset, r.data.byteLength), {
 		raw: { width: r.width, height: r.height, channels: r.channels },
@@ -209,7 +172,7 @@ const rawPng = (r) =>
 const CFG = { checkerboardCols: 4, checkerboardRows: 6, targetPitchMm: 10 };
 
 test("a square-on board measures no perspective and an identity homography", async () => {
-	const r = await measureCheckerboard(await png(paddedBoardSvg(8, 6, 40, 60)), CFG);
+	const r = await measureCheckerboard(await png(boardSvg(8, 6, 40, { margin: 60 })), CFG);
 	assert.strictEqual(r.detected, true, r.reason);
 	const p = r.perspective;
 	assert.ok(p.rmsBeforePx < 0.01, `rmsBefore ${p.rmsBeforePx}`);
@@ -224,7 +187,7 @@ test("a square-on board measures no perspective and an identity homography", asy
 });
 
 test("a keystoned board is measured, and its homography flattens it", async () => {
-	const { data, info } = await sharp(paddedBoardSvg(8, 6, 40, 80))
+	const { data, info } = await sharp(boardSvg(8, 6, 40, { margin: 80 }))
 		.raw()
 		.toBuffer({ resolveWithObject: true });
 	const flat = { data, width: info.width, height: info.height, channels: info.channels };
@@ -267,7 +230,7 @@ test("a rotated board leaves the rotation out of the homography", async () => {
 	// the operator laid the board 4 degrees off: that is placement, not
 	// camera geometry, and the homography must not undo it - production
 	// frames would otherwise be rotated for no reason
-	const { data, info } = await sharp(paddedBoardSvg(8, 6, 40, 80))
+	const { data, info } = await sharp(boardSvg(8, 6, 40, { margin: 80 }))
 		.rotate(4, { background: "#fff" })
 		.raw()
 		.toBuffer({ resolveWithObject: true });
@@ -290,7 +253,7 @@ test("measurePerspective handles an odd-column board's alternating rows", async 
 	// 9 physical columns, top-left light: rows alternate 4 and 5 dark
 	// squares, so the lattice must place each row on its own half-pitch
 	// offset or the fit sees a 40px "perspective" that is not there
-	const r = await measureCheckerboard(await png(paddedBoardSvg(9, 6, 40, 60)), {
+	const r = await measureCheckerboard(await png(boardSvg(9, 6, 40, { margin: 60 })), {
 		checkerboardCols: 5,
 		checkerboardRows: 6,
 		targetPitchMm: 10,
@@ -305,7 +268,7 @@ test("a board with rectangular cells is aspect, not perspective: the homography 
 	// square lattice turned that into a 10% anisotropic scale in the
 	// homography - 46px rms of "keystone" - and rectifying with it would
 	// have stretched every frame. Aspect is scale and is left alone.
-	const { data, info } = await sharp(paddedBoardSvg(8, 6, 40, 60))
+	const { data, info } = await sharp(boardSvg(8, 6, 40, { margin: 60 }))
 		.resize({ width: 440, height: Math.round(360 * 0.85), fit: "fill" })
 		.raw()
 		.toBuffer({ resolveWithObject: true });

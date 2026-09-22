@@ -6,10 +6,10 @@ expensive parts of inspection — where the part is, how many millimetres a
 pixel covers, where the label edge falls — can be measured once at
 commissioning and only checked afterwards.
 
-For how the pipeline is put together and why each piece is shaped the way
-it is, see [ARCHITECTURE.md](ARCHITECTURE.md). This file is the operator's
-guide: what the settings do and how to use them. Version history is in
-[CHANGELOG.md](CHANGELOG.md).
+This file is the operator's guide: what the settings do and how to use
+them. [ARCHITECTURE.md](ARCHITECTURE.md) is how the pipeline is put
+together and why each piece is shaped the way it is; version history is
+in [CHANGELOG.md](CHANGELOG.md).
 
 ## The nodes
 
@@ -26,10 +26,9 @@ guide: what the settings do and how to use them. Version history is in
 - **`checkerboard-calibrate`** — photograph a printed checkerboard of
   known pitch, measure the pixel pitch, and save or compare the resulting
   mm/px scale. Run once at commissioning and again after camera or
-  mechanical maintenance, not per frame — the whole point of a fixed
-  camera rig is that this doesn't need re-running per part. The same
-  photo also measures how far off-axis the camera looks at the tray, as
-  a plane homography saved next to the scale.
+  mechanical maintenance, not per frame. The same photo also measures how
+  far off-axis the camera looks at the tray, as a plane homography saved
+  next to the scale.
 - **`perspective-rectify`** — flattens each frame through that
   homography, so a camera that is a degree or two off-axis hands
   `label-crop` and `golden-compare` the keystone-free view a square-on
@@ -47,10 +46,10 @@ guide: what the settings do and how to use them. Version history is in
 - **`barcode-locate`** — finds and decodes 1D and 2D barcodes, optionally
   restricted to pre-defined pixel regions with a whole-image fallback.
 
-Built for speed — a ~23MP camera frame decodes, aligns, diffs and
-heat-maps in well under a second: around 0.45s against a same-scale
-golden, and roughly double that when magnification and stretch both have
-to be searched over a wide range (see Notes).
+A ~23MP camera frame decodes, aligns, diffs and heat-maps in well under a
+second: around 0.45s against a same-scale golden, and roughly double that
+when magnification and stretch both have to be searched over a wide range
+(see Notes).
 
 ## Install
 
@@ -67,14 +66,14 @@ binaries for the usual platforms.
 
 ### `npm ci` does not work with this package
 
-Use `npm install`. This is an upstream packaging bug and nothing here can fix
-it: the optional OpenCV engine declares
-`@rosepetal/node-red-contrib-image-tools-darwin-x64` in its
-`optionalDependencies`, and that package was never published — the registry
-404s it while its four sibling platform packages resolve fine. `npm install`
-skips it, which is what optional means; `npm ci` then refuses the lockfile
-`npm install` produced, because the phantom is `Missing from lock file`. No
-lockfile satisfies both while the engine is in the tree:
+Use `npm install`. This is an upstream packaging bug: the optional OpenCV
+engine declares `@rosepetal/node-red-contrib-image-tools-darwin-x64` in
+its `optionalDependencies`, and that package was never published — the
+registry 404s it while its four sibling platform packages resolve fine.
+`npm install` skips it, which is what optional means; `npm ci` then
+refuses the lockfile `npm install` produced, because the phantom is
+`Missing from lock file`. No lockfile satisfies both while the engine is
+in the tree:
 
 ```
 npm error `npm ci` can only install packages when your package.json and
@@ -88,9 +87,8 @@ entirely. Failing that, install the native engine's platform package for
 your own platform directly
 (`@rosepetal/node-red-contrib-image-tools-linux-x64`, `-linux-arm64`,
 `-linuxmusl-x64`, `-darwin-x64` or `-darwin-arm64`) without the engine
-package itself; or
-skip OpenCV altogether, which costs you `label-crop` and two opt-in
-`golden-compare` acceleration paths and nothing else.
+package itself; or skip OpenCV altogether, which costs you `label-crop`
+and two opt-in `golden-compare` acceleration paths and nothing else.
 
 ### The OpenCV engine
 
@@ -111,11 +109,7 @@ Which one answers is `lib/engine.js`'s decision. The default is the native
 addon where it has a prebuilt binary and the WASM build everywhere else.
 Set `VISION_TOOLS_ENGINE=native` or `VISION_TOOLS_ENGINE=opencv-js` to pin
 one — a pinned engine that cannot load is an error, never a silent
-substitution, so a benchmark cannot quietly measure the wrong one.
-
-The WASM engine is also the answer to the `npm ci` problem above: install
-`@techstark/opencv-js` instead of the native engine and the phantom
-platform package never enters the tree.
+substitution.
 
 On a host with both installed, the two produce **identical** `label-crop`
 results — `node bench/engine-parity.js` sweeps angles and label shapes and
@@ -138,21 +132,21 @@ your own hardware.
 
 End to end the gap can be wider. Replaying the real `golden-compare`
 handler in the Node-RED test container (`bench/golden-performance.md`), the
-WASM-backed snapshot measured **456ms median** against native’s **101ms** —
-about 4.5× — at 12 workers with a named golden. Both graded that sample
-identically, but their transforms and native/fallback paths differ, so read
-it as a comparison of these two implementations rather than a universal
-WASM penalty. The identical-results claim above is about `label-crop`;
-`golden-compare`’s alignment is where the two engines can reach the same
+WASM-backed snapshot measured **456ms median** against native's **101ms**
+at 12 workers with a named golden. Both graded that sample identically,
+but their transforms and native/fallback paths differ, so read it as a
+comparison of these two implementations rather than a universal WASM
+penalty: the identical-results claim above is about `label-crop`, and
+`golden-compare`'s alignment is where the two engines can reach the same
 verdict by different routes.
 
 ## How `golden-compare` works
 
-1. **Golden reference** (`goldenPath`, or `msg.golden`) is decoded, grayscaled,
-   downscaled to `workingSize` and binarized **once** and cached — not
-   redone per frame, and neither are the density lattices the alignment
-   search compares against. Its foreground mask is dilated by
-   `backgroundTolerance` px to create the background-check's tolerance band.
+1. **Golden reference** (`goldenPath`, or `msg.golden`) is decoded,
+   grayscaled, downscaled to `workingSize` and binarized **once** and
+   cached, along with the density lattices the alignment search compares
+   against. Its foreground mask is dilated by `backgroundTolerance` px to
+   create the background-check's tolerance band.
 
    Binarizing uses `thresholdMode`: `otsu` (the default — one level per
    image, chosen to separate the two intensity modes, which absorbs
@@ -160,8 +154,8 @@ verdict by different routes.
    perfectly repeatable, but it drifts out of calibration as the lighting
    does), or `sauvola` (a per-pixel level from the local mean and standard
    deviation — also absorbs lighting *gradients* across the part). Otsu
-   and Sauvola make golden and frame independently self-normalizing. That
-   is the default for a reason: the golden is normally PDF artwork —
+   and Sauvola make golden and frame independently self-normalizing,
+   which is why Otsu is the default: the golden is normally PDF artwork —
    synthetic pure black on pure white — and the frame is a photograph, and
    no single grey level is correct for both.
 
@@ -169,25 +163,11 @@ verdict by different routes.
    `inkMargin` (grey levels, default 8) marks a pixel **ambiguous** when
    it lies within that many levels of the level it was judged against, on
    *either* side, and both blemish checks drop a pixel from the evidence
-   when either image is ambiguous there. A defect claim is a claim about
-   both images — "ink here, none there" — so ambiguity on either side
-   voids it.
-
-   This is not a fudge factor; it fixes two specific, reproducible
-   failures against artwork. **On the frame side**, a screened tint
-   renders lighter than the level in the PDF and dot gain prints it
-   darker than the level in the photograph, so the identical design
-   element binarizes to background on one side and ink on the other — on
-   this project's pair, two false regions at densities 0.30 and 0.23 from
-   a 9-level swing. **On the golden side**, and this one only appears
-   above `workingSize` 1024, Otsu's level is not stable: it is re-derived
-   from each image's histogram, and on this artwork it walks from 160 at
-   1024 down to 145 at 3072. A flat "RX" panel sitting at grey 155 flips
-   from ink to background partway up that range while the print
-   reproduces it at 84 — solid ink — lighting up a whole 144×304 region
-   at density 1.000 on a good part. Only the two-sided test catches that,
-   because the artwork pixel there is *background*.
-
+   when either image is ambiguous there. This catches two reproducible
+   false regions against artwork — a screened tint that binarizes to
+   background in the PDF and ink in the photograph, and Otsu's level
+   walking with resolution above `workingSize` 1024 — see
+   ARCHITECTURE.md, "Thresholding and ambiguity", for the numbers.
    Ambiguous pixels remain full evidence for *alignment*; the margin only
    withholds them from the defect claim. Set it to 0 for plain
    hard-threshold behaviour.
@@ -209,22 +189,14 @@ verdict by different routes.
    **independent**, which is what makes an artwork golden usable at all:
    a press stretches print along its media-feed axis relative to the
    artwork (5–6% on this project's own sample pairs), and a single
-   isotropic scale can only split that error, leaving every feature
-   several pixels out toward the ends of the long axis. On body text
-   several pixels is the whole stroke, so ~12% of pixels disagree and both
-   blemish checks fail a good part. Searching `mx` and `my` separately
-   takes the same pairs to ~0.06%. Scoring is
-   mean absolute ink-density difference over a lattice of cells, each read
-   in O(1) from a summed-area table, so one candidate costs a few thousand
-   operations no matter how large either image is. The search is
-   coarse-to-fine: a wide sweep of the scale ladder over the whole frame, a
-   joint scale+angle refine, a fine translation refine, and finally a
-   **polish** that optimizes actual pixel disagreement instead of the
-   coarse density proxy — the two stop agreeing at sub-pixel scale, and it
-   is the pixels that the blemish checks go on to measure. The matched
-   region is then resampled into golden's grid by `lib/warp.js`,
-   area-averaging when the frame out-resolves the golden so fine text is
-   downsampled rather than aliased.
+   isotropic scale can only split that error; on body text the leftover
+   is the whole stroke, so ~12% of pixels disagree and both blemish
+   checks fail a good part. Searching `mx` and `my` separately takes the
+   same pairs to ~0.06%. The search is coarse-to-fine — density-lattice
+   sweeps over scale, angle and translation, then a **polish** on actual
+   pixel disagreement — and the matched region is resampled into golden's
+   grid by `lib/warp.js`, area-averaging when the frame out-resolves the
+   golden so fine text is downsampled rather than aliased.
 
    `alignSearch` adds translation slack beyond the pure size difference.
    Set `scaleSearchMin`/`Max` both to 1 to pin the magnification,
@@ -234,44 +206,29 @@ verdict by different routes.
    be wrong.
 4. **Position check**: the recovered placement is compared against
    tolerance bands around *nominal* — centered in the available margin and
-   square to the frame. (There's no separate "nominal" to capture, unlike
-   their system's trained nominal from label-edge geometry; this reduces to
-   a tolerance around exactly `(0,0)` when target and golden are already
-   the same size.) Offsets in mm if `scaleFilePath` points at a calibration
-   baseline (see below), else in px. Rotation is gated separately, in
-   degrees, against `positionToleranceAngleDeg`: a part that is offset and
-   a part that is skewed are different faults with different causes, so
-   collapsing them into one number would throw away the more actionable
-   half.
+   square to the frame, which reduces to a tolerance around exactly
+   `(0,0)` when target and golden are already the same size. Offsets in
+   mm if `scaleFilePath` points at a calibration baseline (see below),
+   else in px. Rotation is gated separately, in degrees, against
+   `positionToleranceAngleDeg`: a part that is offset and a part that is
+   skewed are different faults with different causes.
 5. **Blemish checks**, both against the *matched/cropped* target:
    - *print* — golden has ink the target is missing, even after dilating
      the target's ink by `printTolerance` px
    - *background* — target has ink the golden never has, even after
      dilating the golden's ink by `backgroundTolerance` px
 
-   These are provably disjoint per pixel (a pixel that's target-foreground
-   can't simultaneously fail the "target lacks ink" test), so the two
-   checks never double-count the same defect. Each diff is block-summed
-   into a density grid (`blockSize` px) via a summed-area table,
+   The two are disjoint per pixel, so they never double-count the same
+   defect. Each diff is block-summed into a density grid (`blockSize` px),
    thresholded (`blockThreshold`), and flood-filled into defect bounding
    boxes; each fails independently if any region exceeds `failThreshold`
    or its overall defect ratio exceeds `failRatio`.
 6. Overall `pass = position.pass && printBlemish.pass && backgroundBlemish.pass`.
 
 Decode/resize uses [`sharp`](https://sharp.pixelplumbing.com) (native,
-libvips) — the images here run 20+ MP, and a pure-JS decoder was too slow
-for the "very fast" requirement this node was built for. Everything after
-decode (threshold, dilation, alignment search, diff, block-sum) is plain
-typed-array math with no further native dependencies — binary masks stay
-`Uint8Array`/`Uint32Array`, while the grey summed-area tables use a
-`Float64Array` accumulator so they cannot wrap on large frames (a `Uint32`
-grey table wraps past ~16.8M bright pixels and silently corrupts the
-area-average warp):
-dilation is a separable sliding-window max filter (van Herk/Gil-Werman,
-`lib/dilate.js`), so cost stays O(width×height) regardless of the
-configured radius, and every density and area-average read in the
-alignment search and the warp is an O(1) summed-area lookup
-(`lib/integral.js`) rather than a re-scan.
+libvips) — the images here run 20+ MP, and a pure-JS decoder was too slow.
+Everything after decode (threshold, dilation, alignment search, diff,
+block-sum) is plain typed-array math with no further native dependencies.
 
 ### Input
 
@@ -299,15 +256,14 @@ bytes, and that is exactly the shape this node accepts. No PNG encode, no
 PNG decode, no temporary file. `PNG` output works too and needs no
 geometry, at the cost of a round trip through the encoder.
 
-Note `msg.images[]` is *per-page metadata only* — page, width, height,
+`msg.images[]` is *per-page metadata only* — page, width, height,
 channels, path — and carries no pixels. It is the wrong thing to reach
 for here. When `msg.golden` is a path or a buffer that carries its own
-container, `msg.images[]` geometry is ignored entirely — a stale `RAW`
-message left over from an earlier step must not stamp the frame's
-dimensions onto a file golden (the same guard the frame side has always
-had).
+container, `msg.images[]` geometry is ignored entirely, so a stale `RAW`
+message left over from an earlier step cannot stamp the frame's
+dimensions onto a file golden.
 
-Two things to know:
+Things to know:
 
 - **Get the rotation right first.** Artwork is often laid out at a quarter
   turn to how the camera sees the label, and the alignment search covers
@@ -327,9 +283,7 @@ Two things to know:
 - **Give it `msg.goldenKey`.** A buffer golden is keyed by a hash of its
   bytes, and hashing a ~12MB raw render on every message is real time
   spent learning something that did not change. `msg.goldenKey` names it
-  instead — a path, a revision, an mtime — and the hash is genuinely
-  skipped. (Before 1.0.2 it was not: the hash ran before the name was
-  consulted, so the option saved nothing.)
+  instead — a path, a revision, an mtime — and the hash is skipped.
 
   In exchange, **invalidation becomes yours**. The buffer's length is
   still checked, so a differently-sized render under a stale name is
@@ -370,7 +324,10 @@ match: { score, grade, mismatchSuspected, reason }
 `score` is the alignment residual, `grade` is `good` (< 0.06) / `marginal`
 / `poor` (≥ `mismatchScore`). Measured here: a correctly paired label
 registers at **0.02–0.05**, a badly printed one at about **0.10**, and
-another product's artwork at about **0.18**.
+another product's artwork at about **0.18**. A frame that fails
+everywhere with a high score is misaligned, not defective — check that,
+and that the golden is the right *product*, before believing the blemish
+numbers.
 
 `mismatchSuspected` is the one worth wiring to an operator. Comparing one
 product's artwork against another's photograph reports **1145 print
@@ -401,14 +358,13 @@ largest first:
 | raw input instead of PNG | **−~75ms** on this frame (decode 143ms → 70ms for mono). The saving is the *decode*, so it scales with the PNG's compressed size rather than its pixel count — a 13.7MB PNG of the same dimensions decodes in ~560ms |
 | the host's power profile | **~2.2×** on everything. Measured on a laptop that had dropped to battery mode mid-session: align 2020ms → 913ms on mains, no code or setting changed |
 
-Docker is **not** on that list, and an earlier version of this table was
-wrong to put it there. Running this project's own `bench/frame-bench.js`
-inside the container reproduces the committed `bench/baseline.json` from
-the host within ~10% (pinned search 236ms vs 222ms, unpinned align 2075ms
-vs 2219ms). What looked like a container tax was the power profile above.
+Docker is **not** on that list. Running this project's own
+`bench/frame-bench.js` inside the container reproduces the host's numbers
+within ~10% (pinned search 236ms vs 222ms, unpinned align 2075ms vs
+2219ms). What looked like a container tax was the power profile above.
 
 `workingSize` is the one that changes *what is detectable* rather than
-just how long it takes — see the note on it above before lowering it.
+just how long it takes — see Notes before lowering it.
 
 Per-message overrides:
 `msg.threshold`, `msg.thresholdMode`, `msg.sauvolaRadius`, `msg.sauvolaK`,
@@ -417,11 +373,12 @@ Per-message overrides:
 `msg.aspectSteps`, `msg.maxAngleDeg`, `msg.angleSteps`,
 `msg.alignCandidates`, `msg.localAlign`, `msg.localAlignTile`,
 `msg.localAlignMax`, `msg.workers`, `msg.mismatchScore`,
-`msg.trainTransform`, `msg.nativeAlignSeed`, `msg.nativeFastAlign`,
+`msg.trainTransform`, `msg.trainNuisance`, `msg.nativeAlignSeed`,
+`msg.nativeFastAlign`,
 `msg.positionToleranceXMm`/`YMm`/`XPx`/`YPx`/`AngleDeg`, `msg.blockSize`,
 `msg.blockThreshold`, `msg.failThreshold`, `msg.failRatio`,
 `msg.outputPrintHeatmap`, `msg.outputBackgroundHeatmap`,
-`msg.debugStages`.
+`msg.heatmapFormat`, `msg.heatmapQuality`, `msg.debugStages`.
 
 Raw geometry rides alongside the image rather than as a setting:
 `msg.rawInfo` for the frame, `msg.goldenRawInfo` for the golden, and
@@ -436,11 +393,11 @@ summed-area tables, the density sweeps, pixel polish, and the final global
 warp; local tile refinement and the blemish policy still run afterward.
 `result.transform.native` reports which path produced the frame.
 
-The native result is accepted only when it stays inside `maxAngleDeg`, remains
-within 3% of each trained magnification, and its full-resolution disagreement
-score is at most 0.15. Otherwise the same frame automatically falls back to
-the trained JS alignment and `result.transform.nativeFallback` explains why.
-This prevents OpenCV from explaining small artwork differences as large
+The native result is accepted only when it stays inside `maxAngleDeg`,
+remains within 3% of each trained magnification, and its full-resolution
+disagreement score is at most 0.15. Otherwise the same frame falls back to
+the trained JS alignment and `result.transform.nativeFallback` explains
+why, so OpenCV cannot explain small artwork differences as large
 scale/stretch changes.
 
 This prototype is intentionally **not result-compatible** with the JS path.
@@ -461,20 +418,19 @@ debug stages off, median of three warm frames:
 
 Run `node bench/opencv-fast-bench.js [golden.png] [frame.png] [iterations]`
 to compare the JS, conservative seed, and full OpenCV paths on another set.
-A missing or failed native engine falls back to JS.
+A missing or failed engine falls back to JS.
 
 ### Native alignment seed (prototype, off by default)
 
-`nativeAlignSeed` starts the pinned search from an ORB+ECC alignment
-measured by the optional native OpenCV
-engine, instead of from the staged sweeps. On a 4096×5500 frame that took
-align from 545ms to 338ms, and the search itself from 325ms to 125ms.
+Tick **Native alignment seed** or send `msg.nativeAlignSeed = true` to
+start the pinned search from an ORB+ECC alignment
+measured by the OpenCV engine (either one — see **The OpenCV engine**),
+instead of from the staged sweeps. On a 4096×5500 frame that took align
+from 545ms to 338ms, and the search itself from 325ms to 125ms.
 
 The engine is **not a dependency**. Without it the flag is inert and the
 node behaves exactly as it does today, bit for bit —
-`test/nativeSeed.test.js` asserts that. Installing the optional native
-OpenCV engine enables it; it ships published
-prebuilt binaries for Linux x64/arm64, Alpine x64, and macOS arm64.
+`test/nativeSeed.test.js` asserts that.
 
 A seed replaces the sweeps' **guess**, never their verdict. The trained
 magnifications stay the trained ones — a seed is not allowed to reopen the
@@ -500,37 +456,42 @@ trusting it.
 
 - `msg.payload` — `true`/`false` overall pass
 - `msg.result` —
-  `{ pass, position: { dxPx, dyPx, dxMm, dyMm, angleDeg, anglePass, scale, scaleX, scaleY, stretchPercent, pass }, transform: { pinned, native, nativeFallback?, seeded, pinRefused?, scaleX, scaleY, scale, stretchPercent, angleDeg, ox, oy, score }, match: { score, grade, mismatchSuspected, reason }, thresholds: { golden, target }, localAlign: { tiles, localised, meanPx, medianPx, maxPx }, printBlemish: { pass, defectRatio, regions: [{x,y,w,h,density,avgDensity,cells}] }, backgroundBlemish: { pass, defectRatio, regions } }`
+  `{ pass, position: { dxPx, dyPx, dxMm, dyMm, angleDeg, anglePass, scale, scaleX, scaleY, stretchPercent, pass }, transform: { pinned, native, nativeFallback?, seeded, pinRefused?, scaleX, scaleY, scale, stretchPercent, angleDeg, ox, oy, score }, match: { score, grade, mismatchSuspected, reason }, thresholds: { golden, target }, localAlign: { tiles, localised, meanPx, medianPx, maxPx }, printBlemish: { pass, defectRatio, regions: [{x,y,w,h,density,avgDensity,cells}] }, backgroundBlemish: { pass, defectRatio, regions, worstExcess, noveltyPass } }`
   (region coordinates in the working-resolution image, same size as the
   heat maps — not the original camera resolution). `transform` is the raw
-  recovered placement in frame-canvas pixels (`pinned` reports whether a
-  trained transform was used, `seeded` whether that transform started from
-  a native ORB+ECC seed rather than the staged sweeps — see **Native
-  alignment seed** below — and `pinRefused` is present with the reason
-  when there was a trained record the node declined to use — it also
-  warns, but a warning is easy to miss and the fallback to a full search
-  is otherwise invisible from the message); `thresholds` reports the grey level each
-  side actually used, so exposure drift is visible rather than merely
-  absorbed; `match` is the registration grade described under **Grading**
-  below; `localAlign` is the per-tile refinement statistics (`tiles` =
-  tiles examined, `localised` = tiles that found a trusted offset,
-  `meanPx`/`medianPx`/`maxPx` = the recovered displacement magnitude in
-  working px) and is `null` when refinement is off.
+  recovered placement in frame-canvas pixels: `pinned` reports whether a
+  trained transform was used, `seeded` whether it started from a native
+  ORB+ECC seed rather than the staged sweeps, and `pinRefused` is present
+  with the reason when there was a trained record the node declined to
+  use — it also warns, but a warning is easy to miss and the fallback to
+  a full search is otherwise invisible from the message. `thresholds`
+  reports the grey level each side actually used, so exposure drift is
+  visible rather than merely absorbed; `match` is the registration grade
+  described under **Grading** above; `localAlign` is the per-tile
+  refinement statistics (`tiles` = tiles examined, `localised` = tiles
+  that found a trusted offset, `meanPx`/`medianPx`/`maxPx` = the recovered
+  displacement magnitude in working px) and is `null` when refinement is
+  off. `worstExcess`/`noveltyPass` are the trained nuisance map's verdict
+  (how far the dirtiest block exceeded its trained baseline, and whether
+  that alone failed the frame); they are 0/`true` until a map is trained
+  from a *Nuisance map* path with *Train the nuisance map* — see
+  ARCHITECTURE.md, "The blemish floor, and the nuisance map that lowers
+  it".
 
   `stretchPercent` — how far the two axis magnifications differ — is
   reported but deliberately **not** gated. Some stretch is just what the
   press does, and its normal value depends on media and machine, so any
   default threshold would be a guess that fails good parts. It is worth
   trending, though: a stretch that moves is a press drifting.
-- `msg.printHeatmap` / `msg.backgroundHeatmap` — JPEG `Buffer` overlays.
+- `msg.printHeatmap` / `msg.backgroundHeatmap` — overlays, only if the
+  matching `outputPrintHeatmap`/`outputBackgroundHeatmap` is on.
   `heatmapFormat` picks the encoding, measured at working size on real
-  content: `jpg` ~22ms/350KB (default), `png` ~25ms/3.7MB (lossless,
-  zlib level 1), `raw` 0ms/9.4MB — no codec, a
-  `{ data, width, height, channels, colorSpace, dtype }` object like
+  content: `jpg` ~22ms/350KB (default, quality `heatmapQuality`, 85),
+  `png` ~25ms/3.7MB (lossless, zlib level 1), `raw` 0ms/9.4MB — no codec,
+  a `{ data, width, height, channels, colorSpace, dtype }` object like
   `label-crop`'s output, for a flow that resizes or overlays before
   anything is displayed. The same setting governs the grey `msg.stages`
   images; mask stages are PNG or raw, never JPEG.
-  (only if the matching `outputPrintHeatmap`/`outputBackgroundHeatmap` is on)
 - `msg.timings` — `{ decodeMs, alignMs, diffMs, heatmapMs, stagesMs, totalMs }`
 - `msg.stages` — only if `debugStages` is on: `Buffer`s for each
   pipeline step (`goldenGray`, `goldenFg`, `goldenFgDilatedBackground`,
@@ -563,17 +524,17 @@ trusting it.
    squares, in both axes (`lib/checkerboard.js`). Centroid/pitch-based
    only — no sub-pixel corner refinement and no lens-distortion model.
 3. `mm/px = targetPitchMm / measured pitch`. Compared against the baseline
-saved in `scaleFilePath` (`deviationPercent`, `pass` if within
-`allowedErrorPercent`). With no baseline yet, the result is
-informational only (`bootstrap: true`) — nothing to deviate from. A
-photo too thin to measure a pitch is reported as **not detected** (with
-a reason) rather than as a bogus scale.
+   saved in `scaleFilePath` (`deviationPercent`, `pass` if within
+   `allowedErrorPercent`). With no baseline yet, the result is
+   informational only (`bootstrap: true`) — nothing to deviate from. A
+   photo too thin to measure a pitch is reported as **not detected** (with
+   a reason) rather than as a bogus scale.
 
-Grid size counts **dark squares**, not physical squares:
-`checkerboardCols` is the number of dark squares per row and
-`checkerboardRows` the number of rows. A standard 4×6 physical board has
-2 dark squares per row, so it is `cols: 2, rows: 6` — the editor
-defaults (`4 × 6`) in fact describe an 8×6 board.
+   Grid size counts **dark squares**, not physical squares:
+   `checkerboardCols` is the number of dark squares per row and
+   `checkerboardRows` the number of rows. A standard 4×6 physical board has
+   2 dark squares per row, so it is `cols: 2, rows: 6` — the editor
+   defaults (`4 × 6`) in fact describe an 8×6 board.
 4. `msg.save: true` persists the freshly detected scale as the new
    baseline (`{ mmPerPixelNative, nativeWidth, nativeHeight, calibratedAt }`),
    read by `golden-compare`, which rescales it from the calibration
@@ -606,11 +567,8 @@ defaults (`4 × 6`) in fact describe an 8×6 board.
    The lattice takes the x and y pitch separately, so a board with
    rectangular cells (this project's measures `pitchY/pitchX = 0.855`) is
    **not** "corrected": one photo cannot tell a rectangular print from the
-   camera's own aspect, and aspect is scale, which `golden-compare`'s
-   independent `mx`/`my` already absorb and the mm/px figure averages. A
-   square lattice had turned that into a 10% anisotropic scale in the
-   homography — 46px rms of "keystone" that would have stretched every
-   frame.
+   camera's own aspect, and `golden-compare`'s independent `mx`/`my`
+   already absorb aspect.
 
 ### Input
 
@@ -633,18 +591,15 @@ baseline. Optional per-message overrides: `msg.targetPitchMm`,
 Wire it between the camera and `label-crop`. It reads the `homography`
 `checkerboard-calibrate` saved and resamples every frame through it, so
 the label reaches the rest of the flow as a square-on camera would have
-seen it. Nothing is detected on the production frame — a document-scanner
-style "find the quad and warp it" would re-solve the camera geometry on
-every part, and is likeliest to solve it wrongly on exactly the damaged
-label the inspection exists to catch. Here the geometry is a property of
-the rig, measured once from a board with dozens of exact correspondences,
-and every frame gets the same warp.
+seen it. Nothing is detected on the production frame: the geometry is a
+property of the rig, measured once from a board with dozens of exact
+correspondences, and every frame gets the same warp (ARCHITECTURE.md
+explains why not a per-frame quad detection).
 
 Whether it is worth wiring in is what `checkerboard-calibrate`'s
 `perspective` numbers say (above). It is not a substitute for
 `golden-compare`'s own alignment: the residual that node measures on a
-correctly aligned pair is not keystone (a homography fitted to it removes
-18%, see Notes), it is the label bowing on the tray, which is what
+correctly aligned pair is the label bowing on the tray, which is what
 per-tile refinement is for. Rectification is for the case where the
 *camera* is off-axis and the same trapezoid shows up on every frame.
 
@@ -652,14 +607,11 @@ The warp is bilinear, inverse-mapped, with the frame edge replicated
 outward rather than filled — a black or white band along the edge would be
 a fake feature to `label-crop`'s blob search and `golden-compare`'s
 background check. Pure JS, so it runs the same on either OpenCV engine and
-on a host with neither — the native addon exports no `warpPerspective`,
-and opencv.js's single WASM thread measured no faster than the serial
-loop (114ms vs 127ms on a 1500×1850 RGB frame). What makes it fast is
-the same worker pool `golden-compare`'s warp runs on: rows split across
-`workers` threads (0 = one per core), ~20ms on that frame with 16
-workers and ~140ms on 24MP RGB against ~1s serial, off the Node-RED
-event loop either way. A homography that is the identity passes the frame
-through untouched.
+on a host with neither. Rows split across `workers` threads (0 = one per
+core) on the same pool `golden-compare`'s warp runs on: ~20ms on a
+1500×1850 RGB frame with 16 workers and ~140ms on 24MP RGB against ~1s
+serial, off the Node-RED event loop either way. A homography that is the
+identity passes the frame through untouched.
 
 A frame at a different resolution from the calibration photo is fine as
 long as it is the same field of view (the homography is rescaled). A
@@ -677,8 +629,8 @@ rectified frame, since that is what the node will see.
 
 `msg.payload` — an encoded image Buffer, a file path, or a raw
 `{ data, width, height, channels }` object (a bare raw Buffer with
-`msg.rawInfo` is accepted too). `msg.outputFormat` overrides the
-configured output.
+`msg.rawInfo` is accepted too). `msg.outputFormat` and `msg.workers`
+override the configured values.
 
 ### Output
 
@@ -709,100 +661,90 @@ homography (one saved before this node existed — re-run
 
 `label-crop` deskews and tightly crops a physical label out of a camera
 frame, so the rest of a flow sees the label straight and centred even when
-the part sits at an angle or off-centre. It is the companion to
-golden-compare's own alignment: label-crop removes the *placement*
-variation (where the label is in the frame), and golden-compare then
-measures the *print* (the artwork relative to itself). It is a separate
-node so the cropped frame can be previewed, saved, or fed to other
-inspection steps.
+the part sits at an angle or off-centre. It removes the *placement*
+variation (where the label is in the frame); golden-compare then measures
+the *print* (the artwork relative to itself). It is a separate node so the
+cropped frame can be previewed, saved, or fed to other inspection steps.
 
 **Engine.** All pixel work (decode, resize, Otsu, rotate, crop, final
-encoding) runs in the optional native OpenCV addon
-— the same optional engine `nativeAlignSeed` uses. That package is now a
-dependency; it ships published prebuilt binaries for Linux x64/arm64,
-Alpine x64, and macOS arm64. If the binary is missing the node reports a
-**setup error** on every message rather than silently passing frames
-through, because a missing engine would otherwise look like "no label
-found".
+encoding) runs in the OpenCV engine — either of the two described under
+**The OpenCV engine**. If neither is installed the node reports a **setup
+error** on every message rather than silently passing frames through,
+because a missing engine would otherwise look like "no label found".
 
 **Detection.** The frame is decoded once to a raw object, then downscaled
 to `maxEdge` (640px long edge by default). OpenCV applies Otsu once; in
 `auto` mode the small binary mask and its JS-inverted form cover both
-polarities (dark-on-light and light-on-dark), and the better rectangle wins. The JS side only ever sees this small
-mask: it finds connected components, takes the dominant rectangle-like
-one, traces its exterior, and fits the minimum-area rectangle around the
-convex boundary. Interior print holes therefore cannot skew the label angle.
+polarities (dark-on-light and light-on-dark), and the better rectangle
+wins. The JS side only ever sees this small mask: it finds connected
+components, takes the dominant rectangle-like one, traces its exterior,
+and fits the minimum-area rectangle around the convex boundary. Interior
+print holes therefore cannot skew the label angle.
 
-Because the label is part of the bright blob, that rectangle always *contains*
-the label. A boundary pass then snaps each side inward to the label's real
-edge, so a label that is clipped by the frame or blends into a similarly-bright
-table crops to its true boundary instead of the whole bright region. The
-boundary is a **tone step**: scanning inward, the innermost place where the
-mean tone rises by at least 12 grey levels across three columns/rows *and*
-everything outside it is darker than the label just past it. A bright halo
-on the table qualifies (its inner edge is a step, and the halo is darker than
-the label); the inner edge of a printed barcode band does not (the label's
-own white margin sits in its outside strip); a smooth lighting ramp across
-the label is not a step at all. The native Sobel **edge** accumulator is the
-fallback for a seam on an equally-toned surface, under the same outside-strip
-rule. Clipped sides stay put. `refinedSides` lists which sides moved.
-
-The step rule replaced one that defined "label tone" as the frame's
-brightest 2%. On this project's 162-frame production run the label is lit
-unevenly — 214 at its left edge rising to 250 — so that rule called the dim
-third "not label" and walked the left side ~100 columns in, past the
-barcode, on three frames in four: the same physical label on a fixed rig
-came out anywhere from 1165 to 1272px wide. With the step rule the width
-spread is 17px, every frame keeps its barcode, and no frame changed from
-hit to miss. A boundary fainter than 12 levels (this rig's label liner, 4
-levels off the label) is left in — the crop errs outward, never into the
-label.
+Because the label is part of the bright blob, that rectangle always
+*contains* the label. A boundary pass then snaps each side inward to the
+label's real edge, so a label that is clipped by the frame or blends into
+a similarly-bright table crops to its true boundary instead of the whole
+bright region. The boundary is a **tone step**: scanning inward, the
+innermost place where the mean tone rises by at least 12 grey levels
+across three columns/rows *and* everything outside it is darker than the
+label just past it. A bright halo on the table qualifies (its inner edge
+is a step, and the halo is darker than the label); the inner edge of a
+printed barcode band does not (the label's own white margin sits in its
+outside strip); a smooth lighting ramp across the label is not a step at
+all. The native Sobel **edge** accumulator is the fallback for a seam on
+an equally-toned surface, under the same outside-strip rule. Clipped
+sides stay put. `refinedSides` lists which sides moved. A boundary
+fainter than 12 levels (this rig's label liner, 4 levels off the label)
+is left in — the crop errs outward, never into the label.
 
 Confidence gates turn bad evidence into a **miss**, never a wrong crop,
 and a miss reports the value its gate measured (`borderContact: 0.75`
 against a 0.5 limit says exactly which setting to move; a field the gate
-never reached is `null`, not 0):
-the blob must fall between `minAreaFraction` and `maxAreaFraction` of the
-frame, fill at least `minRectangularity` of its exterior rectangle, and not
-exceed `maxBorderContact`. The 0.5 border default permits a label clipped at
-two opposite image edges while rejecting a component covering all four.
-The candidate must also be at least `minDominance` times the second-best blob
+never reached is `null`, not 0): the blob must fall between
+`minAreaFraction` and `maxAreaFraction` of the frame, fill at least
+`minRectangularity` of its exterior rectangle, and not exceed
+`maxBorderContact`. The 0.5 border default permits a label clipped at two
+opposite image edges while rejecting a component covering all four. The
+candidate must also be at least `minDominance` times the second-best blob
 and, optionally, match `aspectRatio` within `aspectTolerance` and cover
 `expectedSizeFraction` of the frame within `sizeTolerance`. The combined
-confidence must reach `minConfidence`. `auto` polarity reports which side won.
+confidence must reach `minConfidence`. `auto` polarity reports which side
+won.
 
 The **label size selector** in the node's edit dialog makes the size gate
 visual: load any representative photo and open the **viewer** — a zoomable
 modal (wheel / +/− / Fit / 100% zoom, Draw/Pan modes) that shows the image
 large, so the drawn rectangle and its corner handles are clearly visible
-while you fine-tune it. Apply copies the rectangle into
-`aspectRatio` and `expectedSizeFraction` automatically
-(resolution-independent: the fraction is relative to that image). The size
-gate is applied **after** boundary refinement, so the clipped or
-table-blended extents the refinement removes are not counted — a badly
-detected rect (halo included, or the wrong product) becomes a clean
-`size-mismatch` miss instead of a wrong crop.
+while you fine-tune it. Apply copies the rectangle into `aspectRatio` and
+`expectedSizeFraction` (resolution-independent: the fraction is relative
+to that image). The size gate is applied **after** boundary refinement, so
+the clipped or table-blended extents the refinement removes are not
+counted — a badly detected rect (halo included, or the wrong product)
+becomes a clean `size-mismatch` miss instead of a wrong crop.
 
-**Deskew.** The label's axis-aligned bounding box (plus a small `cropMargin`
-ring, so the rotate never samples past the ROI) is cropped from the full
-frame and rotated using the detected angle in OpenCV's image-coordinate
-convention — only the ROI is ever rotated, never the whole frame. In the rotated canvas the label rect is
-axis-aligned, so the final crop is the centred `w × h` rectangle: exactly
-tight to the label. No perspective correction; sub-`minRotateAngleDeg`
-angles skip the rotate entirely. The final crop is encoded natively in
-the chosen `outputFormat` (raw object by default, or jpg/png/webp).
+**Deskew.** The label's axis-aligned bounding box (plus a small
+`cropMargin` ring, so the rotate never samples past the ROI) is cropped
+from the full frame and rotated by the detected angle — only the ROI is
+ever rotated, never the whole frame. In the rotated canvas the label rect
+is axis-aligned, so the final crop is the centred `w × h` rectangle:
+exactly tight to the label. No perspective correction;
+sub-`minRotateAngleDeg` angles skip the rotate entirely. The final crop is
+encoded natively in the chosen `outputFormat` (raw object by default, or
+jpg/png/webp).
 
 ### Input
 
 `msg.payload` — an encoded image Buffer (JPEG/PNG/…) or a raw
 `{ data, width, height, channels }` object (the same shapes
-`golden-compare` accepts). Per-message overrides: `msg.maxEdge`,
+`golden-compare` accepts). Any setting can be overridden per message by
+name: `msg.boundaryMode`, `msg.edgeRegions`, `msg.maxEdge`,
 `msg.polarity`, `msg.minAreaFraction`, `msg.maxAreaFraction`,
-`msg.minRectangularity`, `msg.maxBorderContact`, `msg.minDominance`, `msg.minConfidence`,
-`msg.aspectRatio`, `msg.aspectTolerance`, `msg.expectedSizeFraction`,
-`msg.sizeTolerance`, `msg.cropMargin`, `msg.minRotateAngleDeg`,
-`msg.previewEnabled`, `msg.previewWidth`, `msg.outputFormat`,
-`msg.outputQuality`.
+`msg.minRectangularity`, `msg.maxBorderContact`, `msg.minDominance`,
+`msg.minConfidence`, `msg.aspectRatio`, `msg.aspectTolerance`,
+`msg.expectedSizeFraction`, `msg.sizeTolerance`, `msg.cropMargin`,
+`msg.minRotateAngleDeg`, `msg.outputFormat`, `msg.outputQuality`,
+`msg.pngOptimize`, plus `msg.previewEnabled` and `msg.previewWidth`.
 
 ### Output
 
@@ -820,19 +762,19 @@ the chosen `outputFormat` (raw object by default, or jpg/png/webp).
   `totalMs` plus per-op engine timings. When preview is enabled,
   `previewMs` records its additional diagnostic work.
 
-Enable **Preview** to render labelled **Before** and **After** JPEG thumbnails
-beside the node on the flow canvas. `previewWidth` controls each thumbnail's
-width. Previewing does not change `msg.payload`, is off by default, and adds an
-extra resize/encode (plus another decode when the original input is encoded).
-Click the preview to hide it.
+Enable **Preview** to render labelled **Before** and **After** JPEG
+thumbnails beside the node on the flow canvas. `previewWidth` controls
+each thumbnail's width. Previewing does not change `msg.payload`, is off
+by default, and adds an extra resize/encode (plus another decode when the
+original input is encoded). Click the preview to hide it.
 
 `bench/label-crop-bench.js` renders a synthetic 6000×4000 (24MP) frame
 (dark tray, rotated light label with bars) and reports raw, JPEG and PNG
-p50/p95 timings.
-The 100–500ms/frame target is reported there, not asserted in the test
-suite — wall-clock numbers move with the machine. The engine currently decodes
-encoded Buffers synchronously while constructing its native worker, so raw
-camera frames are preferable when Node-RED event-loop latency matters.
+p50/p95 timings. The 100–500ms/frame target is reported there, not
+asserted in the test suite — wall-clock numbers move with the machine. The
+engine decodes encoded Buffers synchronously while constructing
+its worker, so raw camera frames are preferable when Node-RED event-loop
+latency matters.
 
 ## How `line-finder` works
 
@@ -861,19 +803,18 @@ Per region:
 
 `msg.payload` passes through untouched; the result lands on
 `msg.lineFinder` as `{ found, reason, line, angleDeg, score, calipers,
-residualPx, points }`. A miss is a normal outcome - only an unusable
-payload is an error.
+residualPx, points, region, imageWidth, imageHeight, timings }`. A miss
+is a normal outcome - only an unusable payload is an error.
+
+Every setting can be overridden per message by name (`msg.calipers`,
+`msg.contrastThreshold`, `msg.edgeSelect`, …), and `msg.region`
+replaces the configured region wholesale, so one node can be re-aimed
+per message — four edges driven from a list, say — without four copies.
 
 No OpenCV engine is needed, and only the region's own pixels are read, so
 the cost follows the box you drew rather than the frame size.
-
-`line-finder` needs no OpenCV engine, and that is a measured choice rather
-than a shortcut: the bridge has no reduce and no derivative, and its `resize`
-samples instead of area-averaging, so it cannot build the banded mean profile
-a caliper is made of. The search is also 2.7x faster than it was, by resolving
-the interpolation weights once per region instead of once per sample for any
-unrotated region. ARCHITECTURE.md, "Why the caliper search is not OpenCV", has
-the numbers.
+ARCHITECTURE.md, "Why the caliper search is not OpenCV", has the
+measurements behind that choice.
 
 ### Aiming the region
 
@@ -892,12 +833,6 @@ fields, `Cancel` and Escape do not. The footer warns when the box hangs
 off the frame, which matters more than it looks: a caliper band that is
 not wholly inside the image is skipped, so a box half over the edge
 silently loses calipers rather than reading a partial average.
-
-The editor carries its own copy of the region geometry, since it has to
-draw exactly what the runtime will scan. `test/editorRegionGeometry.test.js`
-lifts that copy out of the .html and runs it against `lib/lineFinder.js`
-so the two cannot drift, and `test/lineFinderEditor.test.js` drives the
-viewer itself over a small fake DOM.
 
 ### Seeing what it did
 
@@ -961,18 +896,17 @@ Two things in it are worth copying to another rig:
 
 Finds and decodes barcodes (1D and 2D) via
 [`zxing-wasm`](https://github.com/Sec-ant/zxing-wasm), a WebAssembly build
-of the `zxing-cpp` engine — genuine multi-symbol detection, rotation
-tolerance and native DataMatrix support.
+of the `zxing-cpp` engine — multi-symbol detection, rotation tolerance and
+DataMatrix support.
 
 ### Why regions
 
 Scanning a whole multi-megapixel photo costs on the order of a second,
 almost all of it the detector's own search over the full frame. On a fixed
-rig — the same assumption the rest of this package makes — barcodes land
-in roughly the same place shot to shot, so telling the node where to look
-turns that into a handful of single-digit-millisecond crops: measured
-~2–15ms per region against ~1.4s for the same image scanned whole, on a
-4096×5500 photo.
+rig barcodes land in roughly the same place shot to shot, so telling the
+node where to look turns that into a handful of single-digit-millisecond
+crops: measured ~2–15ms per region against ~1.4s for the same image
+scanned whole, on a 4096×5500 photo.
 
 Mode **"Regions, then full image if nothing found"** (the default) keeps
 the whole-image scan as a safety net — a repositioned label, a mis-measured
@@ -990,9 +924,10 @@ object with `data`/`buffer`/`path`. Optional per-message overrides:
 One message per barcode found, in the order regions were scanned (then the
 full-image fallback, if it ran): `msg.text`, `msg.format`, `msg.roi`,
 `msg.regionLabel`, `msg.source` (`"region"` or `"fullImage"`),
-`msg.decodeMs`, `msg.timings`, and `msg.payload` set to a preview crop of
-that barcode's region. If nothing is found at all, one message with
-`msg.text = null`.
+`msg.barcodeIndex`, `msg.barcodeCount`, `msg.decodeMs`, `msg.timings`,
+and `msg.payload` set to a preview crop of that barcode's region. If
+nothing is found at all, one message with `msg.text = null` and
+`msg.barcodeCount = 0`.
 
 ### Notes
 
@@ -1011,120 +946,94 @@ that barcode's region. If nothing is found at all, one message with
   `/data` for anything that should survive a rebuild.
 - The working canvas the frame is decoded onto is sized by the calibrated
   mm/px if there is one, and otherwise by the same-rig assumption (one
-  native pixel spans the same distance in both images). That sizing no
-  longer has to be *right*, because the magnification search absorbs the
-  error — which is what lets an artwork golden work at all. The two are
-  not substitutes, though: the search recovers whatever scale it needs to
-  compare the images, while calibration is what tells you a pixel's worth
-  in millimetres. Only the latter makes the position numbers physical, so
-  calibrate if the position tolerance is specified in mm.
+  native pixel spans the same distance in both images). That sizing does
+  not have to be *right*, because the magnification search absorbs the
+  error. The two are not substitutes, though: the search recovers whatever
+  scale it needs to compare the images, while calibration is what tells
+  you a pixel's worth in millimetres. Only the latter makes the position
+  numbers physical, so calibrate if the position tolerance is specified
+  in mm.
 - What survives on a good part, once the geometry is right, is genuine
   artwork-versus-print difference rather than misalignment: dot gain and
   focus shift stroke weight slightly. Most of it is threshold-straddling
   rather than real, which is what `inkMargin` is for (above); widen
   `printTolerance`/`backgroundTolerance` for whatever is left, rather than
   loosening the alignment.
-- **The global transform places the label; it cannot place all of it.**
-  After a correctly recovered 5-DOF fit on this project's good pair, the
-  leftover displacement still has a median of 0.73px, a 90th percentile
-  of 1.55px, and individual regions sitting 4-5px out that match their
-  golden counterpart near-perfectly once shifted. Raising the global
-  model does not reach that: fitting a homography (8 DOF) to the measured
-  field removed 18% of it and a full quadratic (12 DOF) only 27%, because
-  no global warp can pull one corner 5px while leaving the two thirds of
-  the label that is already sub-pixel alone. A label on a formed tray is
-  not a plane.
+- **The global transform places the label; it cannot place all of it.** A
+  label on a formed tray is not a plane, so after a correct global fit
+  individual regions still sit 4–5px out (ARCHITECTURE.md, "Local
+  refinement", has the measurements). **Refine alignment per tile**
+  (`localAlign`, on by default) lets each tile take up its own offset,
+  capped at `localAlignMax` (3px) so a tile can never slide far enough to
+  hide a fault, and skipping tiles too flat to localise.
 
-  So **Refine alignment per tile** (`localAlign`, on by default) lets each
-  tile take up its own offset, capped at `localAlignMax` (3px) so a tile
-  can never slide far enough to hide a fault, and skipping tiles too flat
-  to localise.
-
-  Its value does not show up as a lower defect ratio, which is what makes
-  it easy to dismiss: at loose tolerances the dilation was already
-  forgiving the fringing this removes. It shows up as **headroom**. On the
+  Its value shows up as **headroom**, not as a lower defect ratio: on the
   demo pair, `printTolerance`/`backgroundTolerance` of 2/1 fails the clean
   part without refinement (a false region at density 0.250) and passes it
   with (zero regions), while the marked capture still fails either way.
   That is why the tolerance defaults are 2/1 rather than the 5/3 they had
-  to be before - roughly a two to threefold improvement in the size of
-  defect that can be gated. **If you turn `localAlign` off, widen them
-  again**, or the registration error it was absorbing will fail good
-  parts. Look at the `targetFgAligned` stage against `goldenFg` to see the
-  difference directly: body text goes from doubled to solid.
-- **Train the transform once instead of re-deriving it every frame.** The
-  alignment splits by what physically varies: magnification and press
-  stretch come from the camera's standoff and the press's pull on the
-  media and do not change between parts, while translation and rotation
-  are where this part happens to be sitting. Tick **Train the transform**
-  with a **Trained transform** path set (or send `msg.trainTransform`),
-  and the node measures `scaleX`/`scaleY` from that frame, writes them
-  down, and pins them on every later frame — solving only position and
-  angle. To train from any two images rather than the configured golden,
-  send `msg.golden` alongside `msg.payload`.
+  to be before. **If you turn `localAlign` off, widen them again**, or the
+  registration error it was absorbing will fail good parts. Look at the
+  `targetFgAligned` stage against `goldenFg` to see the difference
+  directly: body text goes from doubled to solid.
+- **Train the transform once instead of re-deriving it every frame.**
+  Magnification and press stretch come from the camera's standoff and the
+  press's pull on the media and do not change between parts; translation
+  and rotation are where this part happens to be sitting. Tick **Train the
+  transform** with a **Trained transform** path set (or send
+  `msg.trainTransform`), and the node measures `scaleX`/`scaleY` from that
+  frame, writes them down, and pins them on every later frame — solving
+  only position and angle. To train from any two images rather than the
+  configured golden, send `msg.golden` alongside `msg.payload`.
 
   It roughly halves the time (2.0–2.7x on this project's captures), but
-  the reason to do it is accuracy, not speed: a search free to re-solve
-  magnification per frame can pick wrong, and it is likeliest to do so on
-  a badly printed label — precisely the case the inspection exists for,
-  because poor print gives the search poor evidence. One such capture
-  went from 945 regions to 25 once its transform was pinned.
+  the reason to do it is accuracy: a search free to re-solve magnification
+  per frame can pick wrong, and it is likeliest to do so on a badly
+  printed label — precisely the case the inspection exists for. One such
+  capture went from 945 regions to 25 once its transform was pinned.
 
-  Three things to know. A trained record is tied to its golden and
-  working size, and both are checked on load; a mismatch is refused with
-  a reason rather than silently applied. "Its golden" means the image,
-  not the route the image took: the record stores a hash of the golden's
-  bytes alongside the cheap cache key, so training through `msg.golden`
-  and then producing frames from the configured **Golden image path**
-  reuses the record instead of refusing it every frame. (Before 1.1.1 it
-  refused, warned, and searched — the flow the paragraph above tells you
-  to use.) Records trained before 1.1.1 have no content hash; retrain
-  once. Scales outside a sane physical range (0.05–100) or an unreadable
-  file are refused the same way — the node searches unpinned rather than
-  applying nonsense (a corrupted record can no longer hang the flow). But the **stretch belongs to the
-  print run, not to the golden**, so a new run on the same artwork needs
-  retraining and no file check can see that coming — on this project's own
-  samples two captures from a different run want 5.9% where the rest want
-  4.5%, and forcing the wrong one on them produced ~1000 false regions.
-  What does catch it is the alignment residual jumping clear of what
-  training measured, and the node warns when it does.
+  A trained record is tied to its golden and working size, and both are
+  checked on load; a mismatch is refused with a reason rather than
+  silently applied. "Its golden" means the image, not the route the image
+  took: the record stores a hash of the golden's bytes alongside the
+  cheap cache key, so training through `msg.golden` and then producing
+  frames from the configured **Golden image path** reuses the record.
+  Records trained before 1.1.1 have no content hash; retrain once. Scales
+  outside a sane physical range (0.05–100) or an unreadable file are
+  refused the same way — the node searches unpinned rather than applying
+  nonsense. But the **stretch belongs to the print run, not to the
+  golden**, so a new run on the same artwork needs retraining and no file
+  check can see that coming — on this project's own samples two captures
+  from a different run want 5.9% where the rest want 4.5%, and forcing
+  the wrong one on them produced ~1000 false regions. What does catch it
+  is the alignment residual jumping clear of what training measured, and
+  the node warns when it does.
 
   Pinning also costs a little defect sensitivity: the polish objective is
   computed on a decimated canvas, so it cannot resolve a single full-res
   pixel of translation, and a pinned run can settle a pixel from where the
   searched run lands. On the demo capture the marked defect still fails
   the part, but as one region at density 0.156 rather than five at 0.172.
-- **The coarse search can pick a wrong scale, and used to be unable to
-  take it back.** Stages 1-3 rank candidates by a density proxy - ink per
-  grid cell - which cannot separate a correctly scaled match from one a
-  few percent off that happens to drop its ink in the same cells. Whatever
-  it picked, every later stage searched a narrow band around that pick.
-  The symptom is a whole frame failing at roughly 0.5% residual scale
-  error: about 10px of drift across the label, which on 1-2px strokes is
-  total disagreement, so hundreds of regions light up on a part whose real
+- **The coarse search can pick a wrong scale.** Its density proxy cannot
+  separate a correctly scaled match from one a few percent off, and the
+  symptom is a whole frame failing at roughly 0.5% residual scale error:
+  about 10px of drift across the label, which on 1-2px strokes is total
+  disagreement, so hundreds of regions light up on a part whose real
   faults are two small blemishes. `alignCandidates` (default 5) keeps that
-  many scale hypotheses alive through the fine stage and then picks
-  between them on **real pixel disagreement** rather than the proxy. On
-  this project's samples one capture went from 315 regions to 10 with no
-  change to any pair that was already aligning. Set it to 1 for the old
-  greedy behaviour.
-- `transform.score` is the alignment residual and is worth logging: on
-  these samples anything at or below ~0.05 tracks a handful of regions,
-  while ~0.10 tracks a thousand. A frame that fails everywhere with a high
-  score is misaligned, not defective - check that before believing the
-  blemish numbers, and check that the golden is the right *product* (two
-  different labels will happily align to a mediocre score and then
-  disagree everywhere).
+  many scale hypotheses alive through the fine stage and picks between
+  them on **real pixel disagreement** rather than the proxy. On this
+  project's samples one capture went from 315 regions to 10 with no change
+  to any pair that was already aligning. Set it to 1 for greedy behaviour.
 - **`workingSize` decides what defects are physically detectable, and it
   is the setting to reach for first when something real is being missed.**
   It is not merely a speed/quality dial: downscaling averages a thin mark
   into the substrate around it. A ~4px pen line on a 4096×5500 capture
-  measures grey 20 (essentially black) at `workingSize` 3072, but grey
-  **120 against a threshold of 143** at 1024 — 22 levels of contrast,
-  three quarters of the way to invisible. No downstream setting recovers
-  that; the evidence is gone before the threshold runs. Symptom to
-  recognise: the defect shows up in the raw `backgroundDefect` debug stage
-  as a scatter of specks rather than a stroke.
+  measures grey 20 (black) at `workingSize` 3072, but grey **120 against
+  a threshold of 143** at 1024 — three quarters of the way to invisible.
+  No downstream setting recovers that; the evidence is gone before the
+  threshold runs. Symptom to recognise: the defect shows up in the raw
+  `backgroundDefect` debug stage as a scatter of specks rather than a
+  stroke.
 - Once the mark survives decoding it still has to form a *region*, and a
   ~1.6px-wide stroke covers only ~14% of a 16×16 block — just under the
   0.15 `blockThreshold`. Halving `blockSize` to 8 is what lets a hairline
@@ -1140,20 +1049,19 @@ that barcode's region. If nothing is found at all, one message with
 - `golden-compare`'s golden reference is only re-decoded when its source
   (for a file: the path **plus the file's mtime and size**, so an
   in-place overwrite of the artwork re-decodes; for a buffer: its hash,
-  or `msg.goldenKey`), `workingSize`/`threshold`/`thresholdMode`/
-  `sauvolaRadius`/`sauvolaK`/`inkMargin`/`backgroundTolerance`/
-  `debugStages`, the calibrated scale (including the calibration photo's
-  native resolution), or raw geometry changes —
+  or `msg.goldenKey`), a setting baked into the prepared golden
+  (`workingSize`, `threshold`, `thresholdMode`, `sauvolaRadius`,
+  `sauvolaK`, `inkMargin`, `backgroundTolerance`, `debugStages`,
+  `heatmapFormat`, `heatmapQuality`), the calibrated scale (including the
+  calibration photo's native resolution), or raw geometry changes —
   `printTolerance`/`alignSearch`/etc. are applied fresh per frame and
   don't need a re-decode.
-- Turn off `outputPrintHeatmap`/`outputBackgroundHeatmap` for maximum
-  throughput if only the pass/fail decision and region lists are needed.
 - `sharp` ships prebuilt binaries for Alpine/musl, so no libvips
   source-compile is needed in this project's Docker build stage.
 
 ## Tests
 
-`npm test` (Node 18+, no test framework needed — `node --test`), 382
+`npm test` (Node 18+, no test framework needed — `node --test`), 390
 tests. Fixtures are generated with `sharp` rather than read from
 `data/sample_images`, so the suite runs anywhere; the real QC photos are
 gitignored. Coverage spans the lib pipeline (`compare`, `align`, `warp`,
@@ -1170,7 +1078,7 @@ perspective fit against transforms with known answers, and the
 checkerboard suite keystones a synthetic board, measures it, rectifies
 it with the measurement, and measures it again.
 
-Three of the suites assert something other than a value:
+Several suites assert something other than a value:
 
 - `test/fingerprint.test.js` counts digests and file reads, because the
   property is that the work does not happen at all — "it is fast now" is
@@ -1186,7 +1094,8 @@ Three of the suites assert something other than a value:
   `line-finder.html` and runs it against `lib/lineFinder.js`. The editor
   needs its own copy to draw what the runtime will scan, and two copies
   of a rotation convention drift silently — the box drawn stops being the
-  box searched.
+  box searched. `test/lineFinderEditor.test.js` drives the viewer itself
+  over a small fake DOM.
 - `test/lineFinderSampling.test.js` compares the two profile builders
   with `strictEqual` rather than a tolerance. The fast one exists only
   for speed, so the only acceptable difference is none.
@@ -1200,5 +1109,5 @@ the two are then not solving the same problem.
 
 Apache-2.0 — see [LICENSE](LICENSE).
 
-`sharp`, `zxing-wasm` and the optional native OpenCV engine are separate
+`sharp`, `zxing-wasm` and the optional OpenCV engines are separate
 packages under their own licences.

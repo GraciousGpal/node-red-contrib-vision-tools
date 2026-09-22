@@ -225,7 +225,6 @@ function makeEditorEnv({ script, imageSize = { width: 800, height: 600 } } = {})
 		revokeObjectURL() {},
 	};
 
-	// eslint-disable-next-line no-new-func
 	new Function("RED", "document", "window", "Image", "URL", script)(
 		RED,
 		document,

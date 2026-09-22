@@ -27,36 +27,10 @@
  * msg.text = null.
  */
 
-const fs = require("fs");
-const fsp = fs.promises;
 const { locateBarcodes, DEFAULT_FORMATS } = require("./lib/locate.js");
+const { resolveImage } = require("./lib/nodeInput.js");
 
 module.exports = (RED) => {
-	// same resolveImage contract as golden-compare.js / checkerboard-calibrate.js
-	async function resolveImage(source, label) {
-		if (source == null || source === "") {
-			throw new Error(`${label} is empty`);
-		}
-		if (Buffer.isBuffer(source) || source instanceof Uint8Array || source instanceof ArrayBuffer) {
-			return Buffer.from(source);
-		}
-		if (typeof source === "string") {
-			if (fs.existsSync(source)) return fsp.readFile(source);
-			throw new Error(`${label} does not exist on disk: "${source}"`);
-		}
-		if (typeof source === "object") {
-			const data = source.data || source.buffer;
-			if (Buffer.isBuffer(data) || data instanceof Uint8Array) {
-				return Buffer.from(data);
-			}
-			if (typeof source.path === "string" && fs.existsSync(source.path)) {
-				return fsp.readFile(source.path);
-			}
-			throw new Error(`${label} object must contain "data"/"buffer" or an existing "path"`);
-		}
-		throw new Error(`unsupported ${label} type: ${typeof source}`);
-	}
-
 	function normalizeRegions(regions) {
 		if (!Array.isArray(regions)) return [];
 		return regions
@@ -146,7 +120,9 @@ module.exports = (RED) => {
 				done();
 			} catch (err) {
 				node.status({ fill: "red", shape: "ring", text: "error" });
-				node.error(`barcode-locate: ${err && err.message ? err.message : err}`, msg);
+				// done(err) routes the failure through node.error exactly
+				// once; an explicit node.error here reported every failure
+				// twice (double log lines, Catch nodes firing twice)
 				done(err);
 			}
 		});

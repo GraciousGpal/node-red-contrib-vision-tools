@@ -58,22 +58,6 @@ async function half(image) {
 	).image;
 }
 
-function makeNode(file, config) {
-	let node;
-	const RED = {
-		nodes: {
-			createNode() {},
-			registerType(_n, ctor) {
-				node = { ctor };
-			},
-		},
-		util: { getMessageProperty: () => undefined },
-	};
-	require(file)(RED);
-	return { node, config };
-}
-void makeNode;
-
 async function buildGolden(flows, config) {
 	const pdfCfg = flows.find((n) => n.z === config.z && n.type === "pdf-to-image");
 	const pdfInput = flows.find(

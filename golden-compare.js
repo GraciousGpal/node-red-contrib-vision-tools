@@ -8,20 +8,13 @@
  * lives in lib/compare.js so it can be exercised outside Node-RED.
  *
  * Input (msg.payload): Buffer / Uint8Array / ArrayBuffer with image bytes,
- * a file path string, or an object { data | buffer | path }.
- * Optional per-message overrides: msg.golden (path/Buffer - swaps and
- * re-caches the golden reference), msg.threshold, msg.inkMargin,
- * msg.printTolerance,
- * msg.backgroundTolerance, msg.alignSearch, msg.positionToleranceXMm,
- * msg.positionToleranceYMm, msg.positionToleranceXPx,
- * msg.positionToleranceYPx, msg.blockSize, msg.blockThreshold,
- * msg.failThreshold, msg.failRatio, msg.outputPrintHeatmap,
- * msg.outputBackgroundHeatmap, msg.debugStages, msg.heatmapFormat,
- * msg.heatmapQuality.
+ * a file path string, or an object { data | buffer | path }; raw pixels
+ * carry their geometry on the object, msg.rawInfo, or msg.images[].
+ * Per-message overrides: msg.golden (path/Buffer - swaps and re-caches
+ * the golden reference), msg.goldenKey / msg.goldenRawInfo for it, and
+ * every setting the cfg block below reads from msg by the same name.
  */
 
-const fs = require("fs");
-const fsp = fs.promises;
 const crypto = require("crypto");
 const inspector = require("./lib/inspector.js");
 const { toShared } = require("./lib/shared.js");
@@ -31,6 +24,15 @@ const {
 	writeTransformFile,
 } = require("./lib/transformFile.js");
 const nuisance = require("./lib/nuisanceMap.js");
+const {
+	clampInt,
+	clampFloat,
+	pickMode,
+	isBytes,
+	assertUnderCap,
+	openRegularFile,
+	readRegularFile,
+} = require("./lib/nodeInput.js");
 
 module.exports = (RED) => {
 	const BOUNDS = {
@@ -57,86 +59,11 @@ module.exports = (RED) => {
 		mismatchScore: [0, 1],
 	};
 	const THRESHOLD_MODES = ["fixed", "otsu", "sauvola"];
-
-	function pickMode(value, fallback) {
-		return THRESHOLD_MODES.includes(value) ? value : fallback;
-	}
+	const HEATMAP_FORMATS = ["jpg", "png", "raw"];
 	const UNIT_BOUNDS = [0, 1];
-
-	function clampInt(value, fallback, [min, max]) {
-		const n = parseInt(value, 10);
-		if (isNaN(n)) return fallback;
-		return Math.min(max, Math.max(min, n));
-	}
-
-	function clampFloat(value, fallback, [min, max]) {
-		const n = parseFloat(value);
-		if (isNaN(n)) return fallback;
-		return Math.min(max, Math.max(min, n));
-	}
 
 	function fmtMs(ms) {
 		return ms < 1000 ? `${Math.round(ms)}ms` : `${(ms / 1000).toFixed(2)}s`;
-	}
-
-	// Image inputs are capped before anything copies, hashes, or reads
-	// them: an unbounded buffer would be copied and SHA-1'd on every
-	// message for no inspection value, and an unbounded path read would
-	// hang or OOM on a special file like /dev/zero. 512MB is far past the
-	// largest capture this pipeline is meant for (a 23MP framebuffer is
-	// ~90MB).
-	const MAX_IMAGE_BYTES = 512 * 1024 * 1024;
-
-	/**
-	 * Read an image file through one handle: open -> fstat -> guards ->
-	 * read. The guards are the point. A pathExists() then readFile() pair
-	 * is a race (the file can be swapped between the two), and an
-	 * unguarded path read lets a flow point msg.golden at /dev/zero and
-	 * hang the node on an endless read. Returns null when the path does
-	 * not exist, so callers can keep distinguishing "missing" from
-	 * "refused".
-	 */
-	async function openRegularFile(p, label) {
-		let fd;
-		try {
-			fd = await fsp.open(p, fs.constants.O_RDONLY);
-		} catch (err) {
-			if (err && (err.code === "ENOENT" || err.code === "ENOTDIR")) return null;
-			throw err;
-		}
-		try {
-			const stat = await fd.stat();
-			if ((stat.mode & fs.constants.S_IFMT) !== fs.constants.S_IFREG) {
-				throw new Error(
-					`${label} is not a regular file: "${p}" - refusing to read it`,
-				);
-			}
-			if (stat.size > MAX_IMAGE_BYTES) {
-				throw new Error(
-					`${label} is ${stat.size} bytes, above the ${MAX_IMAGE_BYTES}-byte cap: "${p}"`,
-				);
-			}
-			return { handle: fd, mtimeMs: stat.mtimeMs, size: stat.size };
-		} catch (err) {
-			await fd.close();
-			throw err;
-		}
-	}
-
-	/** open -> fstat -> guards -> read -> close, for callers that want the
-	 * bytes outright rather than a handle to fingerprint from. */
-	async function readRegularFile(p, label) {
-		const open = await openRegularFile(p, label);
-		if (!open) return null;
-		try {
-			return {
-				buffer: await open.handle.readFile(),
-				mtimeMs: open.mtimeMs,
-				size: open.size,
-			};
-		} finally {
-			await open.handle.close();
-		}
 	}
 
 	/** A raw descriptor that cannot fit in the buffer it travels with
@@ -158,22 +85,12 @@ module.exports = (RED) => {
 	 * `data`/`buffer` member of an object descriptor are validated
 	 * identically. */
 	function bytesOf(source) {
-		const data =
-			Buffer.isBuffer(source) ||
-			source instanceof Uint8Array ||
-			source instanceof ArrayBuffer
-				? source
-				: source && typeof source === "object"
-					? source.data || source.buffer
-					: null;
-		if (
-			Buffer.isBuffer(data) ||
-			data instanceof Uint8Array ||
-			data instanceof ArrayBuffer
-		) {
-			return data;
-		}
-		return null;
+		const data = isBytes(source)
+			? source
+			: source && typeof source === "object"
+				? source.data || source.buffer
+				: null;
+		return isBytes(data) ? data : null;
 	}
 
 	/** One copy of `data` into shared memory, as a Buffer view over it, so
@@ -189,14 +106,6 @@ module.exports = (RED) => {
 		const store = new SharedArrayBuffer(src.byteLength);
 		new Uint8Array(store).set(src);
 		return Buffer.from(store, 0, src.byteLength);
-	}
-
-	function assertUnderCap(data, label) {
-		if (data.byteLength > MAX_IMAGE_BYTES) {
-			throw new Error(
-				`${label} is ${data.byteLength} bytes, above the ${MAX_IMAGE_BYTES}-byte cap`,
-			);
-		}
 	}
 
 	/**
@@ -233,17 +142,17 @@ module.exports = (RED) => {
 		}
 		if (typeof source === "string") {
 			if (prefetched) return { buffer: await prefetched.handle.readFile() };
-			const file = await readRegularFile(source, label);
-			if (!file) {
+			const buffer = await readRegularFile(source, label);
+			if (!buffer) {
 				throw new Error(`${label} does not exist on disk: "${source}"`);
 			}
-			return { buffer: file.buffer };
+			return { buffer };
 		}
 		if (typeof source === "object") {
 			if (typeof source.path === "string") {
 				if (prefetched) return { buffer: await prefetched.handle.readFile() };
-				const file = await readRegularFile(source.path, label);
-				if (file) return { buffer: file.buffer };
+				const buffer = await readRegularFile(source.path, label);
+				if (buffer) return { buffer };
 			}
 			throw new Error(
 				`${label} object must contain "data"/"buffer" or an existing "path"`,
@@ -254,19 +163,15 @@ module.exports = (RED) => {
 
 	/**
 	 * A cheap, stable fingerprint of an image source, *without* reading or
-	 * hashing its bytes wherever that can be avoided. This is the half of the
-	 * old resolveImage that has to run on every message; loadImage is the
-	 * half that only has to run when the golden cache misses.
+	 * hashing its bytes wherever that can be avoided. This runs on every
+	 * message; loadImage only runs when the golden cache misses.
 	 *
 	 * Costs, per form:
 	 *  - a path is fingerprinted by mtime and size, so overwriting the golden
 	 *    in place still re-prepares the cache (and refuses the stale trained
 	 *    transform measured against the old bytes). The handle stays open for
-	 *    loadImage, so a hit costs one open+fstat and no read at all - it used
-	 *    to read the whole artwork on every frame and throw it away.
-	 *  - a named key (msg.goldenKey) skips the SHA-1 entirely. That is what
-	 *    the option was always documented to do and never actually did: the
-	 *    hash ran inside resolveImage before the name was consulted.
+	 *    loadImage, so a hit costs one open+fstat and no read at all.
+	 *  - a named key (msg.goldenKey) skips the SHA-1 entirely.
 	 *  - an unnamed buffer still has to be hashed. There is nothing else in
 	 *    it that says whether it changed.
 	 *
@@ -397,14 +302,7 @@ module.exports = (RED) => {
 		if (!msg) return undefined;
 		const explicit = rawGeometry(msg.goldenRawInfo);
 		if (explicit) return explicit;
-		if (
-			Buffer.isBuffer(source) ||
-			source instanceof Uint8Array ||
-			source instanceof ArrayBuffer
-		) {
-			return rawGeometryFromImages(msg);
-		}
-		return undefined;
+		return isBytes(source) ? rawGeometryFromImages(msg) : undefined;
 	}
 
 	function GoldenCompareNode(config) {
@@ -418,7 +316,7 @@ module.exports = (RED) => {
 		// artwork - synthetic pure black on pure white - and the frame is a
 		// photograph. There is no single grey level that is correct for
 		// both, and no reason to make the operator discover that.
-		node.thresholdMode = pickMode(config.thresholdMode, "otsu");
+		node.thresholdMode = pickMode(config.thresholdMode, "otsu", THRESHOLD_MODES);
 		node.sauvolaRadius = clampInt(config.sauvolaRadius, 24, BOUNDS.sauvolaRadius);
 		node.sauvolaK = clampFloat(config.sauvolaK, 0.2, BOUNDS.sauvolaK);
 		node.inkMargin = clampInt(config.inkMargin, 8, BOUNDS.inkMargin);
@@ -443,7 +341,7 @@ module.exports = (RED) => {
 			5,
 			BOUNDS.alignCandidates,
 		);
-		// 0 = auto (one per core, capped at 8, leaving one for the event
+		// 0 = auto (one per core, capped at 16, leaving one for the event
 		// loop); 1 disables the pool and keeps every stage on this thread
 		node.workers = clampInt(config.workers, 0, BOUNDS.workers);
 		// 0 disables the "this is a different label" check entirely
@@ -506,10 +404,7 @@ module.exports = (RED) => {
 		// JPEG unless asked for PNG: a heat map is a picture for a person,
 		// and PNG was ~150ms per image at working size (see encodeImage in
 		// lib/compare.js). Also applies to msg.stages.
-		node.heatmapFormat =
-			config.heatmapFormat === "png" || config.heatmapFormat === "raw"
-				? config.heatmapFormat
-				: "jpg";
+		node.heatmapFormat = pickMode(config.heatmapFormat, "jpg", HEATMAP_FORMATS);
 		node.heatmapQuality = clampInt(config.heatmapQuality, 85, [1, 100]);
 		node.debugStages = !!config.debugStages;
 		node.scaleFilePath = String(config.scaleFilePath || "").trim();
@@ -568,7 +463,7 @@ module.exports = (RED) => {
 				const cfg = {
 					workingSize: node.workingSize,
 					threshold: clampInt(msg.threshold, node.threshold, BOUNDS.threshold),
-					thresholdMode: pickMode(msg.thresholdMode, node.thresholdMode),
+					thresholdMode: pickMode(msg.thresholdMode, node.thresholdMode, THRESHOLD_MODES),
 					sauvolaRadius: clampInt(
 						msg.sauvolaRadius,
 						node.sauvolaRadius,
@@ -687,9 +582,7 @@ module.exports = (RED) => {
 							: !!msg.outputBackgroundHeatmap,
 					debugStages:
 						msg.debugStages == null ? node.debugStages : !!msg.debugStages,
-					heatmapFormat: ["png", "jpg", "raw"].includes(msg.heatmapFormat)
-						? msg.heatmapFormat
-						: node.heatmapFormat,
+					heatmapFormat: pickMode(msg.heatmapFormat, node.heatmapFormat, HEATMAP_FORMATS),
 					heatmapQuality: clampInt(
 						msg.heatmapQuality,
 						node.heatmapQuality,
@@ -722,8 +615,7 @@ module.exports = (RED) => {
 				// the most expensive thing this node can touch, and on the hot
 				// path they have not changed - re-reading the artwork file, or
 				// re-hashing a 12MB render, is time spent re-learning a constant.
-				// msg.goldenKey names the golden instead, which is what it was
-				// always documented to do.
+				// msg.goldenKey names the golden instead.
 				const named =
 					typeof msg.goldenKey === "string" && msg.goldenKey !== ""
 						? msg.goldenKey

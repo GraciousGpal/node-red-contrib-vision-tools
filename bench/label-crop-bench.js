@@ -1,6 +1,6 @@
 const { performance } = require("node:perf_hooks");
 const { labelCrop, available } = require("../lib/labelCrop.js");
-const { rawImage } = require("../test/helpers/synthetic.js");
+const { labelOnTray } = require("../test/helpers/synthetic.js");
 const sharp = require("sharp");
 
 function arg(name, fallback) {
@@ -13,38 +13,6 @@ const EDGE = Number(arg("edge", 640));
 const ITERATIONS = Math.max(2, Number(arg("iterations", 5)));
 const W = Number(arg("width", 6000));
 const H = Number(arg("height", 4000));
-
-/** Synthetic 24MP frame: dark tray, light label rotated 7deg with dark bars. */
-function makeFrame() {
-	const rgb = Buffer.alloc(W * H * 3);
-	const ca = Math.cos((7 * Math.PI) / 180);
-	const sa = Math.sin((7 * Math.PI) / 180);
-	const cx = W / 2;
-	const cy = H / 2;
-	const lw = W * 0.6;
-	const lh = H * 0.52;
-	const bars = [0.15, 0.3, 0.45, 0.6, 0.75].map((f) => (f - 0.5) * lh);
-	for (let y = 0; y < H; y++) {
-		const row = y * W * 3;
-		for (let x = 0; x < W; x++) {
-			const u = (x - cx) * ca + (y - cy) * sa;
-			const v = -(x - cx) * sa + (y - cy) * ca;
-			let value = 70;
-			if (Math.abs(u) <= lw / 2 && Math.abs(v) <= lh / 2) {
-				value = 236;
-				for (const bar of bars) {
-					if (Math.abs(u) < lw * 0.35 && Math.abs(v - bar) < lh * 0.03) {
-						value = 30;
-						break;
-					}
-				}
-			}
-			const i = row + x * 3;
-			rgb[i] = rgb[i + 1] = rgb[i + 2] = value;
-		}
-	}
-	return rawImage(rgb, W, H, 3, "RGB");
-}
 
 function percentile(values, fraction) {
 	const sorted = [...values].sort((a, b) => a - b);
@@ -105,7 +73,7 @@ async function main() {
 		return;
 	}
 	console.error(`building ${W}x${H} synthetic frame...`);
-	const frame = makeFrame();
+	const frame = labelOnTray(W, H);
 	const results = [await measure(frame, "raw", "raw")];
 	if (!ONLY_RAW) {
 		const image = sharp(frame.data, {

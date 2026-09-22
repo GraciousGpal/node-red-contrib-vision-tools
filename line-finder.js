@@ -34,6 +34,7 @@ module.exports = (RED) => {
 		POLARITIES,
 		EDGE_SELECTS,
 	} = require("./lib/lineFinder.js");
+	const { clampInt, clampFloat, pickMode } = require("./lib/nodeInput.js");
 
 	const BOUNDS = {
 		calipers: [1, 512],
@@ -46,22 +47,6 @@ module.exports = (RED) => {
 		minScore: [0, 1],
 		previewWidth: [80, 600],
 	};
-
-	function clampInt(value, fallback, [min, max]) {
-		const n = Number.parseInt(value, 10);
-		if (Number.isNaN(n)) return fallback;
-		return Math.min(max, Math.max(min, n));
-	}
-
-	function clampFloat(value, fallback, [min, max]) {
-		const n = Number.parseFloat(value);
-		if (Number.isNaN(n)) return fallback;
-		return Math.min(max, Math.max(min, n));
-	}
-
-	function pickMode(value, fallback, allowed) {
-		return allowed.includes(value) ? value : fallback;
-	}
 
 	/**
 	 * Grayscale raster from whatever the flow handed us.

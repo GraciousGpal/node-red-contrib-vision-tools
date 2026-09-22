@@ -99,7 +99,6 @@ test("resolve() agrees with candidate() and warmup() reports the name", { skip: 
 test("label-crop reports the engine as available on this host", { skip: !cvjsInstalled }, () => {
 	// label-crop treats a missing engine as a setup error and refuses every
 	// frame; with the WASM build installed that state is unreachable.
-	// eslint-disable-next-line global-require
 	const { available } = require("../lib/labelCrop.js");
 	assert.strictEqual(available(), true);
 });

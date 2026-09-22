@@ -22,29 +22,11 @@ const os = require("node:os");
 const path = require("node:path");
 const fsp = require("node:fs/promises");
 const sharp = require("sharp");
+const { loadNode } = require("./helpers/fakeRed.js");
+const { boardSvg } = require("./helpers/synthetic.js");
 
 function makeNode(config = {}) {
-	const RED = {
-		nodes: {
-			createNode(node, cfg) {
-				node.config = cfg;
-				node.listeners = {};
-				node.on = (evt, fn) => {
-					node.listeners[evt] = fn;
-				};
-				node.send = () => {};
-				node.error = () => {};
-				node.warn = () => {};
-				node.log = () => {};
-				node.status = () => {};
-			},
-			registerType(name, ctor) {
-				RED.nodes.ctor = ctor;
-			},
-		},
-	};
-	require("../checkerboard-calibrate.js")(RED);
-	const node = new RED.nodes.ctor(config);
+	const node = loadNode("checkerboard-calibrate.js", config);
 	const sent = [];
 	const errors = [];
 	const doneErrors = [];
@@ -60,24 +42,6 @@ function makeNode(config = {}) {
 			}
 		});
 	return { node, run, sent, errors, doneErrors };
-}
-
-/** Synthetic checkerboard: `cols` x `rows` physical squares, top-left
- * light, each square `size` px. */
-function boardSvg(cols, rows, size) {
-	let cells = "";
-	for (let r = 0; r < rows; r++) {
-		for (let c = 0; c < cols; c++) {
-			const dark = (r + c) % 2 === 1;
-			cells += `<rect x="${c * size}" y="${r * size}" width="${size}" height="${size}" fill="${dark ? "#000" : "#fff"}"/>`;
-		}
-	}
-	return Buffer.from(
-		`<svg xmlns="http://www.w3.org/2000/svg" width="${cols * size}" height="${rows * size}">` +
-			`<rect width="100%" height="100%" fill="#fff"/>` +
-			cells +
-			`</svg>`,
-	);
 }
 
 const png = (svg) => sharp(svg).png().toBuffer();

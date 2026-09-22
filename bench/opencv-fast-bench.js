@@ -1,5 +1,5 @@
 /**
- * Real-image benchmark for the aggressive OpenCV alignment prototype.
+ * Real-image benchmark for golden-compare's native alignment paths.
  *
  * Usage (paths are container defaults):
  *   node bench/opencv-fast-bench.js [golden.png] [frame.png] [iterations]

@@ -6,7 +6,6 @@ data/
 *.jpg
 *.jpeg
 *.png
-!icons/*.png
 
 # Local calibration and transform files the nodes write next to a flow
 calibration.json

@@ -72,7 +72,11 @@ authoritative list.
 
 | file | role |
 | --- | --- |
-| `golden-compare.js` | Node-RED wiring: config, bounds/clamping, `msg` overrides, golden cache, transform training, logging |
+| `golden-compare.js` | Node-RED wiring: config and clamping, `msg` overrides, golden cache key, transform and nuisance-map training, logging; hands frames to `lib/inspector.js` |
+| `lib/nodeInput.js` | input handling shared by every node: bounded `clampInt`/`clampFloat`/`pickMode` settings and the size-capped image loader for `msg.payload` / `msg.golden` (bytes, a path, or an object carrying `data`/`buffer`/`path`) |
+| `lib/inspector.js` | main-thread client for the inspection pipeline: one unref()'d worker per process, spawned on first use; runs the core inline when worker threads or `SharedArrayBuffer` are unavailable |
+| `lib/inspectorCore.js` | the pipeline behind one request/response surface (`prepare`, `inspect`, `calibrate`, `rectify`) plus the bounded prepared-golden store; same code on the worker and inline, no file I/O |
+| `lib/inspectorWorker.js` | worker side of the inspector: message plumbing around `inspectorCore`, replies matched to requests by id |
 | `lib/compare.js` | the pipeline above — `prepareGolden` and `compareFrame` |
 | `lib/align.js` | global transform search: coarse-to-fine over scale, stretch, angle, translation |
 | `lib/localAlign.js` | per-tile displacement field and its application |
@@ -81,17 +85,27 @@ authoritative list.
 | `lib/dilate.js` | separable morphological dilation (van Herk/Gil-Werman) |
 | `lib/integral.js` | summed-area tables — O(1) box sums; binary masks stay `Uint32`, grey tables use a `Float64` accumulator (a `Uint32` grey table wraps past ~16.8M bright pixels and silently corrupts the warp) |
 | `lib/components.js` | connected components for region extraction |
-| `lib/transformFile.js` | trained-transform persistence and its validity guards |
-| `lib/scaleFile.js` | mm/px calibration file, shared with `checkerboard-calibrate` and `perspective-rectify`; validates the homography when one is stored |
+| `lib/parallel.js` | parallel forms of the per-pixel stages (dilate, integral, warp, rectify, local-align field), each falling back to its serial twin when the pool is unavailable, the image is small, or one worker was asked for |
+| `lib/pool.js` | persistent worker-thread pool for the per-pixel stages: created once and never torn down, dispatches settled by id, `shouldParallelise` gate |
+| `lib/poolWorker.js` | worker side of the pool: the row/column-range kernels, asserted byte-identical to their serial reference implementations |
+| `lib/shared.js` | `SharedArrayBuffer`-backed allocators for the buffers the pool operates on; plain buffers and `HAS_SAB === false` when it is unavailable |
+| `lib/transformFile.js` | trained-transform persistence and its validity guards (golden identity, working size); reuses `lib/scaleFile.js`'s path and number helpers |
+| `lib/scaleFile.js` | mm/px calibration file, shared with `checkerboard-calibrate` and `perspective-rectify`; validates the homography when one is stored; exports `pathExists`/`isFinitePositive` for `transformFile` |
 | `lib/checkerboard.js` | checkerboard detection for mm/px calibration, and the plane homography from the same centroids (`measurePerspective`) |
+| `checkerboard-calibrate.js` | Node-RED wiring: measures the checkerboard photo on the inspector, compares mm/px against the saved baseline, `msg.save` persists the new scale and homography |
 | `lib/homography.js` | similarity and normalised-DLT homography fits, inversion, rescaling between capture resolutions |
 | `lib/rectify.js` | `warpPerspective`: bilinear inverse-mapped resample with border replication, pure JS |
 | `perspective-rectify.js` | Node-RED wiring: reads the scale file's homography, resolves the frame to raw, warps it on the inspector worker |
 | `label-crop.js` | Node-RED wiring for the label-crop node: config/clamping, engine availability gate, `msg.labelCrop` attachment, optional before/after preview publish |
 | `lib/labelCrop.js` | deskew-and-crop op: decode-once, low-res Otsu mask analysis (connected component + exterior minimum-area rectangle) + brightness/Sobel boundary refinement, ROI-only rotation, final crop in the engine; composes the OpenCV engine |
+| `line-finder.js` | Node-RED wiring for the line-finder node: config/clamping, `msg.region` override, payload passes through with `msg.lineFinder` attached; a miss is a result, not an error; needs no engine |
+| `lib/lineFinder.js` | caliper line finder: sample a user-drawn region in its own axes, average bands into profiles, sub-pixel edge per caliper, outlier-dropping total-least-squares line fit; pure JS over a grey raster |
 | `lib/engine.js` | picks the OpenCV engine (native addon or opencv.js WASM), honours `VISION_TOOLS_ENGINE`, warms it up |
 | `lib/cvjs.js` | the cpp-bridge op surface on `@techstark/opencv-js`: colorConvert, resize, filter (otsu/edge), crop, rotate — raw in, raw out |
 | `lib/cvjsAlign.js` | `imageAlign` on opencv.js: ORB + RANSAC affine, ECC refinement, one warp into the reference frame |
+| `lib/nativeSeed.js` | optional OpenCV-solved alignment: `seedTransform` gives the JS search a starting point, `alignFrame` returns the already-warped golden-sized frame; both return null on failure so the JS path stays the fallback |
+| `barcode-locate.js` | Node-RED wiring for the barcode-locate node: scans pre-defined regions, then the full image if nothing is found; one message per barcode, `msg.regions`/`msg.mode` overrides |
+| `lib/locate.js` | barcode location and decode on zxing-wasm (zxing-cpp as WASM): decodes the union bounding box of the regions via sharp's extract-on-load, whole-frame fallback; plain functions over Buffers |
 | `lib/nuisanceMap.js` | trained per-block baseline of what "clean" looks like, so a recurring registration artifact stops masking a real blemish |
 
 ## The geometry model
@@ -219,6 +233,73 @@ easy to mistake for a diff problem: a stroke one working-pixel wide
 cannot fill 15% of a 16×16 block wherever it lands, so a hairline is
 detected and then discarded as speck noise.
 
+## The blemish floor, and the nuisance map that lowers it
+
+The background blemish check counts pixels where the frame has ink and
+the golden does not. Registration is never exact, so wherever the golden
+carries a hard ink edge a sub-pixel misalignment paints a thin line of
+"extra ink" along it. That is not noise in the statistical sense - it is
+in the **same place on every frame**, because the feature causing it is
+always there.
+
+Measured on a 162-frame production run: an 8px-wide strip at (112, 168)
+reached density 0.25 in 78 of 148 good frames, and one at (72, 2088) in
+143 of them. `failThreshold` has to sit above that floor, which puts it at
+0.5 - and a real blemish measured 0.39. It was invisible not because it
+was weak but because the floor was high.
+
+**Nothing aggregate could separate them.** Over that run the good frames
+scored *worse* than the two defective ones on every metric the verdict had
+access to:
+
+| metric | good (148) max | the two being accepted |
+| --- | ---: | ---: |
+| worst block density | 0.422 | 0.391 |
+| largest region, cells | 24 | 23 |
+| region mass | 8.19 | 5.69 |
+| defect ratio | 0.00042 | 0.00019 |
+
+So the separating signal is not magnitude, it is **location**. The corner
+blemish sat where *no good frame ever flags* - 0 of 148 - while the
+artifacts setting the floor recur in most of them.
+
+`lib/nuisanceMap.js` trains a per-block baseline from known-good frames
+and scores each block against its own history:
+
+```
+excess[i] = max(0, density[i] - baseline[i])
+```
+
+A recurring artifact scores ~0 however dark it is, because its baseline is
+just as dark. A blemish on normally-clean substrate scores its full
+density. The gate is layered on the existing density and ratio checks and
+is inert until a map exists, so an untrained rig is unchanged.
+
+Held out - each good frame scored against a map trained without it, since
+a map validated on its own training frames reports a gap it cannot
+reproduce:
+
+| training frames | worst good | the two defects |
+| ---: | ---: | --- |
+| 37 | 0.2655 | 0.3281, 0.3906 |
+| 74 | 0.2500 | 0.3281, 0.3906 |
+
+End to end through the real handler: 0 of 148 good rejected, 0 of 14 bad
+accepted, against 2 accepted before.
+
+**Two limits worth knowing.** It cannot see a defect landing exactly on a
+chronically dirty spot - there the baseline is the artifact’s own, which
+is the deliberate trade: a known false-accept mechanism suppressed at the
+cost of desensitising blocks that were never trustworthy. And the usable
+threshold window is narrow, ~0.27-0.32, with its lower edge set by the
+training set size. More training frames is the fix for a false reject, not
+a higher threshold - that trades directly against the defect this exists
+to catch.
+
+The accumulator keeps the 8 largest values per cell and takes the second,
+so a single contaminated training frame cannot blind a cell for good. Two
+can; `test/nuisanceMap.test.js` pins both halves of that.
+
 ## Input
 
 Either side can arrive as a file path, an encoded buffer (PNG/JPEG/…), or
@@ -238,7 +319,7 @@ in is one assignment:
 pdf-to-image (format: RAW) → msg.golden = msg.payload → golden-compare
 ```
 
-Two traps, both guarded — plus a third:
+Three traps, all guarded:
 
 - `msg.images[]` from that node is **per-page metadata only** and carries
   no pixels. It is also read for the *frame* — but only when no golden
@@ -331,14 +412,12 @@ Measured on the demo pair at `workingSize` 3072, transform pinned
 | debug stages | — | — | **+690** when enabled |
 | heat maps | — | — | **+223** when enabled |
 
-Those numbers predate the block-density rewrite: `buildHeatmapGrid` used
-to build a full-resolution summed-area table per blemish channel to read
-non-overlapping blocks out of it. Blocks never overlap, so every pixel is
-counted exactly once and the table bought nothing. Measured in the Node-RED
-test container over 162 images (`bench/golden-performance.md`), the
-grid/region stage goes 22.5ms -> 8.7ms median and whole-frame comparison
-110.6ms -> 96.2ms, avoiding ~25MB of temporary allocation per frame at a
-1475x2125 golden, with byte-identical results. The common path only: the
+
+Those numbers predate the block-density rewrite (CHANGELOG.md, 1.1.0):
+`buildHeatmapGrid` used to build a full-resolution summed-area table per
+blemish channel to read non-overlapping blocks out of it, which bought
+nothing because blocks never overlap. The grid/region stage is now 8.7ms
+median rather than 22.5ms, with byte-identical results; the
 unpinned-search tail is unaffected.
 
 The working size is not negotiable: 3072 is the only setting at which the
@@ -444,16 +523,6 @@ sensor resolution with no downscale, ~59ms of synchronous work on a
 The per-pixel stages run on a persistent worker pool (`lib/pool.js`),
 which takes them from 323ms to 88ms. Four properties make it safe:
 
-Both per-frame summed-area tables are built on it too. The serial form
-fuses each row's prefix sum with the column accumulation, which is the
-right shape for one thread — it reads the row above as it writes, so no
-two rows can run at once. Split into two passes each dimension is
-independent, and the arithmetic is untouched: Uint32 addition is exact
-modulo 2^32, and the Float64 table only ever holds small exact integers,
-so both are byte-identical to the serial tables whatever the core count.
-On a 4096x5500 frame the mask table falls out of the align bucket
-(677ms → 599ms) and the grey table goes 113ms → 39ms.
-
 - **One implementation.** The workers call the same `warpRows`,
   `fieldRows`, `applyRows` and `slidingMax1D` the main thread does, rather
   than a copy. A divergence would show up as a defect that appears or
@@ -468,6 +537,16 @@ On a 4096x5500 frame the mask table falls out of the align bucket
 - **Every stage falls back.** Small images, `workers: 1`, or a missing
   `SharedArrayBuffer` all take the serial path, which stays the reference
   implementation.
+
+Both per-frame summed-area tables are built on it too. The serial form
+fuses each row's prefix sum with the column accumulation, which is the
+right shape for one thread — it reads the row above as it writes, so no
+two rows can run at once. Split into two passes each dimension is
+independent, and the arithmetic is untouched: Uint32 addition is exact
+modulo 2^32, and the Float64 table only ever holds small exact integers,
+so both are byte-identical to the serial tables whatever the core count.
+On a 4096x5500 frame the mask table falls out of the align bucket
+(677ms → 599ms) and the grey table goes 113ms → 39ms.
 
 Two invariants hold the *concurrent* case together, and both were wrong
 until 1.0.2. Node-RED never awaits a node's input handler, so two frames
@@ -514,19 +593,16 @@ stays ~135ms whatever the core count.
 - **coarse-to-fine inspection** — diff at low resolution, then re-inspect
   only flagged neighbourhoods at full resolution. The largest remaining
   win, since the whole reason for 3072 is a handful of pixels;
-- **parallel summed-area table** — 41ms, two passes (rows then columns);
 - **native or WASM inner loops** for the warp and the diff.
 
 The `nativeFastAlign` branch is the intentionally non-equivalent version of
-that experiment: OpenCV owns decode, unrestricted affine solve, and global
-warp, so the grey table, binary table, all JS search/polish rounds, and the JS
-global warp disappear. Local refinement and blemish policy remain. It measured
-663ms -> 243ms on the clean 4096x5500 PNG and 1065ms -> 443ms on the
-high-compression reject, with diagnostics off. It also changes the geometry
-model and resampling, so `transform.native` marks its results and it remains an
-opt-in prototype. A geometry/score guard refuses native fits outside
-`maxAngleDeg`, more than 3% from either trained scale, or above 0.15 mask
-disagreement, then runs the trained JS path and reports `nativeFallback`.
+that experiment: OpenCV owns decode, an unrestricted affine solve and the
+global warp, so both summed-area tables, the JS search and polish, and the
+JS global warp disappear; local refinement and the blemish policy remain.
+It also changes the geometry model and the resampling, so
+`transform.native` marks its results, a geometry/score guard falls back to
+the trained JS path (`nativeFallback`), and it stays an opt-in prototype.
+Acceptance bounds and timings are in the README.
 
 Also taken already: the polish objective runs on a fixed 320px canvas
 rather than half the golden (search 1643 → 250ms), and the tile matcher
@@ -546,17 +622,9 @@ which the first-improvement walk it replaced could not offer — that walk
 re-derived each probe from whatever it had just accepted, which is
 exactly what made its evaluations sequential.
 
-Measured against a fixed pin, 16 cores, `workingSize` 2048:
 
-| | before | after |
-| --- | ---: | ---: |
-| 8 workers, pinned — search | 220ms | 222ms |
-| 8 workers, pinned — worst event-loop block | 257ms | **93ms** |
-| 8 workers, unpinned — search | 1959ms | **1718ms** |
-| alignment residual, pinned | 0.003978 | **0.003813** |
-| alignment residual, unpinned | 0.008836 | **0.008698** |
-
-The registration is better on every fixture measured and the contiguous
+Measured against a fixed pin (the table is under 1.0.2 in CHANGELOG.md),
+the registration is better on every fixture and the contiguous event-loop
 block on the pinned path drops 2.8×. Pinned search time is at **parity**,
 not faster: the pattern search does roughly 2.5× the evaluations and the
 pool absorbs them rather than beating them.
@@ -648,7 +716,7 @@ than the loop - and it is split across the nested pool by rows
 byte-identical to the serial warp): 127ms serial to ~20ms on a 1500x1850
 RGB frame, ~1s to ~140ms on 24MP.
 
-## label-crop: a fast deskew-crop node on the native engine
+## label-crop: a fast deskew-crop node on the OpenCV engine
 
 `label-crop` solves a different problem from golden-compare's own
 alignment, and the difference is why it exists as a separate node:
@@ -766,15 +834,11 @@ platforms without a binary.
 
 ### Two engines behind one op surface
 
-`lib/engine.js` chooses which OpenCV actually answers these calls:
-
-| | native | opencv-js |
-|---|---|---|
-| package | `@rosepetal/node-red-contrib-image-tools` | `@techstark/opencv-js` |
-| form | C++ addon over the promisified `cpp-bridge` | opencv.js, WASM, wrapped by `lib/cvjs.js` + `lib/cvjsAlign.js` |
-| platforms | linux-x64/arm64, linuxmusl-x64, darwin-x64/arm64 | anywhere Node runs, win32 included |
-| threading | native threads | single-threaded, on the event loop |
-| codecs | decodes and encodes jpg/png/webp | none — raw in, raw out |
+`lib/engine.js` chooses which OpenCV actually answers these calls: the
+native `@rosepetal/node-red-contrib-image-tools` addon over the promisified
+`cpp-bridge`, or `@techstark/opencv-js` wrapped by `lib/cvjs.js` +
+`lib/cvjsAlign.js` (the README's engine table has platforms, threading
+and codecs).
 
 The default is native where a prebuilt binary exists and WASM everywhere
 else; `VISION_TOOLS_ENGINE` pins one, and a pinned engine that will not
@@ -850,73 +914,6 @@ WASM implementation recovers the shift at every size tested.
 
 `bench/engine-compare.js` runs both, on the same frames, on whichever
 host has them.
-
-### The blemish floor, and the nuisance map that lowers it
-
-The background blemish check counts pixels where the frame has ink and
-the golden does not. Registration is never exact, so wherever the golden
-carries a hard ink edge a sub-pixel misalignment paints a thin line of
-"extra ink" along it. That is not noise in the statistical sense - it is
-in the **same place on every frame**, because the feature causing it is
-always there.
-
-Measured on a 162-frame production run: an 8px-wide strip at (112, 168)
-reached density 0.25 in 78 of 148 good frames, and one at (72, 2088) in
-143 of them. `failThreshold` has to sit above that floor, which puts it at
-0.5 - and a real blemish measured 0.39. It was invisible not because it
-was weak but because the floor was high.
-
-**Nothing aggregate could separate them.** Over that run the good frames
-scored *worse* than the two defective ones on every metric the verdict had
-access to:
-
-| metric | good (148) max | the two being accepted |
-| --- | ---: | ---: |
-| worst block density | 0.422 | 0.391 |
-| largest region, cells | 24 | 23 |
-| region mass | 8.19 | 5.69 |
-| defect ratio | 0.00042 | 0.00019 |
-
-So the separating signal is not magnitude, it is **location**. The corner
-blemish sat where *no good frame ever flags* - 0 of 148 - while the
-artifacts setting the floor recur in most of them.
-
-`lib/nuisanceMap.js` trains a per-block baseline from known-good frames
-and scores each block against its own history:
-
-```
-excess[i] = max(0, density[i] - baseline[i])
-```
-
-A recurring artifact scores ~0 however dark it is, because its baseline is
-just as dark. A blemish on normally-clean substrate scores its full
-density. The gate is layered on the existing density and ratio checks and
-is inert until a map exists, so an untrained rig is unchanged.
-
-Held out - each good frame scored against a map trained without it, since
-a map validated on its own training frames reports a gap it cannot
-reproduce:
-
-| training frames | worst good | the two defects |
-| ---: | ---: | --- |
-| 37 | 0.2655 | 0.3281, 0.3906 |
-| 74 | 0.2500 | 0.3281, 0.3906 |
-
-End to end through the real handler: 0 of 148 good rejected, 0 of 14 bad
-accepted, against 2 accepted before.
-
-**Two limits worth knowing.** It cannot see a defect landing exactly on a
-chronically dirty spot - there the baseline is the artifact’s own, which
-is the deliberate trade: a known false-accept mechanism suppressed at the
-cost of desensitising blocks that were never trustworthy. And the usable
-threshold window is narrow, ~0.27-0.32, with its lower edge set by the
-training set size. More training frames is the fix for a false reject, not
-a higher threshold - that trades directly against the defect this exists
-to catch.
-
-The accumulator keeps the 8 largest values per cell and takes the second,
-so a single contaminated training frame cannot blind a cell for good. Two
-can; `test/nuisanceMap.test.js` pins both halves of that.
 
 ### Confidence gates: a miss is safer than a wrong crop
 
@@ -1084,7 +1081,7 @@ Two things that bite when adding a setting, both learned the hard way:
   value for it, so a strict `RED.validators.number()` marks it *"invalid
   properties"* — in every deployed flow, not just the one being worked on,
   and the message points at the node rather than at what happened. All the
-  numeric validators in both nodes allow blank for that reason
+  numeric validators in every node allow blank for that reason
   (`RED.validators.number(true)`); the runtime clamps a missing or blank
   value to the same default anyway.
 - **Anything baked into `prepareGolden` must go in the golden cache key**

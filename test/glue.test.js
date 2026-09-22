@@ -33,31 +33,12 @@ const path = require("node:path");
 const fsp = require("node:fs/promises");
 const sharp = require("sharp");
 const { prepareGolden } = require("../lib/compare.js");
+const { loadNode } = require("./helpers/fakeRed.js");
 
 // ---- fake RED harness -------------------------------------------------
 
 function makeNode(config = {}) {
-	const RED = {
-		nodes: {
-			createNode(node, cfg) {
-				node.config = cfg;
-				node.listeners = {};
-				node.on = (evt, fn) => {
-					node.listeners[evt] = fn;
-				};
-				node.send = () => {};
-				node.error = () => {};
-				node.warn = () => {};
-				node.log = () => {};
-				node.status = () => {};
-			},
-			registerType(name, ctor) {
-				RED.nodes.ctor = ctor;
-			},
-		},
-	};
-	require("../golden-compare.js")(RED);
-	const node = new RED.nodes.ctor(config);
+	const node = loadNode("golden-compare.js", config);
 	const sent = [];
 	const warns = [];
 	const errors = [];
@@ -611,4 +592,23 @@ test("a bare-buffer frame decodes raw via msg.rawInfo", async () => {
 	assert.strictEqual(doneErrors.length, 0, doneErrors.join("\n"));
 	assert.strictEqual(sent.length, 1);
 	assert.strictEqual(sent[0].payload, true);
+});
+
+// ---- barcode-locate: single failure report ------------------------------
+
+test("barcode-locate reports a failure once, through done(err) only", async () => {
+	const node = loadNode("barcode-locate.js", { mode: "regionsOnly", regions: [] });
+	const errors = [];
+	const statuses = [];
+	const doneErrors = [];
+	node.send = () => {};
+	node.error = (m) => errors.push(String(m));
+	node.status = (s) => statuses.push(s);
+	await node.listeners.input({ payload: 42 }, undefined, (err) => {
+		if (err) doneErrors.push(err && err.message ? String(err.message) : String(err));
+	});
+	assert.strictEqual(doneErrors.length, 1, doneErrors.join("\n"));
+	assert.match(doneErrors[0], /unsupported msg\.payload type: number/);
+	assert.strictEqual(errors.length, 0, "done(err) must be the only report");
+	assert.deepStrictEqual(statuses.at(-1), { fill: "red", shape: "ring", text: "error" });
 });

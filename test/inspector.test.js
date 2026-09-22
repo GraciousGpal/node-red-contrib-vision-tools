@@ -35,31 +35,12 @@ const fsp = require("node:fs/promises");
 const sharp = require("sharp");
 const inspector = require("../lib/inspector.js");
 const core = require("../lib/inspectorCore.js");
+const { loadNode } = require("./helpers/fakeRed.js");
 
 test.after(() => inspector.shutdown());
 
 function makeNode(config = {}) {
-	const RED = {
-		nodes: {
-			createNode(node, cfg) {
-				node.config = cfg;
-				node.listeners = {};
-				node.on = (evt, fn) => {
-					node.listeners[evt] = fn;
-				};
-				node.send = () => {};
-				node.error = () => {};
-				node.warn = () => {};
-				node.log = () => {};
-				node.status = () => {};
-			},
-			registerType(name, ctor) {
-				RED.nodes.ctor = ctor;
-			},
-		},
-	};
-	require("../golden-compare.js")(RED);
-	const node = new RED.nodes.ctor(config);
+	const node = loadNode("golden-compare.js", config);
 	const sent = [];
 	node.send = (m) => sent.push(m);
 	node.warn = () => {};
@@ -157,7 +138,7 @@ test("debug stages arrive as real Buffers", async () => {
 	const stages = sent[0].stages;
 	assert.ok(stages && Object.keys(stages).length >= 8, "expected the stage set");
 	// grey stages follow heatmapFormat (JPEG by default); masks are always
-	// PNG - see renderMaskPng
+	// PNG - see renderMask
 	const isMask = (name) => /Fg|Defect/.test(name);
 	for (const [name, v] of Object.entries(stages)) {
 		assert.ok(Buffer.isBuffer(v), `stages.${name} is ${v.constructor.name}`);
@@ -310,27 +291,7 @@ test("checkerboard-calibrate still measures through the inspector", async () => 
 		),
 	);
 
-	const RED = {
-		nodes: {
-			createNode(node, cfg) {
-				node.config = cfg;
-				node.listeners = {};
-				node.on = (e, f) => {
-					node.listeners[e] = f;
-				};
-				node.send = () => {};
-				node.error = () => {};
-				node.warn = () => {};
-				node.log = () => {};
-				node.status = () => {};
-			},
-			registerType(n, c) {
-				RED.nodes.ctor = c;
-			},
-		},
-	};
-	require("../checkerboard-calibrate.js")(RED);
-	const node = new RED.nodes.ctor({
+	const node = loadNode("checkerboard-calibrate.js", {
 		cols: 4,
 		rows: 3,
 		squareMm: 10,

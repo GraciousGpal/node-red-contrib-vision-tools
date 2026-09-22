@@ -479,10 +479,9 @@ weeks of that work. Everything below in this entry shipped in it.
 
 - **`nativeAlignSeed` - a prototype, off by default.** The pinned search
   can start from an ORB+ECC alignment measured by the optional
-  optional native OpenCV engine instead of from the
-  staged sweeps. On a 4096x5500 frame, pinned: align 545ms -> 338ms,
-  search 325ms -> 125ms. `result.transform.seeded` reports whether a seed
-  was actually used.
+  native OpenCV engine instead of from the staged sweeps. On a
+  4096x5500 frame, pinned: align 545ms -> 338ms, search 325ms -> 125ms.
+  `result.transform.seeded` reports whether a seed was actually used.
 
   The engine is not a dependency and nothing changes without it -
   installing the optional native engine enables it. A seed
@@ -749,9 +748,8 @@ reachable on an ordinary flow.
 
 ## golden-compare 1.0.1 - 2026-08-28
 
-An adversarial review (five independent review lanes, verified by three
-verifying agents) surfaced nineteen distinct issues; every confirmed one
-is fixed below with a regression test. The suite grew from 44 to 100+
+A review surfaced nineteen distinct issues; every confirmed one is fixed
+below with a regression test. The suite grew from 44 to 100+
 tests.
 
 ### Fixed

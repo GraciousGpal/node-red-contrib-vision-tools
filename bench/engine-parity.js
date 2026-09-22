@@ -16,7 +16,7 @@
 "use strict";
 
 const { labelCrop } = require("../lib/labelCrop.js");
-const { rawImage } = require("../test/helpers/synthetic.js");
+const { labelOnTray } = require("../test/helpers/synthetic.js");
 const { NATIVE_PATH, probeNative } = require("../lib/engine.js");
 
 function arg(name, fallback) {
@@ -33,38 +33,9 @@ const H = arg("height", 1500);
 // produce without changing what an operator would do with the result.
 const TOLERANCE = { angleDeg: 0.25, centerPx: 3, sizePx: 6 };
 
-function labelFrame(width, height, angleDeg, labelWidth, labelHeight) {
-	const data = Buffer.alloc(width * height * 3, 70);
-	const ca = Math.cos((angleDeg * Math.PI) / 180);
-	const sa = Math.sin((angleDeg * Math.PI) / 180);
-	const cx = width / 2;
-	const cy = height / 2;
-	const bars = [0.2, 0.4, 0.6, 0.8].map((f) => (f - 0.5) * labelHeight);
-	for (let y = 0; y < height; y++) {
-		for (let x = 0; x < width; x++) {
-			const u = (x - cx) * ca + (y - cy) * sa;
-			const v = -(x - cx) * sa + (y - cy) * ca;
-			let value = 70;
-			if (Math.abs(u) <= labelWidth / 2 && Math.abs(v) <= labelHeight / 2) {
-				value = 236;
-				for (const bar of bars) {
-					if (Math.abs(u) < labelWidth * 0.35 && Math.abs(v - bar) < labelHeight * 0.03) {
-						value = 30;
-						break;
-					}
-				}
-			}
-			const i = (y * width + x) * 3;
-			data[i] = data[i + 1] = data[i + 2] = value;
-		}
-	}
-	return rawImage(data, width, height, 3, "RGB");
-}
-
 async function main() {
 	let native = null;
 	try {
-		// eslint-disable-next-line global-require
 		const bridge = require(NATIVE_PATH);
 		await probeNative(bridge);
 		native = bridge;
@@ -73,9 +44,7 @@ async function main() {
 		console.error("parity needs both engines; run this on a host with the addon.");
 		return;
 	}
-	// eslint-disable-next-line global-require
 	const cvjs = require("../lib/cvjs.js");
-	// eslint-disable-next-line global-require
 	const { imageAlign } = require("../lib/cvjsAlign.js");
 	await cvjs.ready();
 	const wasm = {
@@ -94,7 +63,12 @@ async function main() {
 			[W * 0.6, H * 0.5],
 			[W * 0.35, H * 0.7],
 		]) {
-			const frame = labelFrame(W, H, angle, lw, lh);
+			const frame = labelOnTray(W, H, {
+				angleDeg: angle,
+				labelWidth: lw,
+				labelHeight: lh,
+				bars: [0.2, 0.4, 0.6, 0.8],
+			});
 			const opts = { maxEdge: 640, polarity: "light", outputFormat: "raw" };
 			const a = await labelCrop(frame, opts, native);
 			const b = await labelCrop(frame, opts, wasm);

@@ -25,6 +25,7 @@ const { performance } = require("node:perf_hooks");
 
 module.exports = (RED) => {
 	const { labelCrop, available, getBridge } = require("./lib/labelCrop.js");
+	const { clampInt, clampFloat, pickMode } = require("./lib/nodeInput.js");
 
 	// Settle the engine choice and pay its start-up cost now rather than on
 	// the first frame: the WASM build takes ~200ms to instantiate, and the
@@ -55,22 +56,6 @@ module.exports = (RED) => {
 		outputQuality: [1, 100],
 		previewWidth: [80, 600],
 	};
-
-	function clampInt(value, fallback, [min, max]) {
-		const n = parseInt(value, 10);
-		if (Number.isNaN(n)) return fallback;
-		return Math.min(max, Math.max(min, n));
-	}
-
-	function clampFloat(value, fallback, [min, max]) {
-		const n = parseFloat(value);
-		if (Number.isNaN(n)) return fallback;
-		return Math.min(max, Math.max(min, n));
-	}
-
-	function pickMode(value, fallback, allowed) {
-		return allowed.includes(value) ? value : fallback;
-	}
 
 	function asBoolean(value, fallback = false) {
 		if (value == null || value === "") return fallback;

@@ -436,7 +436,6 @@ test("label-crop finds an axis-aligned label on the opencv.js engine", { skip },
 test("label-crop accepts an encoded Buffer through the codec fallback", { skip }, async () => {
 	// opencv.js has no codecs, so colorConvert(Buffer, RGB) is the one
 	// place on this path that goes to sharp instead
-	// eslint-disable-next-line global-require
 	const sharp = require("sharp");
 	const frame = labelFrame(800, 600, 0, 360, 220, 3);
 	const png = await sharp(frame.data, {
@@ -469,11 +468,8 @@ test("label-crop reports a miss on a frame with no label", { skip }, async () =>
 // ---- golden-compare's fast align on the WASM engine --------------------
 
 test("golden-compare's nativeFastAlign path runs on the opencv.js engine", { skip }, async () => {
-	// eslint-disable-next-line global-require
 	const sharp = require("sharp");
-	// eslint-disable-next-line global-require
 	const nativeSeed = require("../lib/nativeSeed.js");
-	// eslint-disable-next-line global-require
 	const { prepareGolden, compareFrame } = require("../lib/compare.js");
 
 	const width = 512;

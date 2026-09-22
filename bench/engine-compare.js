@@ -19,7 +19,7 @@
 const { performance } = require("node:perf_hooks");
 
 const { labelCrop } = require("../lib/labelCrop.js");
-const { rawImage } = require("../test/helpers/synthetic.js");
+const { rawImage, labelOnTray } = require("../test/helpers/synthetic.js");
 const { NATIVE_PATH, probeNative } = require("../lib/engine.js");
 
 function arg(name, fallback) {
@@ -32,37 +32,6 @@ const H = arg("height", 3000);
 const EDGE = arg("edge", 640);
 const ITERATIONS = Math.max(2, arg("iterations", 5));
 const ALIGN_SIZE = arg("align", 1024);
-
-/** Dark tray, light label rotated 7deg, dark bars across it. */
-function makeFrame(width, height, channels, angleDeg = 7) {
-	const data = Buffer.alloc(width * height * channels);
-	const ca = Math.cos((angleDeg * Math.PI) / 180);
-	const sa = Math.sin((angleDeg * Math.PI) / 180);
-	const cx = width / 2;
-	const cy = height / 2;
-	const lw = width * 0.6;
-	const lh = height * 0.52;
-	const bars = [0.15, 0.3, 0.45, 0.6, 0.75].map((f) => (f - 0.5) * lh);
-	for (let y = 0; y < height; y++) {
-		for (let x = 0; x < width; x++) {
-			const u = (x - cx) * ca + (y - cy) * sa;
-			const v = -(x - cx) * sa + (y - cy) * ca;
-			let value = 70;
-			if (Math.abs(u) <= lw / 2 && Math.abs(v) <= lh / 2) {
-				value = 236;
-				for (const bar of bars) {
-					if (Math.abs(u) < lw * 0.35 && Math.abs(v - bar) < lh * 0.03) {
-						value = 30;
-						break;
-					}
-				}
-			}
-			const i = (y * width + x) * channels;
-			for (let c = 0; c < channels; c++) data[i + c] = value;
-		}
-	}
-	return rawImage(data, width, height, channels, channels === 1 ? "GRAY" : "RGB");
-}
 
 /** The same frame translated, which is what the aligner has to recover. */
 function shiftFrame(source, dx, dy) {
@@ -96,7 +65,6 @@ function stats(values) {
 async function engines() {
 	const found = [];
 	try {
-		// eslint-disable-next-line global-require
 		const native = require(NATIVE_PATH);
 		// not native.ready(): cpp-bridge 1.6.4 has no such method, and the
 		// point of the probe is to work on both - see lib/engine.js
@@ -106,9 +74,7 @@ async function engines() {
 		console.error(`native: unavailable (${err.message.split("\n")[0]})`);
 	}
 	try {
-		// eslint-disable-next-line global-require
 		const cvjs = require("../lib/cvjs.js");
-		// eslint-disable-next-line global-require
 		const { imageAlign } = require("../lib/cvjsAlign.js");
 		const t0 = performance.now();
 		await cvjs.ready();
@@ -182,8 +148,8 @@ async function main() {
 		return;
 	}
 	console.error(`building ${W}x${H} frame and ${ALIGN_SIZE}px align pair...`);
-	const frame = makeFrame(W, H, 3);
-	const golden = makeFrame(ALIGN_SIZE, ALIGN_SIZE, 1, 0);
+	const frame = labelOnTray(W, H);
+	const golden = labelOnTray(ALIGN_SIZE, ALIGN_SIZE, { channels: 1, angleDeg: 0 });
 	const target = shiftFrame(golden, 11, -6);
 
 	const rows = [];

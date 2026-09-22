@@ -364,8 +364,32 @@
   <p>
     <code>msg.payload</code> is an encoded image Buffer or a uint8 raw image
     object with <code>data</code>, <code>width</code>, <code>height</code>, and
-    <code>channels</code>. Configuration fields may be overridden by same-named
-    <code>msg</code> properties.
+    <code>channels</code>.
+  </p>
+  <p>
+    Every setting above can be overridden per message by the same name, e.g.
+    <code>msg.boundaryMode</code>, <code>msg.edgeRegions</code>,
+    <code>msg.pngOptimize</code>, plus <code>msg.previewEnabled</code> and
+    <code>msg.previewWidth</code>. A blank or <code>null</code> value leaves
+    the configured setting in place.
+  </p>
+  <h3>Boundary mode</h3>
+  <p>
+    <b>blob</b> thresholds a downscaled copy of the whole frame and takes the
+    dominant rectangle-like region, then snaps each side inward to the label's
+    real edge. <b>calipers</b> is for a label whose own edge is fainter than
+    the print inside it: it runs a <code>line-finder</code> search in each of
+    four regions (<code>left</code>, <code>right</code>, <code>top</code>,
+    <code>bottom</code>) at full resolution and intersects the fitted lines
+    into the label's corners, so the blob gates do not apply. Draw and tune
+    each region in a <code>line-finder</code> node, then paste the four into
+    <i>Edge regions</i> as JSON in full-resolution frame pixels
+    (<code>{ x, y, width, height, angleDeg? }</code> plus any line-finder
+    option; the scan direction is implied by the side). On
+    <code>msg.edgeRegions</code> supply the same four as an object, not a
+    string. A miss names the edge that failed in
+    <code>msg.labelCrop.reason</code>, which nearly always means a region
+    needs re-aiming rather than a bad part.
   </p>
   <h3>Output</h3>
   <p>

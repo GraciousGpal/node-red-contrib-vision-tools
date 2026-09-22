@@ -33,6 +33,7 @@ const crypto = require("node:crypto");
 const fs = require("node:fs");
 const fsp = fs.promises;
 const sharp = require("sharp");
+const { loadNode } = require("./helpers/fakeRed.js");
 
 // ---- instrumentation ---------------------------------------------------
 //
@@ -78,27 +79,7 @@ const reset = () => {
 // ---- fake RED harness --------------------------------------------------
 
 function makeNode(config = {}) {
-	const RED = {
-		nodes: {
-			createNode(node, cfg) {
-				node.config = cfg;
-				node.listeners = {};
-				node.on = (evt, fn) => {
-					node.listeners[evt] = fn;
-				};
-				node.send = () => {};
-				node.error = () => {};
-				node.warn = () => {};
-				node.log = () => {};
-				node.status = () => {};
-			},
-			registerType(name, ctor) {
-				RED.nodes.ctor = ctor;
-			},
-		},
-	};
-	require("../golden-compare.js")(RED);
-	const node = new RED.nodes.ctor(config);
+	const node = loadNode("golden-compare.js", config);
 	node.send = () => {};
 	node.warn = () => {};
 	node.error = () => {};

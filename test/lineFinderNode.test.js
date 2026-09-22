@@ -12,36 +12,18 @@
 
 const test = require("node:test");
 const assert = require("node:assert");
+const { loadNode } = require("./helpers/fakeRed.js");
 
 function makeNode(config = {}) {
 	const published = [];
-	const RED = {
+	const node = loadNode("line-finder.js", config, {
+		id: "line-finder-test",
 		comms: {
 			publish(topic, data) {
 				published.push({ topic, data });
 			},
 		},
-		nodes: {
-			createNode(node, cfg) {
-				node.id = "line-finder-test";
-				node.config = cfg;
-				node.listeners = {};
-				node.on = (evt, fn) => {
-					node.listeners[evt] = fn;
-				};
-				node.send = () => {};
-				node.error = () => {};
-				node.warn = () => {};
-				node.log = () => {};
-				node.status = () => {};
-			},
-			registerType(_name, ctor) {
-				RED.nodes.ctor = ctor;
-			},
-		},
-	};
-	require("../line-finder.js")(RED);
-	const node = new RED.nodes.ctor(config);
+	});
 	const sent = [];
 	const statuses = [];
 	const doneErrors = [];

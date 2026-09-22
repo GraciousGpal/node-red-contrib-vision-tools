@@ -25,7 +25,6 @@ const DST = 160;
 async function main() {
 	let bridge;
 	try {
-		// eslint-disable-next-line global-require
 		bridge = require(NATIVE_PATH);
 		await probeNative(bridge);
 	} catch (err) {

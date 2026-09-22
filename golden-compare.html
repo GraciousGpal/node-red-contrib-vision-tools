@@ -219,6 +219,24 @@
     >
   </div>
   <div class="form-row">
+    <label for="node-input-nativeAlignSeed" style="width:auto;"
+      ><input
+        type="checkbox"
+        id="node-input-nativeAlignSeed"
+        style="width:auto; vertical-align:top;"
+      />
+      Native alignment seed (prototype)</label
+    >
+    <span class="node-input-hint" style="margin-left:10px; color:#999;"
+      >starts the pinned search from an ORB+ECC alignment measured by the
+      optional OpenCV engine instead of the staged sweeps. Only the angle and
+      placement come from the seed - the trained magnifications, the pixel
+      polish and the score are unchanged, and a seed outside the physical
+      bounds is discarded in favour of the sweeps. Inert without the engine
+      or a trained transform</span
+    >
+  </div>
+  <div class="form-row">
     <label for="node-input-localAlign" style="width:auto;"
       ><input
         type="checkbox"
@@ -584,13 +602,11 @@
   </p>
   <p>
     The target is decoded preserving its own aspect ratio (never stretched to
-    fit), then a sliding-window search finds the golden-sized window within it
-    that best matches - a raw camera capture with extra background/margin
-    doesn't need a manual crop step.
-    <b>Only translation is corrected this way</b> (bounded by the target's
-    actual size plus <i>Align search</i> px of extra slack) - rotation and scale
-    drift are not. This assumes a mechanically- fixtured camera/part. The found
-    window position is also what the position check measures.
+    fit), then the golden is located within it - translation (bounded by the
+    target's spare margin plus <i>Align search</i> px), magnification, stretch
+    and angle, each within its configured search range - so a raw camera
+    capture with extra background needs no manual crop step. The found
+    transform is also what the position check measures.
   </p>
 
   <h3>Input</h3>
@@ -606,28 +622,15 @@
   <p>
     Optional per-message overrides: <code>msg.golden</code> (path or Buffer -
     swaps and re-caches the golden reference if it differs from what's cached),
-    <code>msg.threshold</code>, <code>msg.printTolerance</code>,
-    <code>msg.backgroundTolerance</code>, <code>msg.alignSearch</code>,
-    <code>msg.thresholdMode</code>, <code>msg.sauvolaRadius</code>,
-    <code>msg.sauvolaK</code>, <code>msg.inkMargin</code>,
-    <code>msg.trainNuisance</code>, <code>msg.trainTransform</code>, <code>msg.nativeAlignSeed</code>,
-    <code>msg.nativeFastAlign</code>, <code>msg.workers</code>,
-    <code>msg.localAlign</code>, <code>msg.localAlignTile</code>,
-    <code>msg.localAlignMax</code>, <code>msg.scaleSearchMin</code>,
-    <code>msg.scaleSearchMax</code>, <code>msg.scaleSearchSteps</code>,
-    <code>msg.maxAspect</code>, <code>msg.aspectSteps</code>,
-    <code>msg.maxAngleDeg</code>, <code>msg.angleSteps</code>,
-    <code>msg.alignCandidates</code>, <code>msg.mismatchScore</code>,
-    <code>msg.positionToleranceAngleDeg</code>,
-    <code>msg.positionToleranceXMm</code
-    >/<code>YMm</code>/<code>XPx</code>/<code>YPx</code>,
-    <code>msg.blockSize</code>, <code>msg.blockThreshold</code>,
-    <code>msg.failThreshold</code>, <code>msg.failRatio</code>,
-    <code>msg.outputPrintHeatmap</code>,
-    <code>msg.outputBackgroundHeatmap</code>, <code>msg.debugStages</code>,
-    <code>msg.heatmapFormat</code> (<code>jpg</code> / <code>png</code> /
-    <code>raw</code>),
-    <code>msg.heatmapQuality</code>.
+    <code>msg.goldenKey</code> (names a golden so a Buffer is not re-hashed
+    per frame), <code>msg.rawInfo</code> / <code>msg.goldenRawInfo</code>
+    (<code>{ width, height, channels }</code> for raw pixels), and every
+    setting above except <i>Working size</i>, <i>Novelty threshold</i> and
+    the file paths, by the same name: <code>msg.threshold</code>,
+    <code>msg.printTolerance</code>, <code>msg.heatmapFormat</code>
+    (<code>jpg</code> / <code>png</code> / <code>raw</code>),
+    <code>msg.trainTransform</code>, <code>msg.nativeAlignSeed</code>, and so
+    on.
   </p>
 
   <h3>Output</h3>
@@ -645,7 +648,7 @@
         score, grade, mismatchSuspected, reason }, thresholds: { golden, target
         }, localAlign: { tiles, localised, meanPx, medianPx, maxPx },
         printBlemish: { pass, defectRatio, regions }, backgroundBlemish: { pass,
-        defectRatio, regions } }</code
+        defectRatio, regions, worstExcess, noveltyPass } }</code
       >
       (region coordinates in the working-resolution image, same size as the heat
       maps)
@@ -677,9 +680,8 @@
   <h3>Calibration</h3>
   <p>
     <i>Scale file path</i> points at the JSON baseline written by
-    <code>checkerboard-calibrate</code> (<code
-      >{ mmPerPixelNative, nativeWidth, nativeHeight, calibratedAt }</code
-    >). When set and the file exists, the position check converts the measured
+    <code>checkerboard-calibrate</code>. When set and the file exists, the
+    position check converts the measured
     shift to mm (rescaled from the calibration photo's native resolution to this
     node's <i>Working size</i>) and checks it against the mm tolerances. Without
     it, the px tolerances are used instead - position is still checked, just not
@@ -694,6 +696,12 @@
     <i>Working size</i>/<i>Threshold</i>/<i>Background tolerance</i>, or the
     calibrated scale changes - <i>Print tolerance</i>/<i>Align search</i>/etc.
     are applied fresh per frame and don't need a re-decode.
+  </p>
+  <p>
+    <i>Native alignment seed</i> (off by default) lets the optional OpenCV
+    engine propose the angle and placement that start the pinned search; the
+    trained magnifications, the pixel polish and the score stay in JS, and
+    without the engine or a trained transform the flag does nothing.
   </p>
 </script>
 
@@ -719,6 +727,7 @@
       alignCandidates: { value: 5, validate: RED.validators.number(true) },
       workers: { value: 0, validate: RED.validators.number(true) },
       nativeFastAlign: { value: false },
+      nativeAlignSeed: { value: false },
       mismatchScore: { value: 0.15, validate: RED.validators.number(true) },
       localAlign: { value: true },
       localAlignTile: { value: 96, validate: RED.validators.number(true) },
