@@ -8,6 +8,27 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Added
 
+- **`label-crop` crops the rectangle a `line-finder` found.** With a
+  line-finder reporting `msg.lineFinder.rect`, cropping to it still meant
+  pasting the four regions into a label-crop in calipers mode and having
+  it run the same search again. A third boundary mode, `upstream` (**From
+  line-finder** in the editor), detects nothing: it takes the rectangle
+  off the message - `msg.lineFinder.rect`, or `msg.rect` when a flow sets
+  one - and goes straight to the rotate and crop the other modes end in,
+  so `msg.labelCrop` comes out as calipers mode would report the same
+  rectangle, to the pixel, with `reason: "upstream-rect"`, the
+  line-finder's score as `confidence` and no polarity. `cropMargin`,
+  `minRotateAngleDeg` and the output settings apply; the blob gates do
+  not, as they do not in calipers mode. A rectangle that cannot be cropped
+  is a miss with a reason that says which - `no-upstream-rect` when the
+  message carries none, `upstream-rect:missing-edge:top` when the
+  line-finder itself missed, `bad-upstream-rect` when it is malformed -
+  and the payload passes through. The editor hides the blob gates and the
+  edge regions in this mode and says what to wire in front.
+  `examples/line-finder-rect-to-label-crop.json` runs the whole flow on a
+  synthetic frame, and a new test holds every example's line-finder and
+  label-crop nodes to their editors' defaults and runs that flow end to
+  end.
 - **The `line-finder` editor opens on the last frame the node saw.**
   Tuning a region meant choosing a photo from disk every time the dialog
   opened, and the photo was rarely the frame the camera was producing. The

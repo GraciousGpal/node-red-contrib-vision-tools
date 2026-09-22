@@ -1,0 +1,185 @@
+[
+    {
+        "id": "lfr-note",
+        "type": "comment",
+        "z": "lfr-tab",
+        "name": "line-finder measures the rectangle, label-crop crops it as-is",
+        "info": "One `line-finder` with four regions named `left`, `right`, `top` and\n`bottom` reports the rectangle they bound in `msg.lineFinder.rect` -\ncorners, centre, size and angle in full-frame pixels. A `label-crop` with\n**Boundary = From line-finder** detects nothing itself: it takes that\nrectangle off the message and deskews and crops to it, so the tuning\nlives in one place (the line-finder, which can draw its regions on the\nlast frame it saw and run them from its editor) and what it draws on the\nflow canvas is exactly what gets cropped.\n\nThe frame here is synthetic so the example runs on import: the function\nnode draws a pale 480x312 label tilted 4 degrees on a dark 800x600 tray.\nReplace it with your camera or file-in node and re-aim the four regions\nin the line-finder's editor (**Add rectangle** lays them out, **Run on\nthis image** shows what each one found).\n\nIf the line-finder misses an edge the frame is NOT cropped:\n`msg.labelCrop.reason` is `upstream-rect:missing-edge:top` (the finder's\nown reason), `msg.labelCrop.detected` is false and the payload passes\nthrough unchanged. `msg.lineFinder.lines` is still on the message, so the\nregion to re-aim is in the debug sidebar already. A message with no\nrectangle at all is `no-upstream-rect`; a malformed one is\n`bad-upstream-rect`.\n\nThe blob gates (`aspectRatio`, `expectedSizeFraction`, `minConfidence`,\n...) do not apply in this mode, as they do not in calipers mode;\n`cropMargin`, `minRotateAngleDeg` and the output format do.",
+        "x": 320,
+        "y": 60,
+        "wires": []
+    },
+    {
+        "id": "lfr-inject",
+        "type": "inject",
+        "z": "lfr-tab",
+        "name": "one frame",
+        "props": [
+            {
+                "p": "payload"
+            }
+        ],
+        "repeat": "",
+        "crontab": "",
+        "once": false,
+        "onceDelay": 0.1,
+        "topic": "",
+        "payload": "",
+        "payloadType": "date",
+        "x": 130,
+        "y": 140,
+        "wires": [
+            [
+                "lfr-frame"
+            ]
+        ]
+    },
+    {
+        "id": "lfr-frame",
+        "type": "function",
+        "z": "lfr-tab",
+        "name": "synthetic frame 800x600",
+        "func": "// A synthetic frame so the example runs without a camera: a pale 480x312\n// label tilted 4 degrees on a dark 800x600 tray, one channel, with a few\n// printed bars. Replace this node with your camera or file-in node.\nconst width = 800;\nconst height = 600;\nconst cx = 400;\nconst cy = 300;\nconst labelW = 480;\nconst labelH = 312;\nconst angleDeg = 4;\nconst data = Buffer.alloc(width * height, 60);\nconst ca = Math.cos((angleDeg * Math.PI) / 180);\nconst sa = Math.sin((angleDeg * Math.PI) / 180);\nconst bars = [0.15, 0.3, 0.45, 0.6, 0.75].map((f) => (f - 0.5) * labelH);\nfor (let y = 0; y < height; y++) {\n    for (let x = 0; x < width; x++) {\n        const u = (x - cx) * ca + (y - cy) * sa;\n        const v = -(x - cx) * sa + (y - cy) * ca;\n        if (Math.abs(u) > labelW / 2 || Math.abs(v) > labelH / 2) continue;\n        let value = 236;\n        for (const bar of bars) {\n            if (Math.abs(u) < labelW * 0.35 && Math.abs(v - bar) < labelH * 0.03) {\n                value = 30;\n                break;\n            }\n        }\n        data[y * width + x] = value;\n    }\n}\nmsg.payload = { data, width, height, channels: 1 };\nreturn msg;",
+        "outputs": 1,
+        "timeout": 0,
+        "noerr": 0,
+        "initialize": "",
+        "finalize": "",
+        "libs": [],
+        "x": 320,
+        "y": 140,
+        "wires": [
+            [
+                "lfr-finder"
+            ]
+        ]
+    },
+    {
+        "id": "lfr-finder",
+        "type": "line-finder",
+        "z": "lfr-tab",
+        "name": "label rectangle",
+        "regions": [
+            {
+                "name": "left",
+                "x": 110,
+                "y": 183,
+                "width": 100,
+                "height": 200,
+                "angleDeg": 4,
+                "scanDirection": "right",
+                "polarity": "darkToLight",
+                "edgeSelect": "best"
+            },
+            {
+                "name": "right",
+                "x": 589,
+                "y": 217,
+                "width": 100,
+                "height": 200,
+                "angleDeg": 4,
+                "scanDirection": "left",
+                "polarity": "darkToLight",
+                "edgeSelect": "best"
+            },
+            {
+                "name": "top",
+                "x": 311,
+                "y": 94,
+                "width": 200,
+                "height": 100,
+                "angleDeg": 4,
+                "scanDirection": "down",
+                "polarity": "darkToLight",
+                "edgeSelect": "best"
+            },
+            {
+                "name": "bottom",
+                "x": 289,
+                "y": 406,
+                "width": 200,
+                "height": 100,
+                "angleDeg": 4,
+                "scanDirection": "up",
+                "polarity": "darkToLight",
+                "edgeSelect": "best"
+            }
+        ],
+        "regionX": 0,
+        "regionY": 0,
+        "regionWidth": 100,
+        "regionHeight": 100,
+        "regionAngleDeg": 0,
+        "scanDirection": "right",
+        "polarity": "either",
+        "edgeSelect": "best",
+        "ignoreCount": 0,
+        "calipers": 16,
+        "contrastThreshold": 2,
+        "filterHalfWidth": 2,
+        "outlierTolerancePx": 2.5,
+        "minCaliperFraction": 0.5,
+        "angleToleranceDeg": 10,
+        "minScore": 0,
+        "previewEnabled": true,
+        "previewWidth": 260,
+        "x": 540,
+        "y": 140,
+        "wires": [
+            [
+                "lfr-crop"
+            ]
+        ]
+    },
+    {
+        "id": "lfr-crop",
+        "type": "label-crop",
+        "z": "lfr-tab",
+        "name": "crop the rectangle",
+        "boundaryMode": "upstream",
+        "edgeRegions": "",
+        "maxEdge": 640,
+        "polarity": "auto",
+        "minAreaFraction": 0.05,
+        "maxAreaFraction": 0.9,
+        "minRectangularity": 0.4,
+        "maxBorderContact": 0.5,
+        "minDominance": 1.5,
+        "minConfidence": 0.4,
+        "aspectRatio": "",
+        "aspectTolerance": 0.15,
+        "expectedSizeFraction": "",
+        "sizeTolerance": 0.2,
+        "cropMargin": 0.02,
+        "minRotateAngleDeg": 0.5,
+        "previewEnabled": true,
+        "previewWidth": 220,
+        "outputFormat": "png",
+        "outputQuality": 90,
+        "pngOptimize": false,
+        "x": 750,
+        "y": 140,
+        "wires": [
+            [
+                "lfr-debug"
+            ]
+        ]
+    },
+    {
+        "id": "lfr-debug",
+        "type": "debug",
+        "z": "lfr-tab",
+        "name": "msg.labelCrop",
+        "active": true,
+        "tosidebar": true,
+        "console": false,
+        "tostatus": false,
+        "complete": "labelCrop",
+        "targetType": "msg",
+        "statusVal": "",
+        "statusType": "auto",
+        "x": 940,
+        "y": 140,
+        "wires": []
+    }
+]

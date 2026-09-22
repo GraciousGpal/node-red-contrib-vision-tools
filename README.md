@@ -733,6 +733,52 @@ sub-`minRotateAngleDeg` angles skip the rotate entirely. The final crop is
 encoded natively in the chosen `outputFormat` (raw object by default, or
 jpg/png/webp).
 
+### Cropping the rectangle a `line-finder` found
+
+The third boundary mode, `upstream` (**From line-finder** in the editor),
+detects nothing. A `line-finder` with four regions named `left`, `right`,
+`top` and `bottom` already reports the rectangle they bound as
+`msg.lineFinder.rect` — corners, centre, size and angle in full-frame
+pixels, built by the same `rectFromLines` the calipers mode calls before
+it crops — so a label-crop in this mode takes that rectangle off the
+message and goes straight to the rotate and crop above. The recommended
+flow is one line-finder, **Add rectangle** in its editor to lay the four
+sides out scanning inward, **Run on this image** to tune them on the last
+frame it saw, then a label-crop set to **From line-finder** behind it. The
+tuning lives in one node, and the rectangle the line-finder draws on the
+flow canvas is exactly what gets cropped.
+
+What it reads: `msg.lineFinder.rect`, or `msg.rect` in the same shape when
+a flow sets one — `{ ok, reason, center: { x, y }, width, height, angleDeg,
+corners?, score?, residualPx? }`. `ok` must be `true`; centre, size and
+angle finite; both sides at least 2px; the centre inside the frame. The
+corners are optional and computed when missing. Nothing between a found
+rectangle and the crop is gated in calipers mode, and the same holds here:
+`aspectRatio`, `expectedSizeFraction`, `minConfidence` and the other blob
+gates do not apply, while `cropMargin`, `minRotateAngleDeg` and the output
+settings do. `msg.labelCrop` comes out as calipers mode would report the
+same rectangle — the same crop geometry to the pixel — with
+`reason: "upstream-rect"`, `polarity` null, and `confidence` the
+line-finder's `score` (1 for a rectangle built by hand without one).
+
+A rectangle that cannot be cropped is a **miss** — the payload passes
+through unchanged — never an error, and `msg.labelCrop.reason` says which
+kind: `no-upstream-rect` when the message carries no rectangle (the
+line-finder has fewer than the four named regions, or nothing is wired in
+front), `upstream-rect:<reason>` when the line-finder itself reported a
+miss (`upstream-rect:missing-edge:top`, `upstream-rect:parallel-edges`),
+and `bad-upstream-rect` when the rectangle is malformed. The line-finder's
+own `msg.lineFinder.lines` is still on the message, so the region that
+needs re-aiming is a debug node away.
+
+`examples/line-finder-rect-to-label-crop.json` is the whole flow on a
+synthetic frame — import it from **Import → Examples →
+@graciousstar/node-red-contrib-vision-tools**: a function node draws a
+480×312 label tilted 4° on a dark 800×600 tray, a line-finder with four
+inward regions measures it, a label-crop in this mode crops it, and a
+debug node shows `msg.labelCrop`. Replace the function node with a camera
+or file-in node and re-aim the four regions in the line-finder's editor.
+
 ### Input
 
 `msg.payload` — an encoded image Buffer (JPEG/PNG/…) or a raw
@@ -744,7 +790,9 @@ name: `msg.boundaryMode`, `msg.edgeRegions`, `msg.maxEdge`,
 `msg.minConfidence`, `msg.aspectRatio`, `msg.aspectTolerance`,
 `msg.expectedSizeFraction`, `msg.sizeTolerance`, `msg.cropMargin`,
 `msg.minRotateAngleDeg`, `msg.outputFormat`, `msg.outputQuality`,
-`msg.pngOptimize`, plus `msg.previewEnabled` and `msg.previewWidth`.
+`msg.pngOptimize`, plus `msg.previewEnabled` and `msg.previewWidth`. In
+`upstream` mode the rectangle itself is read from `msg.lineFinder.rect`,
+or from `msg.rect` when present.
 
 ### Output
 
@@ -913,8 +961,11 @@ with `source: "cached"`).
 ### Four of them make a rectangle
 
 Name four regions `left`, `right`, `top` and `bottom` and the node
-reports the rectangle itself in `msg.lineFinder.rect`. To crop to it as
-well, **Copy as label-crop edgeRegions** (enabled once all four exist)
+reports the rectangle itself in `msg.lineFinder.rect`. The simplest way
+to crop to it is a `label-crop` in `boundaryMode: "upstream"` wired
+directly after this node - it crops that rectangle as-is (see *Cropping
+the rectangle a line-finder found*). To have label-crop re-measure the
+edges itself instead, **Copy as label-crop edgeRegions** (enabled once all four exist)
 puts the four tuned regions on the clipboard - box, angle, polarity, edge
 select and the shared tuning, the scan direction left for label-crop to
 imply from the side - as the JSON `label-crop`'s
@@ -1134,7 +1185,7 @@ nothing is found at all, one message with `msg.text = null` and
 
 ## Tests
 
-`npm test` (Node 18+, no test framework needed — `node --test`), 446
+`npm test` (Node 18+, no test framework needed — `node --test`), 467
 tests. Fixtures are generated with `sharp` rather than read from
 `data/sample_images`, so the suite runs anywhere; the real QC photos are
 gitignored. Coverage spans the lib pipeline (`compare`, `align`, `warp`,

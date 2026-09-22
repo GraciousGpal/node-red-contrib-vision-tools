@@ -59,6 +59,7 @@
         "type": "line-finder",
         "z": "lfx-tab",
         "name": "top edge",
+        "regions": [],
         "regionX": 300,
         "regionY": 8,
         "regionWidth": 2400,

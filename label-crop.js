@@ -37,7 +37,7 @@ module.exports = (RED) => {
 		});
 
 	const POLARITIES = ["auto", "light", "dark"];
-	const BOUNDARY_MODES = ["blob", "calipers"];
+	const BOUNDARY_MODES = ["blob", "calipers", "upstream"];
 	const OUTPUT_FORMATS = ["raw", "jpg", "png", "webp"];
 	const BOUNDS = {
 		maxEdge: [64, 4096],
@@ -188,6 +188,15 @@ module.exports = (RED) => {
 					if (msg[key] !== undefined && msg[key] !== null && msg[key] !== "") {
 						options[key] = msg[key];
 					}
+				}
+				// In upstream mode the rectangle rides on the message: the
+				// line-finder's own msg.lineFinder.rect, or msg.rect when a
+				// flow sets one explicitly (a function node, a stored rect).
+				if (options.boundaryMode === "upstream") {
+					options.rect =
+						msg.rect !== undefined && msg.rect !== null
+							? msg.rect
+							: msg.lineFinder && msg.lineFinder.rect;
 				}
 				const originalImage = msg.payload;
 				const res = await labelCrop(originalImage, options);

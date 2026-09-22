@@ -24,7 +24,10 @@ const {
 	edgeLine,
 	unionMasks,
 	rawImage,
+	labelOnTray,
 } = require("./helpers/synthetic.js");
+const { findLine, rectFromLines } = require("../lib/lineFinder.js");
+const { pixelEngine } = require("./helpers/pixelEngine.js");
 
 // ---- fake engine ------------------------------------------------------
 
@@ -943,4 +946,272 @@ test("a miss reports the value the gate measured, not a placeholder", () => {
 	const big = analyzeMask(mask, W, H, { maxAreaFraction: 0.5 });
 	assert.strictEqual(big.reason, "too-large");
 	assert.strictEqual(big.areaFraction, 0.75);
+});
+
+// ---- upstream boundary mode: the rectangle arrives on the message -------
+//
+// A line-finder ahead of the node reports msg.lineFinder.rect; upstream
+// mode crops it without measuring anything. The engine here is the pixel
+// fake, so "the same bytes" is a real assertion: two runs that reach the
+// same crop geometry copy the same pixels.
+
+const TRAY = { width: 400, height: 300, labelW: 240, labelH: 156, angleDeg: 7 };
+function trayFrame() {
+	return labelOnTray(TRAY.width, TRAY.height, { angleDeg: TRAY.angleDeg, channels: 1 });
+}
+// four regions straddling the tray label's edges, in the shape calipers
+// mode takes (scan direction implied by the side)
+const TRAY_REGIONS = {
+	left: { x: 56, y: 85, width: 50, height: 100, angleDeg: 7, polarity: "darkToLight", calipers: 8, contrastThreshold: 3 },
+	right: { x: 294, y: 115, width: 50, height: 100, angleDeg: 7, polarity: "darkToLight", calipers: 8, contrastThreshold: 3 },
+	top: { x: 160, y: 53, width: 100, height: 40, angleDeg: 7, polarity: "darkToLight", calipers: 8, contrastThreshold: 3 },
+	bottom: { x: 140, y: 207, width: 100, height: 40, angleDeg: 7, polarity: "darkToLight", calipers: 8, contrastThreshold: 3 },
+};
+/**
+ * The rectangle the line-finder node would report for those regions: the
+ * same findLine per side and rectFromLines the calipers path runs, in the
+ * field names line-finder.js puts on msg.lineFinder.rect.
+ */
+function measuredRect(frame, regions = TRAY_REGIONS) {
+	const px = new Uint8Array(frame.data.buffer, frame.data.byteOffset, frame.width * frame.height);
+	const impliedScan = { left: "right", right: "left", top: "down", bottom: "up" };
+	const lines = {};
+	for (const side of Object.keys(regions)) {
+		const { x, y, width, height, angleDeg, ...rest } = regions[side];
+		lines[side] = findLine(px, frame.width, frame.height, { x, y, width, height, angleDeg }, {
+			scanDirection: impliedScan[side],
+			...rest,
+		});
+	}
+	const r = rectFromLines(lines);
+	if (!r.ok) return { ok: false, reason: r.reason, missing: r.missing };
+	return {
+		ok: true,
+		reason: "ok",
+		corners: r.corners,
+		center: { x: r.cx, y: r.cy },
+		width: r.width,
+		height: r.height,
+		angleDeg: r.angleDeg,
+		score: r.score,
+		residualPx: r.residualPx,
+	};
+}
+const UPSTREAM_CFG = { boundaryMode: "upstream", outputFormat: "raw", cropMargin: 0.02, minRotateAngleDeg: 0.5 };
+const geometryOf = (m) => ({
+	angleDeg: m.angleDeg,
+	center: m.center,
+	corners: m.corners,
+	width: m.width,
+	height: m.height,
+	crop: m.crop,
+	scale: m.scale,
+	smallSize: m.smallSize,
+	areaFraction: m.areaFraction,
+	residualPx: m.residualPx,
+});
+
+test("upstream mode crops the line-finder's rectangle to the bytes calipers mode crops the same rectangle to", async () => {
+	const frame = trayFrame();
+	const calipers = await labelCrop(
+		frame,
+		{ ...UPSTREAM_CFG, boundaryMode: "calipers", edgeRegions: TRAY_REGIONS },
+		pixelEngine(),
+	);
+	assert.strictEqual(calipers.detected, true, calipers.metadata.reason);
+
+	const rect = measuredRect(frame);
+	const eng = pixelEngine();
+	const upstream = await labelCrop(frame, { ...UPSTREAM_CFG, rect }, eng);
+	assert.strictEqual(upstream.detected, true, upstream.metadata.reason);
+
+	// the same pixels, cut from the same place
+	assert.strictEqual(upstream.image.width, calipers.image.width);
+	assert.strictEqual(upstream.image.height, calipers.image.height);
+	assert.ok(
+		Buffer.from(upstream.image.data).equals(Buffer.from(calipers.image.data)),
+		"identical output bytes",
+	);
+	assert.deepStrictEqual(geometryOf(upstream.metadata), geometryOf(calipers.metadata));
+	assert.strictEqual(upstream.metadata.confidence, calipers.metadata.confidence, "rect.score");
+	// and the label really is what was cropped: 240x156 tilted 7 degrees
+	assert.ok(Math.abs(upstream.metadata.width - TRAY.labelW) < 1.5, `width ${upstream.metadata.width}`);
+	assert.ok(Math.abs(upstream.metadata.height - TRAY.labelH) < 1.5, `height ${upstream.metadata.height}`);
+	assert.ok(Math.abs(upstream.metadata.angleDeg - TRAY.angleDeg) < 0.5, `angle ${upstream.metadata.angleDeg}`);
+	assert.strictEqual(upstream.metadata.crop.rotated, true);
+
+	// what differs is only what says where the rectangle came from
+	assert.strictEqual(upstream.metadata.reason, "upstream-rect");
+	assert.strictEqual(calipers.metadata.reason, "ok");
+	assert.strictEqual(upstream.metadata.polarity, null);
+	assert.strictEqual(upstream.metadata.edges, undefined, "no per-edge diagnostics: nothing was searched");
+	assert.deepStrictEqual(upstream.metadata.refinedSides, []);
+	// nothing was detected: no Otsu, no detection copy, no grey conversion
+	assert.deepStrictEqual(
+		eng.calls.map((c) => c.op),
+		["crop", "rotate", "crop"],
+	);
+});
+
+test("a rect rounded the way msg.labelCrop reports it lands within a pixel of the calipers crop", async () => {
+	const frame = trayFrame();
+	const calipers = await labelCrop(
+		frame,
+		{ ...UPSTREAM_CFG, boundaryMode: "calipers", edgeRegions: TRAY_REGIONS },
+		pixelEngine(),
+	);
+	const m = calipers.metadata;
+	// centre and size to 0.1px, angle to 0.001 degrees, no corners, no score
+	const rect = { ok: true, center: { x: m.center.x, y: m.center.y }, width: m.width, height: m.height, angleDeg: m.angleDeg };
+	const upstream = await labelCrop(frame, { ...UPSTREAM_CFG, rect }, pixelEngine());
+	assert.strictEqual(upstream.detected, true, upstream.metadata.reason);
+	assert.ok(Math.abs(upstream.image.width - calipers.image.width) <= 1);
+	assert.ok(Math.abs(upstream.image.height - calipers.image.height) <= 1);
+	assert.ok(Math.abs(upstream.metadata.angleDeg - m.angleDeg) < 0.1);
+	// corners are computed when the rect carries none, in tl/tr/br/bl order
+	assert.strictEqual(upstream.metadata.corners.length, 4);
+	for (let i = 0; i < 4; i++) {
+		const d = Math.hypot(upstream.metadata.corners[i].x - m.corners[i].x, upstream.metadata.corners[i].y - m.corners[i].y);
+		assert.ok(d < 1, `corner ${i} off by ${d.toFixed(2)}px`);
+	}
+	// no score: nothing argues against a rectangle built by hand
+	assert.strictEqual(upstream.metadata.confidence, 1);
+});
+
+test("upstream mode accepts rectFromLines' own cx/cy shape as well as the node's center", async () => {
+	const frame = trayFrame();
+	const rect = measuredRect(frame);
+	const asNode = await labelCrop(frame, { ...UPSTREAM_CFG, rect }, pixelEngine());
+	const { center, ...rest } = rect;
+	const asLib = await labelCrop(frame, { ...UPSTREAM_CFG, rect: { ...rest, cx: center.x, cy: center.y } }, pixelEngine());
+	assert.strictEqual(asLib.detected, true, asLib.metadata.reason);
+	assert.deepStrictEqual(geometryOf(asLib.metadata), geometryOf(asNode.metadata));
+});
+
+test("the line-finder's own miss is passed on as the reason, and the frame passes through", async () => {
+	const frame = trayFrame();
+	for (const [rect, reason] of [
+		[{ ok: false, reason: "missing-edge:top", missing: ["top"] }, "upstream-rect:missing-edge:top"],
+		[{ ok: false, reason: "parallel-edges", missing: [] }, "upstream-rect:parallel-edges"],
+		[{ ok: false }, "upstream-rect:not-ok"],
+	]) {
+		const eng = pixelEngine();
+		const res = await labelCrop(frame, { ...UPSTREAM_CFG, rect }, eng);
+		assert.strictEqual(res.detected, false);
+		assert.strictEqual(res.metadata.reason, reason);
+		assert.strictEqual(res.image, frame, "the original object passes through");
+		assert.strictEqual(res.metadata.polarity, null);
+		assert.strictEqual(res.metadata.crop, null);
+		assert.deepStrictEqual(eng.calls, [], "nothing was cropped");
+	}
+	// the miss also comes from a real line-finder result when a region is aimed at nothing
+	const missed = measuredRect(frame, {
+		...TRAY_REGIONS,
+		top: { x: 150, y: 130, width: 60, height: 30, angleDeg: 7, contrastThreshold: 50 },
+	});
+	assert.strictEqual(missed.ok, false);
+	const res = await labelCrop(frame, { ...UPSTREAM_CFG, rect: missed }, pixelEngine());
+	assert.strictEqual(res.detected, false);
+	assert.strictEqual(res.metadata.reason, "upstream-rect:missing-edge:top");
+});
+
+test("a malformed rect is bad-upstream-rect, never a crop against it", async () => {
+	const frame = trayFrame();
+	const good = measuredRect(frame);
+	const malformed = [
+		"a string",
+		42,
+		[good],
+		{ ...good, ok: undefined },
+		{ ...good, ok: "true" },
+		{ ...good, width: undefined },
+		{ ...good, height: "156" },
+		{ ...good, angleDeg: NaN },
+		{ ...good, angleDeg: Infinity },
+		{ ...good, width: 1.5 },
+		{ ...good, height: 0 },
+		{ ...good, center: { x: -1, y: 150 } },
+		{ ...good, center: { x: 200, y: 300.5 } },
+		{ ...good, center: null, cx: 200 },
+	];
+	for (const rect of malformed) {
+		const eng = pixelEngine();
+		const res = await labelCrop(frame, { ...UPSTREAM_CFG, rect }, eng);
+		assert.strictEqual(res.detected, false, JSON.stringify(rect));
+		assert.strictEqual(res.metadata.reason, "bad-upstream-rect", JSON.stringify(rect));
+		assert.strictEqual(res.image, frame);
+		assert.deepStrictEqual(eng.calls, []);
+	}
+	// malformed corners are ignored rather than fatal: the rectangle itself is sound
+	const res = await labelCrop(frame, { ...UPSTREAM_CFG, rect: { ...good, corners: [{ x: 1 }] } }, pixelEngine());
+	assert.strictEqual(res.detected, true, res.metadata.reason);
+	assert.strictEqual(res.metadata.corners.length, 4);
+});
+
+test("no rect at all is no-upstream-rect", async () => {
+	const frame = trayFrame();
+	for (const rect of [undefined, null, ""]) {
+		const eng = pixelEngine();
+		const res = await labelCrop(frame, { ...UPSTREAM_CFG, rect }, eng);
+		assert.strictEqual(res.detected, false);
+		assert.strictEqual(res.metadata.reason, "no-upstream-rect");
+		assert.strictEqual(res.image, frame);
+		assert.deepStrictEqual(eng.calls, []);
+	}
+	// an encoded input is decoded once and still passed through as the very bytes
+	const encoded = Buffer.from("jpeg-bytes");
+	const eng = pixelEngine();
+	eng.colorConvert = async () => ({ image: trayFrame(), timing: {} });
+	const res = await labelCrop(encoded, UPSTREAM_CFG, eng);
+	assert.strictEqual(res.detected, false);
+	assert.strictEqual(res.metadata.reason, "no-upstream-rect");
+	assert.strictEqual(res.image, encoded);
+});
+
+test("upstream mode honours cropMargin and minRotateAngleDeg like every other mode", async () => {
+	const frame = trayFrame();
+	const rect = measuredRect(frame);
+
+	// the ROI grows by the margin on each side: max(2, round(0.1 * 240)) = 24
+	// against max(2, 0) = 2 at a zero margin
+	const tight = await labelCrop(frame, { ...UPSTREAM_CFG, rect, cropMargin: 0 }, pixelEngine());
+	const padded = await labelCrop(frame, { ...UPSTREAM_CFG, rect, cropMargin: 0.1 }, pixelEngine());
+	assert.strictEqual(padded.metadata.crop.width - tight.metadata.crop.width, 44);
+	assert.strictEqual(padded.metadata.crop.height - tight.metadata.crop.height, 44);
+	// the final crop is the label either way
+	assert.strictEqual(padded.metadata.crop.finalWidth, tight.metadata.crop.finalWidth);
+	assert.strictEqual(padded.metadata.crop.finalHeight, tight.metadata.crop.finalHeight);
+
+	// a 7 degree tilt under a 10 degree floor is cropped straight from the frame
+	const eng = pixelEngine();
+	const flat = await labelCrop(frame, { ...UPSTREAM_CFG, rect, minRotateAngleDeg: 10 }, eng);
+	assert.strictEqual(flat.detected, true);
+	assert.strictEqual(flat.metadata.crop.rotated, false);
+	assert.ok(!eng.calls.some((c) => c.op === "rotate"), "no rotate under the floor");
+	assert.strictEqual(flat.image.width, Math.round(rect.width));
+	assert.strictEqual(flat.image.height, Math.round(rect.height));
+	// the angle is still reported: skipping the rotate is a choice, not a measurement
+	assert.ok(Math.abs(flat.metadata.angleDeg - 7) < 0.5);
+
+	// the output format reaches the final crop as in every mode
+	const eng2 = pixelEngine();
+	await labelCrop(frame, { ...UPSTREAM_CFG, rect, outputFormat: "png" }, eng2);
+	assert.strictEqual(eng2.calls.filter((c) => c.op === "crop").at(-1).fmt, "png");
+});
+
+test("upstream mode applies no size or aspect gate, exactly as calipers mode applies none", async () => {
+	const frame = trayFrame();
+	const rect = measuredRect(frame);
+	// a wildly wrong expectation: 240x156 on 400x300 is a 0.312 area fraction
+	// and a 1.54 aspect, and both modes crop anyway
+	const gates = { aspectRatio: 5, aspectTolerance: 0.01, expectedSizeFraction: 0.01, sizeTolerance: 0.01, minConfidence: 1 };
+	const upstream = await labelCrop(frame, { ...UPSTREAM_CFG, rect, ...gates }, pixelEngine());
+	const calipers = await labelCrop(
+		frame,
+		{ ...UPSTREAM_CFG, boundaryMode: "calipers", edgeRegions: TRAY_REGIONS, ...gates },
+		pixelEngine(),
+	);
+	assert.strictEqual(calipers.detected, true, calipers.metadata.reason);
+	assert.strictEqual(upstream.detected, true, upstream.metadata.reason);
+	assert.deepStrictEqual(geometryOf(upstream.metadata), geometryOf(calipers.metadata));
 });

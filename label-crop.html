@@ -7,9 +7,10 @@
     <label for="node-input-boundaryMode"
       ><i class="fa fa-object-ungroup"></i> Boundary</label
     >
-    <select id="node-input-boundaryMode" style="width:180px;">
+    <select id="node-input-boundaryMode" style="width:260px;">
       <option value="blob">blob (whole-frame threshold)</option>
       <option value="calipers">calipers (four drawn regions)</option>
+      <option value="upstream">From line-finder (msg.lineFinder.rect)</option>
     </select>
   </div>
 
@@ -28,6 +29,13 @@
       one with a <code>line-finder</code> node - it has a drawing canvas and
       reports the score - then paste the four here.
       <span id="label-crop-regions-status" style="font-family:monospace;"></span>
+    </div>
+  </div>
+
+  <div class="form-row" id="label-crop-upstream-row">
+    <div style="margin-left:105px; color:#999; font-size:12px;">
+      Wire a line-finder with regions named left, right, top and bottom in
+      front of this node; its msg.lineFinder.rect is cropped as-is.
     </div>
   </div>
 
@@ -391,6 +399,25 @@
     <code>msg.labelCrop.reason</code>, which nearly always means a region
     needs re-aiming rather than a bad part.
   </p>
+  <p>
+    <b>From line-finder</b> (<code>upstream</code>) detects nothing itself.
+    Wire a <code>line-finder</code> whose regions are named
+    <code>left</code>, <code>right</code>, <code>top</code> and
+    <code>bottom</code> in front of this node: it reports the rectangle they
+    bound as <code>msg.lineFinder.rect</code>, and this node crops that
+    rectangle as-is - the same rotate and crop the other two modes end in,
+    with <code>cropMargin</code>, <code>minRotateAngleDeg</code> and the
+    output settings applied and the blob gates not (as in calipers mode).
+    <code>msg.rect</code> in the same shape overrides it when present. The
+    tuning then lives in the line-finder alone, and what it draws on the
+    flow canvas is exactly what gets cropped. A rectangle the line-finder
+    could not close is a miss, not an error, with the finder's own reason
+    attached: <code>upstream-rect:missing-edge:top</code>. A message with
+    no rectangle at all is <code>no-upstream-rect</code>; one whose
+    rectangle is malformed (a non-finite size or angle, a centre outside
+    the frame, a side under 2px) is <code>bad-upstream-rect</code>. The
+    original payload passes through on every one of them.
+  </p>
   <h3>Output</h3>
   <p>
     On success, <code>msg.payload</code> is the cropped label and
@@ -445,10 +472,12 @@
     outputs: 1,
     icon: "arrow-in.png",
     oneditprepare: function () {
-      // ---- boundary mode: the blob gates and the caliper regions are
-      // mutually exclusive, so only ever show the set that is in use.
+      // ---- boundary mode: the blob gates, the caliper regions and the
+      // upstream hint are mutually exclusive, so only ever show the set
+      // that is in use.
       const boundaryField = document.getElementById("node-input-boundaryMode");
       const regionsRow = document.getElementById("label-crop-regions-row");
+      const upstreamRow = document.getElementById("label-crop-upstream-row");
       const regionsField = document.getElementById("node-input-edgeRegions");
       const regionsStatus = document.getElementById("label-crop-regions-status");
       // every row that only means something to the blob search
@@ -488,14 +517,19 @@
       };
       const updateBoundaryVisibility = function () {
         const calipers = boundaryField.value === "calipers";
+        const upstream = boundaryField.value === "upstream";
+        // the blob gates mean nothing to a rectangle measured elsewhere,
+        // whether by the calipers here or by a line-finder ahead
+        const blob = !calipers && !upstream;
         regionsRow.style.display = calipers ? "" : "none";
+        upstreamRow.style.display = upstream ? "" : "none";
         for (const id of BLOB_ONLY) {
           const el = document.getElementById("node-input-" + id);
           const row = el && el.closest(".form-row");
-          if (row) row.style.display = calipers ? "none" : "";
+          if (row) row.style.display = blob ? "" : "none";
         }
         const sizeRow = document.getElementById("label-size-canvas-row");
-        if (sizeRow) sizeRow.style.display = calipers ? "none" : "";
+        if (sizeRow) sizeRow.style.display = blob ? "" : "none";
         if (calipers) validateRegions();
       };
       boundaryField.addEventListener("change", updateBoundaryVisibility);
