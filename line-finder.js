@@ -10,12 +10,17 @@
  * tool, not a filter) and msg.lineFinder carries the result:
  *
  *   { found, reason, line: { x, y, dx, dy, p0, p1 }, angleDeg, score,
- *     calipers: { total, found, used }, residualPx, points, region,
- *     timings: { totalMs } }
+ *     calipers: { total, found, used }, residualPx, points, caliperLines,
+ *     diagnostics, region, timings: { totalMs } }
  *
  * A miss is a normal outcome, not an error: `found` is false and
  * `reason` says which gate stopped it. Genuine setup problems - an
  * unusable payload, a region off the image - are errors.
+ *
+ * The editor's "Run on this image" button posts a crop of the loaded
+ * sample to the admin endpoint POST /line-finder/run (see runOnCrop) and
+ * gets the same result back in frame coordinates, so a region can be
+ * tuned against a real photo without deploying.
  *
  * Unlike label-crop this needs no OpenCV engine. lib/lineFinder.js is
  * pure JS over a grayscale raster and only touches the region's own
@@ -30,6 +35,7 @@ module.exports = (RED) => {
 	const {
 		findLine,
 		regionCorners,
+		normalizeRegion,
 		SCAN_DIRECTIONS,
 		POLARITIES,
 		EDGE_SELECTS,
@@ -152,18 +158,13 @@ module.exports = (RED) => {
 		};
 	}
 
-	function LineFinderNode(config) {
-		RED.nodes.createNode(this, config);
-
-		const region = {
-			x: clampFloat(config.regionX, 0, [-1e6, 1e6]),
-			y: clampFloat(config.regionY, 0, [-1e6, 1e6]),
-			width: clampFloat(config.regionWidth, 100, [1, 1e6]),
-			height: clampFloat(config.regionHeight, 100, [1, 1e6]),
-			angleDeg: clampFloat(config.regionAngleDeg, 0, [-180, 180]),
-		};
-
-		const defaults = {
+	/**
+	 * The search settings out of a node config, clamped into range. The
+	 * editor's Run request carries the same fields under the same names,
+	 * so it goes through here too and cannot drift from what deploys.
+	 */
+	function settingsFrom(config) {
+		return {
 			scanDirection: pickMode(config.scanDirection, "right", SCAN_DIRECTIONS),
 			polarity: pickMode(config.polarity, "either", POLARITIES),
 			edgeSelect: pickMode(config.edgeSelect, "best", EDGE_SELECTS),
@@ -180,6 +181,101 @@ module.exports = (RED) => {
 					? null
 					: clampFloat(config.angleToleranceDeg, 10, BOUNDS.angleToleranceDeg),
 		};
+	}
+
+	/**
+	 * The editor's "Run on this image": the real search over a crop of the
+	 * sample the operator loaded, with the dialog's current settings,
+	 * before anything is deployed.
+	 *
+	 * Body: { image, offset: { x, y }, region: { x, y, width, height,
+	 * angleDeg }, cfg: { ...the node's settings by name } }. `image` is a
+	 * crop, PNG or JPEG, base64 (a data: URL prefix is tolerated), and
+	 * `offset` is where its top-left corner sits in the full frame. A crop
+	 * rather than the frame because httpAdmin's JSON body is capped at
+	 * settings.apiMaxLength - 5MB by default - and a 20-megapixel PNG will
+	 * not fit. The region arrives in frame coordinates, is searched in crop
+	 * coordinates, and every coordinate in the answer is moved back, so the
+	 * editor never has to know the search ran on a crop.
+	 *
+	 * Returns the findLine result with the score gate applied the way the
+	 * input handler applies it, plus `region`, `crop` and the clamped
+	 * `settings` that actually ran, so the editor's explanation of a miss
+	 * quotes the threshold that was used rather than the one typed.
+	 */
+	async function runOnCrop(body) {
+		if (!body || typeof body !== "object") {
+			throw new Error("line-finder/run: expected a JSON body");
+		}
+		if (typeof body.image !== "string" || body.image.length === 0) {
+			throw new Error(
+				"line-finder/run: image must be the crop's PNG or JPEG bytes, base64-encoded",
+			);
+		}
+		// normalizeRegion throws the finder's own messages for a bad region
+		const reg = normalizeRegion(body.region);
+		const region = {
+			x: reg.x,
+			y: reg.y,
+			width: reg.width,
+			height: reg.height,
+			angleDeg: reg.angleDeg,
+		};
+		const offset = body.offset && typeof body.offset === "object" ? body.offset : {};
+		const ox = clampFloat(offset.x, 0, [-1e6, 1e6]);
+		const oy = clampFloat(offset.y, 0, [-1e6, 1e6]);
+		const cfgIn = body.cfg && typeof body.cfg === "object" ? body.cfg : {};
+		const cfg = settingsFrom(cfgIn);
+		const minScore = clampFloat(cfgIn.minScore, 0, BOUNDS.minScore);
+
+		const bytes = Buffer.from(body.image.replace(/^data:[^,]*,/, ""), "base64");
+		const { gray, width, height } = await toGray(bytes);
+		const result = findLine(
+			gray,
+			width,
+			height,
+			{ ...region, x: region.x - ox, y: region.y - oy },
+			cfg,
+		);
+		if (result.found && result.score < minScore) {
+			result.found = false;
+			result.reason = "below-min-score";
+		}
+
+		// back into frame coordinates
+		const shift = (p) => {
+			p.x += ox;
+			p.y += oy;
+		};
+		if (result.line) {
+			shift(result.line);
+			shift(result.line.p0);
+			shift(result.line.p1);
+		}
+		for (const p of result.points) shift(p);
+		for (const c of result.caliperLines) {
+			shift(c.p0);
+			shift(c.p1);
+			if (c.edge) shift(c.edge);
+		}
+		result.region = region;
+		result.crop = { x: ox, y: oy, width, height };
+		result.settings = { ...cfg, minScore };
+		return result;
+	}
+
+	function LineFinderNode(config) {
+		RED.nodes.createNode(this, config);
+
+		const region = {
+			x: clampFloat(config.regionX, 0, [-1e6, 1e6]),
+			y: clampFloat(config.regionY, 0, [-1e6, 1e6]),
+			width: clampFloat(config.regionWidth, 100, [1, 1e6]),
+			height: clampFloat(config.regionHeight, 100, [1, 1e6]),
+			angleDeg: clampFloat(config.regionAngleDeg, 0, [-180, 180]),
+		};
+
+		const defaults = settingsFrom(config);
 
 		// A found line that nothing agrees on is worse than a clean miss, so
 		// the score gate is applied here rather than left to the flow.
@@ -262,4 +358,18 @@ module.exports = (RED) => {
 	}
 
 	RED.nodes.registerType("line-finder", LineFinderNode);
+
+	RED.httpAdmin.post(
+		"/line-finder/run",
+		RED.auth.needsPermission("line-finder.write"),
+		async (req, res) => {
+			try {
+				res.json({ ok: true, result: await runOnCrop(req.body) });
+			} catch (err) {
+				// a bad body, an undecodable image or an invalid region: all the
+				// caller's to fix, so 400 with the message rather than 500
+				res.status(400).json({ ok: false, error: err.message });
+			}
+		},
+	);
 };

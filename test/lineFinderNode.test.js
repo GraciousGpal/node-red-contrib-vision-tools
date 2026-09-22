@@ -7,11 +7,15 @@
  *
  * No engine fake is needed - lib/lineFinder.js is pure JS - so these
  * tests cover the glue only: payload shapes, msg overrides, the score
- * gate, status text, and the miss-is-not-an-error rule.
+ * gate, status text, the miss-is-not-an-error rule, and the editor's
+ * POST /line-finder/run endpoint.
  */
 
 const test = require("node:test");
 const assert = require("node:assert");
+const sharp = require("sharp");
+const { findLine } = require("../lib/lineFinder.js");
+const { labelOnTray } = require("./helpers/synthetic.js");
 const { loadNode } = require("./helpers/fakeRed.js");
 
 function makeNode(config = {}) {
@@ -244,6 +248,133 @@ test("dropped calipers are published too, not just the surviving fit", async () 
 	const data = h.published.filter((p) => p.topic === "line-finder-preview").at(-1).data;
 	assert.strictEqual(data.found, true, data.reason);
 	assert.ok(data.points.some((p) => p.used === false), "the outlier should be drawable in red");
+});
+
+// ---- the editor's Run endpoint ----------------------------------------
+
+/** Drive the captured POST /line-finder/run handler with a JSON body. */
+function callRun(body) {
+	const node = loadNode("line-finder.js", {});
+	const handlers = node.adminRoutes["/line-finder/run"];
+	assert.ok(handlers, "the run endpoint should be registered on httpAdmin");
+	// needsPermission's guard first, the handler last
+	assert.strictEqual(handlers.length, 2);
+	const handler = handlers[handlers.length - 1];
+	return new Promise((resolve) => {
+		const res = {
+			statusCode: 200,
+			status(code) {
+				this.statusCode = code;
+				return this;
+			},
+			json(payload) {
+				resolve({ status: this.statusCode, body: payload });
+			},
+		};
+		handler({ body }, res);
+	});
+}
+
+// a pale label tilted 7 degrees on a dark tray; the region straddles its
+// left edge, so the line found runs 7 degrees off vertical
+const FRAME = { width: 400, height: 300 };
+const RUN_REGION = { x: 50, y: 90, width: 60, height: 120, angleDeg: 7 };
+const RUN_CFG = { scanDirection: "right", polarity: "darkToLight", calipers: "8", contrastThreshold: 3 };
+function trayFrame() {
+	return labelOnTray(FRAME.width, FRAME.height, { angleDeg: 7, channels: 1 });
+}
+async function pngCrop(raw, crop) {
+	return sharp(raw.data, { raw: { width: raw.width, height: raw.height, channels: 1 } })
+		.extract({ left: crop.x, top: crop.y, width: crop.width, height: crop.height })
+		.png()
+		.toBuffer();
+}
+
+test("the Run endpoint answers in frame coordinates and agrees with a whole-frame search", async () => {
+	const raw = trayFrame();
+	const gray = new Uint8Array(raw.data.buffer, raw.data.byteOffset, raw.data.byteLength);
+	const direct = findLine(gray, raw.width, raw.height, RUN_REGION, RUN_CFG);
+	assert.strictEqual(direct.found, true, direct.reason);
+
+	// the editor sends a crop around the region, not the frame
+	const crop = { x: 30, y: 60, width: 120, height: 180 };
+	const png = await pngCrop(raw, crop);
+	const { status, body } = await callRun({
+		image: png.toString("base64"),
+		offset: { x: crop.x, y: crop.y },
+		region: RUN_REGION,
+		cfg: RUN_CFG,
+	});
+	assert.strictEqual(status, 200);
+	assert.strictEqual(body.ok, true);
+	const r = body.result;
+	assert.strictEqual(r.found, true, r.reason);
+
+	// every coordinate comes back with the offset added, so the editor can
+	// draw it over the full frame without knowing a crop was made
+	const close = (a, b, what) =>
+		assert.ok(Math.abs(a - b) < 0.5, `${what}: ${a} vs ${b}`);
+	close(r.line.x, direct.line.x, "line.x");
+	close(r.line.y, direct.line.y, "line.y");
+	close(r.line.p0.x, direct.line.p0.x, "p0.x");
+	close(r.line.p0.y, direct.line.p0.y, "p0.y");
+	close(r.line.p1.x, direct.line.p1.x, "p1.x");
+	close(r.line.p1.y, direct.line.p1.y, "p1.y");
+	close(r.angleDeg, direct.angleDeg, "angleDeg");
+	assert.strictEqual(r.points.length, direct.points.length);
+	for (let i = 0; i < r.points.length; i++) {
+		close(r.points[i].x, direct.points[i].x, `point ${i} x`);
+		close(r.points[i].y, direct.points[i].y, `point ${i} y`);
+	}
+	assert.strictEqual(r.caliperLines.length, 8);
+	for (let i = 0; i < 8; i++) {
+		close(r.caliperLines[i].p0.x, direct.caliperLines[i].p0.x, `caliper ${i} p0.x`);
+		close(r.caliperLines[i].p1.y, direct.caliperLines[i].p1.y, `caliper ${i} p1.y`);
+	}
+	// what the editor needs to explain the outcome and draw it
+	assert.deepStrictEqual(r.region, RUN_REGION);
+	assert.deepStrictEqual(r.crop, { x: 30, y: 60, width: 120, height: 180 });
+	assert.strictEqual(r.settings.calipers, 8, "settings come back clamped, not as typed");
+	assert.strictEqual(r.settings.minScore, 0);
+	assert.ok(r.diagnostics.peakContrast >= 3, `peak ${r.diagnostics.peakContrast}`);
+});
+
+test("the Run endpoint tolerates a data: URL prefix and applies minScore like the input handler", async () => {
+	const raw = trayFrame();
+	const crop = { x: 30, y: 60, width: 120, height: 180 };
+	const png = await pngCrop(raw, crop);
+	const { status, body } = await callRun({
+		image: "data:image/png;base64," + png.toString("base64"),
+		offset: crop,
+		region: RUN_REGION,
+		cfg: { ...RUN_CFG, minScore: 1 },
+	});
+	assert.strictEqual(status, 200);
+	assert.strictEqual(body.result.found, false);
+	assert.strictEqual(body.result.reason, "below-min-score");
+	assert.ok(body.result.score > 0.5, "the fit itself was fine");
+});
+
+test("the Run endpoint refuses a missing image or an invalid region with a 400 and a reason", async () => {
+	const noImage = await callRun({ offset: { x: 0, y: 0 }, region: RUN_REGION, cfg: {} });
+	assert.strictEqual(noImage.status, 400);
+	assert.strictEqual(noImage.body.ok, false);
+	assert.match(noImage.body.error, /image must be/);
+
+	const raw = trayFrame();
+	const png = await pngCrop(raw, { x: 0, y: 0, width: 100, height: 100 });
+	const badRegion = await callRun({
+		image: png.toString("base64"),
+		offset: { x: 0, y: 0 },
+		region: { x: 10, y: 10, width: 0, height: 50 },
+		cfg: {},
+	});
+	assert.strictEqual(badRegion.status, 400);
+	assert.match(badRegion.body.error, /positive width and height/);
+
+	const garbage = await callRun({ image: "bm90IGFuIGltYWdl", offset: { x: 0, y: 0 }, region: RUN_REGION, cfg: {} });
+	assert.strictEqual(garbage.status, 400);
+	assert.ok(garbage.body.error.length > 0, "an undecodable image says so");
 });
 
 test("a preview failure warns but does not fail the frame", async () => {

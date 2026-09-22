@@ -10,7 +10,8 @@
  * by hand.
  *
  * test/editorRegionGeometry.test.js covers the other half: that the
- * editor's copy of the region geometry still matches the runtime's.
+ * editor's copy of the region geometry still matches the runtime's, and
+ * the crop/explanation maths behind the Run button.
  */
 
 const test = require("node:test");
@@ -396,6 +397,174 @@ test("the wheel zooms and the readout follows", () => {
 	v.canvas.dispatch("wheel", { clientX: 400, clientY: 300, deltaY: -100 });
 	const after = Number(v.footer.textContent.match(/zoom (\d+)%/)[1]);
 	assert.ok(after > before, `${after}% should be more than ${before}%`);
+});
+
+// ---- Run on this image ------------------------------------------------
+
+/**
+ * A stand-in for jQuery's ajax: records each request and lets the test
+ * answer it, through the same done/fail/always chain the editor uses.
+ */
+function fakeAjax() {
+	const calls = [];
+	const $ = {
+		ajax(opts) {
+			const handlers = { done: [], fail: [], always: [] };
+			const chain = {};
+			for (const k of Object.keys(handlers)) {
+				chain[k] = (fn) => {
+					handlers[k].push(fn);
+					return chain;
+				};
+			}
+			const settle = (kind, arg) => {
+				for (const fn of handlers[kind]) fn(arg);
+				for (const fn of handlers.always) fn();
+			};
+			calls.push({
+				opts,
+				body: JSON.parse(opts.data),
+				resolve: (data) => settle("done", data),
+				reject: (xhr) => settle("fail", xhr),
+			});
+			return chain;
+		},
+	};
+	return { $, calls };
+}
+
+/** Boot with a fake $ in scope, run the body, and take the fake down again. */
+function withAjax(fn) {
+	const ajax = fakeAjax();
+	globalThis.$ = ajax.$;
+	try {
+		return fn(ajax);
+	} finally {
+		delete globalThis.$;
+	}
+}
+
+const runStatus = (env) => env.document.getElementById("line-finder-run-status").textContent;
+
+function hit(overrides = {}) {
+	return {
+		found: true, reason: "ok", angleDeg: 0.12, score: 0.91, residualPx: 0.31,
+		calipers: { total: 8, found: 8, used: 7 },
+		// a little right of the region's own centre line, so the drawing of
+		// the fitted line cannot be mistaken for the dashed expected-edge line
+		line: { x: 210, y: 200, dx: 0, dy: 1, p0: { x: 210, y: 150 }, p1: { x: 210, y: 250 } },
+		points: [],
+		caliperLines: [
+			{ band: 0, p0: { x: 100, y: 156 }, p1: { x: 300, y: 156 }, complete: true, peakContrast: 9, edge: { x: 200, y: 156 }, used: true },
+			{ band: 1, p0: { x: 100, y: 168 }, p1: { x: 300, y: 168 }, complete: true, peakContrast: 9, edge: { x: 230, y: 168 }, used: false },
+		],
+		diagnostics: { peakContrast: 9, medianPeakContrast: 9, calipersWithEdge: 8, calipersInImage: 8, peakPolarity: "darkToLight" },
+		settings: { contrastThreshold: 2, minCaliperFraction: 0.5, polarity: "either", angleToleranceDeg: 10, minScore: 0 },
+		...overrides,
+	};
+}
+
+test("Run waits for an image, then posts a crop around the region with the dialog's settings", () => {
+	withAjax((ajax) => {
+		const env = boot({ regionX: 100, regionY: 150, regionWidth: 200, regionHeight: 100, calipers: 8, contrastThreshold: 1.5 });
+		const run = env.document.getElementById("line-finder-run");
+		assert.strictEqual(run.disabled, true, "nothing to run on yet");
+		run.dispatch("click");
+		assert.strictEqual(ajax.calls.length, 0);
+
+		loadImage(env);
+		assert.strictEqual(run.disabled, false);
+		run.dispatch("click");
+		assert.strictEqual(ajax.calls.length, 1);
+		const { opts, body } = ajax.calls[0];
+		assert.strictEqual(opts.url, "line-finder/run");
+		assert.strictEqual(opts.type, "POST");
+		assert.strictEqual(opts.contentType, "application/json");
+		// the region's bounding box with the 32px margin (bands are 12.5px)
+		assert.deepStrictEqual(body.offset, { x: 68, y: 118 });
+		assert.deepStrictEqual(body.region, { x: 100, y: 150, width: 200, height: 100, angleDeg: 0 });
+		assert.strictEqual(Number(body.cfg.contrastThreshold), 1.5);
+		assert.strictEqual(Number(body.cfg.calipers), 8);
+		assert.strictEqual(body.cfg.scanDirection, "right");
+		// the crop was cut from the image at that offset
+		const crop = env.created.find((e) => e.tagName === "CANVAS" && e.width === 264);
+		assert.ok(crop, "a crop canvas of the box's size");
+		assert.strictEqual(crop.height, 164);
+		const draw = crop.getContext().calls.find((c) => c.op === "drawImage");
+		assert.deepStrictEqual(draw.args.slice(1, 5), [68, 118, 264, 164]);
+		// busy until the answer comes
+		assert.strictEqual(run.disabled, true);
+		assert.match(runStatus(env), /running/);
+	});
+});
+
+test("a hit is summed up in one line and drawn over the thumbnail through the region's own mapping", () => {
+	withAjax((ajax) => {
+		const env = boot({ regionX: 100, regionY: 150, regionWidth: 200, regionHeight: 100, calipers: 8 });
+		loadImage(env);
+		const run = env.document.getElementById("line-finder-run");
+		const thumb = env.document.getElementById("line-finder-canvas").getContext();
+		run.dispatch("click");
+		const before = thumb.calls.length;
+		ajax.calls[0].resolve({ ok: true, result: hit() });
+
+		const status = runStatus(env);
+		assert.match(status, /found/);
+		assert.match(status, /0\.12°/);
+		assert.match(status, /7\/8 calipers/);
+		assert.match(status, /score 0\.91/);
+		assert.match(status, /fraction of a pixel/, "the browser decoded the sample, and the line says so");
+		assert.strictEqual(run.disabled, false, "ready to run again");
+
+		const calls = thumb.calls.slice(before);
+		// one dot per caliper that found an edge: the kept one filled, the dropped one hollow
+		const arcs = calls.filter((c) => c.op === "arc");
+		assert.strictEqual(arcs.length, 2);
+		const after = (i) => calls.slice(calls.indexOf(arcs[i]) + 1, calls.indexOf(arcs[i]) + 2)[0].op;
+		assert.strictEqual(after(0), "fill");
+		assert.strictEqual(after(1), "stroke");
+		// the fitted line lands where the thumbnail's mapping puts image (210,150)
+		const s = Math.min(THUMB.width / IMG.width, THUMB.height / IMG.height);
+		const expect = [(THUMB.width - IMG.width * s) / 2 + 210 * s, (THUMB.height - IMG.height * s) / 2 + 150 * s];
+		assert.ok(
+			calls.some((c) => c.op === "moveTo" && Math.abs(c.args[0] - expect[0]) < 1e-9 && Math.abs(c.args[1] - expect[1]) < 1e-9),
+			`no moveTo at ${expect}`,
+		);
+
+		// the result belongs to the region it was run on: move the region and it goes
+		env.field("regionX").value = 120;
+		env.field("regionX").dispatch("change");
+		assert.strictEqual(runStatus(env), "");
+		const redraw = thumb.calls.slice(before + calls.length);
+		assert.ok(redraw.some((c) => c.op === "drawImage"), "the thumbnail was repainted");
+		assert.strictEqual(redraw.filter((c) => c.op === "arc").length, 0, "without the stale dots");
+	});
+});
+
+test("a miss says what stopped it and which field to move; a failed call says why", () => {
+	withAjax((ajax) => {
+		const env = boot({ regionX: 100, regionY: 150, regionWidth: 200, regionHeight: 100, calipers: 8 });
+		loadImage(env);
+		const run = env.document.getElementById("line-finder-run");
+		run.dispatch("click");
+		ajax.calls[0].resolve({
+			ok: true,
+			result: hit({
+				found: false, reason: "no-edge", score: 0, angleDeg: null, line: null, caliperLines: [],
+				calipers: { total: 8, found: 0, used: 0 },
+				diagnostics: { peakContrast: 1.3, medianPeakContrast: 1.3, calipersWithEdge: 0, calipersInImage: 8, peakPolarity: "lightToDark" },
+			}),
+		});
+		assert.match(
+			runStatus(env),
+			/not found \(no-edge\): strongest edge contrast 1\.3, threshold 2\.0 - lower Contrast threshold below 1\.3 to pick it up/,
+		);
+
+		run.dispatch("click");
+		ajax.calls[1].reject({ responseJSON: { ok: false, error: "line-finder: region needs positive width and height" } });
+		assert.match(runStatus(env), /run failed: line-finder: region needs positive width and height/);
+		assert.strictEqual(run.disabled, false);
+	});
 });
 
 test("Reset restores a usable region without touching the scan direction", () => {

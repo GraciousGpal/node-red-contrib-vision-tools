@@ -844,6 +844,17 @@ aimed at the wrong edge, clipped by the frame, or straddling two steps,
 and the picture tells you all three. It re-encodes the frame per message,
 so it is for tuning, not production.
 
+The editor's **Run on this image** button does the same without a deploy:
+it runs the real search on the loaded sample with the dialog's current
+settings and draws every caliper, its edge point (filled when the fit kept
+it, hollow when the outlier trim dropped it) and the fitted line over the
+thumbnail. On a miss the status line says which gate stopped it and what
+to move, from the strongest step any caliper actually saw - "strongest
+edge contrast 1.3, threshold 2.0 - lower Contrast threshold below 1.3 to
+pick it up" - so a faint white-on-white label edge is tuned in a few
+clicks rather than a redeploy per guess. The browser decodes the sample,
+so the runtime's figures can differ by a fraction of a pixel.
+
 ### Four of them make a rectangle
 
 `label-crop`'s `boundaryMode: "calipers"` takes four `edgeRegions` and

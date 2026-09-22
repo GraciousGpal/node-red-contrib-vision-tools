@@ -27,6 +27,14 @@
         <button type="button" id="line-finder-clear" class="red-ui-button red-ui-button-small">
           Reset
         </button>
+        <button
+          type="button"
+          id="line-finder-run"
+          class="red-ui-button red-ui-button-small"
+          title="Search the loaded image with the settings below, without deploying"
+        >
+          <i id="line-finder-run-icon" class="fa fa-play"></i> Run on this image
+        </button>
       </div>
       <div
         id="line-finder-readout"
@@ -34,13 +42,18 @@
       >
         no region
       </div>
+      <div
+        id="line-finder-run-status"
+        style="margin-top:4px; color:#888; font-size:12px; font-family:monospace;"
+      ></div>
       <div style="margin-top:4px; color:#999; font-size:12px;">
         Load a representative photo, then open the viewer to zoom in and drag
         <b>across</b> the edge, in the direction the calipers should travel.
         The orange arrow is that direction, the dashed green line is the edge
         being looked for, and the pale lines are the calipers themselves.
         Corner handles resize, the amber grip rotates, arrow keys nudge by a
-        pixel.
+        pixel. <b>Run on this image</b> searches the photo with the settings
+        below and draws what it found - or says why it found nothing.
       </div>
     </div>
   </div>
@@ -294,6 +307,16 @@
 
   <h3>Tuning</h3>
   <p>
+    <b>Run on this image</b> runs the real search on the loaded sample
+    with the dialog's current settings, without deploying, and draws every
+    caliper, its edge point (filled when the fit kept it, hollow when the
+    outlier trim dropped it) and the fitted line on the thumbnail. On a
+    miss the status line says which gate stopped it and what to move -
+    for a faint edge, the strongest step any caliper actually saw against
+    the threshold. The browser decodes the sample, so the runtime's
+    figures can differ by a fraction of a pixel.
+  </p>
+  <p>
     Start with <i>Contrast</i> at 2 and lower it until the edge is found;
     if it finds the wrong edge instead, tighten the region rather than
     raising the threshold. <i>Select</i> = <b>first</b> is the
@@ -431,6 +454,107 @@
       };
       // EDITOR_GEOMETRY_END
 
+      // ---- run-on-this-image maths -----------------------------------
+      // The crop the Run button sends and the sentence it writes about a
+      // miss. Both are plain arithmetic on the result and kept free of the
+      // DOM, so test/editorRegionGeometry.test.js can lift them out with
+      // the geometry block above and check them.
+      // EDITOR_RUN_START
+      /**
+       * The frame-pixel box to send: the region's bounding box with a
+       * margin of at least one caliper band or 32px on every side, snapped
+       * outward to whole pixels and clamped to the image. Null when the
+       * region lies wholly outside the frame - there is nothing to search.
+       */
+      const cropBoxEditor = function (region, scanDirection, calipers, imageW, imageH) {
+        const f = regionFrameEditor(region, scanDirection);
+        const margin = Math.ceil(Math.max(f.length / Math.max(1, calipers), 32));
+        let x0 = Infinity;
+        let y0 = Infinity;
+        let x1 = -Infinity;
+        let y1 = -Infinity;
+        for (const p of f.corners) {
+          x0 = Math.min(x0, p.x);
+          y0 = Math.min(y0, p.y);
+          x1 = Math.max(x1, p.x);
+          y1 = Math.max(y1, p.y);
+        }
+        x0 = Math.max(0, Math.floor(x0 - margin));
+        y0 = Math.max(0, Math.floor(y0 - margin));
+        x1 = Math.min(imageW, Math.ceil(x1 + margin));
+        y1 = Math.min(imageH, Math.ceil(y1 + margin));
+        if (!(x1 > x0) || !(y1 > y0)) return null;
+        return { x: x0, y: y0, width: x1 - x0, height: y1 - y0, margin: margin };
+      };
+
+      /** A contrast figure at the precision the Contrast field takes. */
+      const fmtContrast = function (v) {
+        const n = Number(v) || 0;
+        return n >= 10 ? n.toFixed(0) : n >= 1 ? n.toFixed(1) : n.toFixed(2);
+      };
+
+      /**
+       * One sentence on why the search missed and which field to move,
+       * from the result's diagnostics and the settings that actually ran.
+       * The gates are checked in the order the finder applies them, so the
+       * sentence names the first one that stopped it.
+       */
+      const explainMiss = function (result) {
+        const d = result.diagnostics || {};
+        const s = result.settings || {};
+        const total = (result.calipers && result.calipers.total) || 0;
+        const peak = d.peakContrast || 0;
+        const threshold = Number(s.contrastThreshold) || 0;
+        if (result.reason === "below-min-score") {
+          return (
+            "score " + Number(result.score).toFixed(2) +
+            " is under Min score " + s.minScore +
+            " - lower Min score, or tighten the region so more calipers agree"
+          );
+        }
+        if (result.reason === "angle-out-of-tolerance") {
+          return (
+            "fitted line at " + Number(result.angleDeg).toFixed(1) +
+            "° leans more than " + s.angleToleranceDeg + "° from the region" +
+            " - rotate the region to match the edge, or raise Angle tol."
+          );
+        }
+        if (!d.calipersInImage) {
+          return "no caliper lies wholly inside the image - move the region onto the frame";
+        }
+        if (peak < threshold) {
+          return (
+            "strongest edge contrast " + fmtContrast(peak) +
+            ", threshold " + fmtContrast(threshold) +
+            " - lower Contrast threshold below " + fmtContrast(peak) + " to pick it up" +
+            (d.medianPeakContrast < peak
+              ? ", below " + fmtContrast(d.medianPeakContrast) + " for most calipers"
+              : "")
+          );
+        }
+        if (
+          !d.calipersWithEdge && d.peakPolarity &&
+          s.polarity !== "either" && s.polarity !== d.peakPolarity
+        ) {
+          return (
+            "strongest edge (contrast " + fmtContrast(peak) + ") runs " + d.peakPolarity +
+            " but Polarity is " + s.polarity + " - switch Polarity, or set it to either"
+          );
+        }
+        // enough contrast somewhere, just not in enough calipers
+        const need = Math.max(2, Math.ceil(total * (Number(s.minCaliperFraction) || 0)));
+        return (
+          d.calipersWithEdge + "/" + total + " calipers saw an edge above threshold " +
+          fmtContrast(threshold) + ", Min calipers needs " + need +
+          (d.calipersInImage < total
+            ? " (" + (total - d.calipersInImage) + " lie past the frame)"
+            : "") +
+          " - lower Contrast towards the median caliper peak " +
+          fmtContrast(d.medianPeakContrast) + ", or lower Min calipers"
+        );
+      };
+      // EDITOR_RUN_END
+
       /**
        * The four corners in the region's own order (top-left, top-right,
        * bottom-right, bottom-left before rotation) rather than in scan
@@ -465,6 +589,9 @@
       const ctx = canvas.getContext("2d");
       const readout = document.getElementById("line-finder-readout");
       const fileInput = document.getElementById("line-finder-file");
+      const runButton = document.getElementById("line-finder-run");
+      const runIcon = document.getElementById("line-finder-run-icon");
+      const runStatus = document.getElementById("line-finder-run-status");
 
       const SCAN_ORDER = ["right", "down", "left", "up"];
       const SCAN_ARROW = { right: "→", left: "←", down: "↓", up: "↑" };
@@ -473,6 +600,9 @@
       let image = null;
       let imageW = 0;
       let imageH = 0;
+      // what the last Run on this image came back with, in image pixels
+      let runResult = null;
+      let running = false;
 
       const field = function (id) {
         return document.getElementById("node-input-" + id);
@@ -500,6 +630,26 @@
       const currentCalipers = function () {
         const n = parseInt(field("calipers").value, 10);
         return Number.isFinite(n) ? clamp(n, 1, 512) : 16;
+      };
+      // the settings oneditsave stores, by the names the runtime reads them
+      // under; sent as typed, the runtime clamps them the way a deploy would
+      const RUN_SETTINGS = [
+        "scanDirection",
+        "polarity",
+        "edgeSelect",
+        "ignoreCount",
+        "calipers",
+        "contrastThreshold",
+        "filterHalfWidth",
+        "outlierTolerancePx",
+        "minCaliperFraction",
+        "angleToleranceDeg",
+        "minScore",
+      ];
+      const currentCfg = function () {
+        const cfg = {};
+        for (const id of RUN_SETTINGS) cfg[id] = field(id).value;
+        return cfg;
       };
       const writeRegion = function (region, scanDirection) {
         field("regionX").value = Math.round(region.x);
@@ -634,6 +784,54 @@
         drawArrow(c, a0.x, a0.y, a1.x, a1.y);
       };
 
+      // ---- run result overlay ----------------------------------------
+      // What the last Run found, drawn through the same mapping as the
+      // region so it lands on the pixels it measured: every caliper as a
+      // thin line (red when its band fell past the frame), its edge point
+      // filled when the fit kept it and hollow when the outlier trim
+      // dropped it, and the fitted line in yellow across the region.
+      const drawRunResult = function (c, toScreen) {
+        if (!runResult) return;
+        const S = function (p) {
+          return toScreen(p.x, p.y);
+        };
+        for (const cal of runResult.caliperLines || []) {
+          const a = S(cal.p0);
+          const z = S(cal.p1);
+          c.strokeStyle = cal.complete ? "rgba(255,255,255,0.7)" : "rgba(239,83,80,0.6)";
+          c.lineWidth = 1;
+          c.beginPath();
+          c.moveTo(a.x, a.y);
+          c.lineTo(z.x, z.y);
+          c.stroke();
+          if (!cal.edge) continue;
+          const e = S(cal.edge);
+          c.beginPath();
+          c.arc(e.x, e.y, 3, 0, Math.PI * 2);
+          if (cal.used) {
+            c.fillStyle = "#66bb6a";
+            c.fill();
+          } else {
+            c.strokeStyle = "#ef5350";
+            c.lineWidth = 1.5;
+            c.stroke();
+          }
+        }
+        if (runResult.line) {
+          const a = S(runResult.line.p0);
+          const z = S(runResult.line.p1);
+          c.beginPath();
+          c.moveTo(a.x, a.y);
+          c.lineTo(z.x, z.y);
+          c.strokeStyle = "rgba(0,0,0,0.6)";
+          c.lineWidth = 3.5;
+          c.stroke();
+          c.strokeStyle = "#ffeb3b";
+          c.lineWidth = 1.5;
+          c.stroke();
+        }
+      };
+
       // ---- thumbnail -------------------------------------------------
       const fit = function () {
         if (!imageW || !imageH) return { s: 1, dx: 0, dy: 0 };
@@ -656,16 +854,107 @@
           return;
         }
         const f = fit();
+        const toScreen = function (x, y) {
+          return { x: f.dx + x * f.s, y: f.dy + y * f.s };
+        };
         ctx.drawImage(image, f.dx, f.dy, imageW * f.s, imageH * f.s);
-        drawRegion(
-          ctx,
-          currentRegion(),
-          currentScan(),
-          function (x, y) {
-            return { x: f.dx + x * f.s, y: f.dy + y * f.s };
-          },
-          { showCalipers: false },
+        drawRegion(ctx, currentRegion(), currentScan(), toScreen, { showCalipers: false });
+        drawRunResult(ctx, toScreen);
+      };
+
+      // ---- run on this image -----------------------------------------
+      const setRunStatus = function (text, tone) {
+        runStatus.textContent = text;
+        runStatus.style.color =
+          tone === "ok" ? "#2e7d32" : tone === "miss" ? "#b26a00" : tone === "error" ? "#c62828" : "#888";
+      };
+      const clearRun = function () {
+        runResult = null;
+        setRunStatus("", "");
+      };
+      const describeRun = function (r) {
+        return (
+          r.angleDeg.toFixed(2) + "°  ·  " +
+          r.calipers.used + "/" + r.calipers.total + " calipers  ·  " +
+          "score " + r.score.toFixed(2) + "  ·  " +
+          "resid " + r.residualPx.toFixed(2) + " px"
         );
+      };
+      const DECODE_NOTE =
+        "   (browser-decoded sample: runtime figures can differ by a fraction of a pixel)";
+
+      /**
+       * The real search, on the loaded image, with the settings as they
+       * stand in the dialog - without a deploy. Only a crop around the
+       * region crosses the wire: httpAdmin caps a JSON body at 5MB by
+       * default, which a full frame as PNG would not fit, so the runtime is
+       * told where the crop sits and answers in frame coordinates.
+       */
+      const runOnImage = function () {
+        if (!image || running) return;
+        const region = currentRegion();
+        const scan = currentScan();
+        const box = cropBoxEditor(region, scan, currentCalipers(), imageW, imageH);
+        if (!box) {
+          runResult = null;
+          setRunStatus("the region lies wholly outside the image - nothing to search", "miss");
+          drawThumb();
+          return;
+        }
+        const crop = document.createElement("canvas");
+        crop.width = box.width;
+        crop.height = box.height;
+        crop
+          .getContext("2d")
+          .drawImage(image, box.x, box.y, box.width, box.height, 0, 0, box.width, box.height);
+        const dataUrl = crop.toDataURL("image/png");
+
+        running = true;
+        runButton.disabled = true;
+        runIcon.className = "fa fa-spinner fa-spin";
+        setRunStatus("running…", "");
+        $.ajax({
+          url: "line-finder/run",
+          type: "POST",
+          contentType: "application/json",
+          dataType: "json",
+          data: JSON.stringify({
+            image: dataUrl.slice(dataUrl.indexOf(",") + 1),
+            offset: { x: box.x, y: box.y },
+            region: region,
+            cfg: currentCfg(),
+          }),
+        })
+          .done(function (data) {
+            const r = data && data.result;
+            if (!r) {
+              setRunStatus("run failed: no result came back", "error");
+              return;
+            }
+            runResult = r;
+            if (r.found) {
+              setRunStatus("found  " + describeRun(r) + DECODE_NOTE, "ok");
+            } else {
+              setRunStatus(
+                "not found (" + r.reason + "): " + explainMiss(r) + DECODE_NOTE,
+                "miss",
+              );
+            }
+            drawThumb();
+          })
+          .fail(function (xhr) {
+            const body = xhr && xhr.responseJSON;
+            setRunStatus(
+              "run failed: " +
+                ((body && body.error) || (xhr && xhr.statusText) || "no response"),
+              "error",
+            );
+          })
+          .always(function () {
+            running = false;
+            runButton.disabled = !image;
+            runIcon.className = "fa fa-play";
+          });
       };
 
       // ---- zoomable modal viewer -------------------------------------
@@ -915,6 +1204,7 @@
           vctx.strokeRect(tl.x, tl.y, br.x - tl.x, br.y - tl.y);
 
           drawRegion(vctx, reg, scan, toScreen, { showCalipers: showCalipers });
+          drawRunResult(vctx, toScreen);
 
           // resize handles and the rotation grip
           const pts = handlePoints();
@@ -1140,6 +1430,7 @@
         btnCancel.addEventListener("click", closeViewer);
         btnApply.addEventListener("click", function () {
           writeRegion(reg, scan);
+          clearRun();
           updateReadout();
           drawThumb();
           closeViewer();
@@ -1190,6 +1481,8 @@
           imageW = img.naturalWidth;
           imageH = img.naturalHeight;
           URL.revokeObjectURL(url);
+          clearRun();
+          runButton.disabled = false;
           updateReadout();
           drawThumb();
           openViewer();
@@ -1208,10 +1501,16 @@
             { x: 0, y: 0, width: 100, height: 100, angleDeg: 0 },
             currentScan(),
           );
+          clearRun();
           updateReadout();
           drawThumb();
         });
 
+      runButton.addEventListener("click", runOnImage);
+      runButton.disabled = true;
+
+      // a result belongs to the region it was run on: moving the region or
+      // changing the caliper count makes it stale, so it goes
       for (const id of [
         "regionX",
         "regionY",
@@ -1222,6 +1521,7 @@
         "calipers",
       ]) {
         field(id).addEventListener("change", function () {
+          clearRun();
           updateReadout();
           drawThumb();
         });

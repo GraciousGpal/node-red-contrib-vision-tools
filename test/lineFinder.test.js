@@ -345,6 +345,85 @@ test("a horizontal step is invisible to a horizontal scan", () => {
 	assert.strictEqual(res.reason, "no-edge");
 });
 
+// ---- explaining a miss ------------------------------------------------
+
+test("a miss over flat grey reports a peak contrast below the threshold, and where every caliper looked", () => {
+	const img = canvas(200, 200, 128);
+	const region = { x: 20, y: 20, width: 100, height: 100 };
+	const res = findLine(img.gray, img.width, img.height, region,
+		{ scanDirection: "right", calipers: 10, contrastThreshold: 2 });
+	assert.strictEqual(res.found, false);
+	assert.strictEqual(res.reason, "no-edge");
+	assert.ok(res.diagnostics.peakContrast < 2, `peak ${res.diagnostics.peakContrast}`);
+	assert.strictEqual(res.diagnostics.peakContrast, 0, "nothing at all steps on flat grey");
+	assert.strictEqual(res.diagnostics.medianPeakContrast, 0);
+	assert.strictEqual(res.diagnostics.peakPolarity, null);
+	assert.strictEqual(res.diagnostics.calipersWithEdge, 0);
+	assert.strictEqual(res.diagnostics.calipersInImage, 10);
+
+	// one caliper per band, hit or not, so a preview can draw the search
+	assert.strictEqual(res.caliperLines.length, 10);
+	const first = res.caliperLines[0];
+	assert.strictEqual(first.band, 0);
+	assert.strictEqual(first.complete, true);
+	assert.strictEqual(first.edge, null);
+	assert.strictEqual(first.used, false);
+	// scanning right: the caliper runs from the region's left edge to its
+	// right, through the centre of its 10px band
+	assert.ok(Math.abs(first.p0.x - 20) < 1e-9 && Math.abs(first.p0.y - 25) < 1e-9, JSON.stringify(first.p0));
+	assert.ok(Math.abs(first.p1.x - 120) < 1e-9 && Math.abs(first.p1.y - 25) < 1e-9, JSON.stringify(first.p1));
+});
+
+test("the reported peak contrast is the threshold that would have found the edge", () => {
+	// a three-level step: real, but under a threshold of 5
+	const img = canvas(200, 200, 128);
+	vStep(img, 100, 131);
+	const region = { x: 60, y: 20, width: 80, height: 160 };
+	const cfg = { scanDirection: "right", calipers: 8, contrastThreshold: 5 };
+	const miss = findLine(img.gray, img.width, img.height, region, cfg);
+	assert.strictEqual(miss.found, false);
+	assert.strictEqual(miss.reason, "no-edge");
+	const peak = miss.diagnostics.peakContrast;
+	assert.ok(peak > 0 && peak < 5, `peak ${peak}`);
+	assert.strictEqual(miss.diagnostics.peakPolarity, "darkToLight");
+	assert.ok(Math.abs(miss.diagnostics.medianPeakContrast - peak) < 1e-6, "a clean step looks the same to every caliper");
+	for (const c of miss.caliperLines) {
+		assert.ok(Math.abs(c.peakContrast - peak) < 1e-6);
+	}
+
+	// the promise the editor's status line makes: lower Contrast below the
+	// peak and the edge is picked up
+	const hit = findLine(img.gray, img.width, img.height, region,
+		{ ...cfg, contrastThreshold: peak * 0.99 });
+	assert.strictEqual(hit.found, true, hit.reason);
+	assert.ok(Math.abs(hit.line.x - 100) < 0.6, `edge at ${hit.line.x}`);
+	assert.strictEqual(hit.diagnostics.calipersWithEdge, 8);
+});
+
+test("caliperLines carry the chosen edge and mirror the outlier trim", () => {
+	const img = canvas(200, 300, 60);
+	vStep(img, 80, 200);
+	// a bright speck captures one caliper band away from the edge
+	for (let y = 120; y < 150; y++) {
+		for (let x = 50; x < 56; x++) img.gray[y * img.width + x] = 255;
+	}
+	const res = findLine(img.gray, img.width, img.height,
+		{ x: 40, y: 30, width: 80, height: 240 },
+		{ scanDirection: "right", polarity: "darkToLight", calipers: 8, edgeSelect: "first" });
+	assert.strictEqual(res.found, true, res.reason);
+	const dropped = res.caliperLines.filter((c) => c.edge && !c.used);
+	assert.strictEqual(dropped.length, 1, "the speck's caliper is dropped");
+	assert.ok(dropped[0].edge.x < 60, `the dropped edge sits on the speck, at ${dropped[0].edge.x}`);
+	// the same story the points tell, band for band
+	for (const p of res.points) {
+		const c = res.caliperLines[p.band];
+		assert.strictEqual(c.used, p.used);
+		assert.ok(Math.abs(c.edge.x - p.x) < 1e-9 && Math.abs(c.edge.y - p.y) < 1e-9);
+	}
+	assert.strictEqual(res.diagnostics.calipersWithEdge, 8);
+	assert.ok(res.diagnostics.peakContrast > res.diagnostics.medianPeakContrast, "the speck is the strongest step");
+});
+
 test("a region partly outside the image skips only the bands that fall out", () => {
 	const img = canvas(200, 300, 60);
 	vStep(img, 80, 200);
@@ -355,6 +434,11 @@ test("a region partly outside the image skips only the bands that fall out", () 
 	assert.strictEqual(res.found, true, res.reason);
 	assert.ok(res.calipers.found < res.calipers.total, "some bands are outside");
 	assert.ok(Math.abs(res.line.x - 80) < 0.8, `edge at ${res.line.x}`);
+	// the skipped bands are still listed, flagged, so a preview can show them
+	const outside = res.caliperLines.filter((c) => !c.complete);
+	assert.strictEqual(outside.length, res.calipers.total - res.calipers.found);
+	assert.ok(outside.every((c) => c.peakContrast === null && c.edge === null));
+	assert.strictEqual(res.diagnostics.calipersInImage, res.calipers.found);
 });
 
 // ---- four edges into a rectangle -------------------------------------
