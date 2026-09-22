@@ -12,7 +12,8 @@
  * asserted too.
  *
  * The EDITOR_RUN block next to it - the crop the Run button sends and the
- * sentence it writes about a miss - is lifted the same way.
+ * sentence it writes about a miss - is lifted the same way, as is the
+ * EDITOR_FRAME block that words the cached frame's age.
  */
 
 const test = require("node:test");
@@ -264,6 +265,47 @@ function loadEditorRegions() {
 		`${regionsSource()}\nreturn { normalizeRegionEditor, rectangleRegionsEditor, mergeRectangleEditor, edgeRegionsEditor };`,
 	)();
 }
+
+// ---- the frame caption ----------------------------------------------------
+
+const FRAME_START = "// EDITOR_FRAME_START";
+const FRAME_END = "// EDITOR_FRAME_END";
+
+function frameSource() {
+	const html = fs.readFileSync(HTML, "utf8");
+	const from = html.indexOf(FRAME_START);
+	const to = html.indexOf(FRAME_END);
+	assert.ok(from !== -1, `${FRAME_START} is missing from line-finder.html`);
+	assert.ok(to > from, `${FRAME_END} is missing or out of order`);
+	return html.slice(from + FRAME_START.length, to);
+}
+
+/** The caption's clock arithmetic, which needs nothing else. */
+function loadEditorCaption() {
+	return new Function(`${frameSource()}\nreturn { relativeTimeEditor };`)();
+}
+
+test("the cached frame's age is said in the coarsest unit that still means something", () => {
+	const { relativeTimeEditor } = loadEditorCaption();
+	const now = Date.UTC(2026, 8, 22, 12, 0, 0);
+	const ago = (ms) => relativeTimeEditor(now - ms, now);
+	assert.strictEqual(ago(0), "just now");
+	assert.strictEqual(ago(4000), "just now");
+	assert.strictEqual(ago(5000), "5 s ago");
+	assert.strictEqual(ago(59 * 1000), "59 s ago");
+	assert.strictEqual(ago(60 * 1000), "1 min ago");
+	assert.strictEqual(ago(3 * 60 * 1000 + 20 * 1000), "3 min ago");
+	assert.strictEqual(ago(59 * 60 * 1000), "59 min ago");
+	assert.strictEqual(ago(60 * 60 * 1000), "1 h ago");
+	assert.strictEqual(ago(47 * 3600 * 1000), "47 h ago");
+	assert.strictEqual(ago(48 * 3600 * 1000), "2 days ago");
+	assert.strictEqual(ago(10 * 86400 * 1000), "10 days ago");
+	// a runtime clock ahead of the browser's is not "-3 s ago"
+	assert.strictEqual(relativeTimeEditor(now + 3000, now), "just now");
+	// a header that did not parse says nothing rather than "NaN s ago"
+	assert.strictEqual(relativeTimeEditor(NaN, now), "");
+	assert.strictEqual(relativeTimeEditor(now, undefined), "");
+});
 
 /** The Run block's rectangle maths, with the geometry it leans on. */
 function loadEditorRect() {

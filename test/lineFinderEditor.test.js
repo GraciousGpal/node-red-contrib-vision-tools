@@ -12,6 +12,10 @@
  * test/editorRegionGeometry.test.js covers the other half: that the
  * editor's copy of the region geometry still matches the runtime's, and
  * the crop/explanation maths behind the Run button.
+ *
+ * The dialog also fetches the node's last frame when it opens; the fake
+ * ajax below records that GET separately from the Run POSTs so the Run
+ * tests can keep counting requests from zero.
  */
 
 const test = require("node:test");
@@ -413,9 +417,13 @@ test("the wheel zooms and the readout follows", () => {
 /**
  * A stand-in for jQuery's ajax: records each request and lets the test
  * answer it, through the same done/fail/always chain the editor uses.
+ * Run POSTs land in `calls`; the last-frame GET the dialog makes when it
+ * opens lands in `frames`, answered with a blob and the runtime's
+ * headers, or refused the way a 404 is.
  */
 function fakeAjax() {
 	const calls = [];
+	const frames = [];
 	const $ = {
 		ajax(opts) {
 			const handlers = { done: [], fail: [], always: [] };
@@ -426,20 +434,33 @@ function fakeAjax() {
 					return chain;
 				};
 			}
-			const settle = (kind, arg) => {
-				for (const fn of handlers[kind]) fn(arg);
+			const settle = (kind, args) => {
+				for (const fn of handlers[kind]) fn(...args);
 				for (const fn of handlers.always) fn();
 			};
+			if (opts.type === "GET") {
+				frames.push({
+					opts,
+					resolve: (blob, headers = {}) =>
+						settle("done", [
+							blob,
+							"success",
+							{ getResponseHeader: (name) => (headers[name] === undefined ? null : String(headers[name])) },
+						]),
+					reject: (xhr = { status: 404 }) => settle("fail", [xhr]),
+				});
+				return chain;
+			}
 			calls.push({
 				opts,
 				body: JSON.parse(opts.data),
-				resolve: (data) => settle("done", data),
-				reject: (xhr) => settle("fail", xhr),
+				resolve: (data) => settle("done", [data]),
+				reject: (xhr) => settle("fail", [xhr]),
 			});
 			return chain;
 		},
 	};
-	return { $, calls };
+	return { $, calls, frames };
 }
 
 /** Boot with a fake $ in scope, run the body, and take the fake down again. */
@@ -871,4 +892,128 @@ test("a region wholly off the frame is reported without a request being made", (
 		ajax.calls[0].resolve({ ok: true, result: hit() });
 		assert.match(runStatus(env), /left ✓ 0\.1°\s+·\s+far ✗ off the frame/);
 	});
+});
+
+// ---- the node's own last frame -----------------------------------------
+
+const FRAME_HEADERS = {
+	"X-Frame-Width": "800",
+	"X-Frame-Height": "600",
+	"X-Frame-Received": new Date(Date.now() - 3 * 60 * 1000).toISOString(),
+};
+const frameCaption = (env) => env.document.getElementById("line-finder-frame-caption").textContent;
+const REGION_FIELDS = { regionX: 100, regionY: 150, regionWidth: 200, regionHeight: 100, calipers: 8 };
+
+test("the dialog fetches the node's last frame, draws it, and Run then names the node instead of uploading", () => {
+	withAjax((ajax) => {
+		const env = boot(REGION_FIELDS, { id: "lf1" });
+		assert.strictEqual(ajax.frames.length, 1, "one fetch when the dialog opens");
+		const { opts } = ajax.frames[0];
+		assert.strictEqual(opts.url, "line-finder/last-frame/lf1");
+		assert.strictEqual(opts.type, "GET");
+		assert.deepStrictEqual(opts.xhrFields, { responseType: "blob" }, "the bytes, not text");
+		assert.match(frameCaption(env), /fetching/);
+		const run = env.document.getElementById("line-finder-run");
+		assert.strictEqual(run.disabled, true, "nothing to run on until the frame is in");
+
+		ajax.frames[0].resolve({ size: 1234, type: "image/png" }, FRAME_HEADERS);
+		assert.strictEqual(run.disabled, false, "the frame is the image");
+		assert.strictEqual(frameCaption(env), "last frame through this node, 3 min ago (800×600)");
+		assert.ok(env.document.getElementById("line-finder-canvas").getContext().ops().includes("drawImage"));
+		assert.strictEqual(env.document.body.children.length, 0, "the viewer is not flung open while the dialog paints");
+
+		run.dispatch("click");
+		assert.strictEqual(ajax.calls.length, 1);
+		const { opts: runOpts, body } = ajax.calls[0];
+		assert.strictEqual(runOpts.url, "line-finder/run");
+		assert.strictEqual(runOpts.type, "POST");
+		assert.deepStrictEqual(Object.keys(body).sort(), ["cfg", "nodeId", "region"], "no image, no offset");
+		assert.strictEqual(body.nodeId, "lf1");
+		assert.deepStrictEqual(body.region, { x: 100, y: 150, width: 200, height: 100, angleDeg: 0 });
+		assert.strictEqual(body.cfg.scanDirection, "right");
+		assert.strictEqual(Number(body.cfg.calipers), 8);
+		assert.ok(!env.created.some((e) => e.tagName === "CANVAS"), "nothing was cropped in the browser");
+
+		ajax.calls[0].resolve({ ok: true, source: "cached", result: hit() });
+		assert.match(runStatus(env), /^found  0\.12°.*\(on the last frame through this node\)$/);
+		assert.doesNotMatch(runStatus(env), /browser-decoded/);
+	});
+});
+
+test("a node with no frame yet says so and works from a file exactly as before", () => {
+	withAjax((ajax) => {
+		const env = boot(REGION_FIELDS, { id: "fresh" });
+		ajax.frames[0].reject({ status: 404, responseJSON: { ok: false, error: "no frame yet" } });
+		assert.strictEqual(frameCaption(env), "no frame yet - deploy and send one, or choose a file");
+		const run = env.document.getElementById("line-finder-run");
+		assert.strictEqual(run.disabled, true);
+
+		loadImage(env);
+		env.window.dispatch("keydown", { key: "Escape" });
+		assert.strictEqual(frameCaption(env), "sample from frame.png");
+		run.dispatch("click");
+		assert.strictEqual(ajax.calls.length, 1);
+		const { body } = ajax.calls[0];
+		assert.strictEqual(body.nodeId, undefined);
+		assert.strictEqual(typeof body.image, "string");
+		assert.deepStrictEqual(body.offset, { x: 68, y: 118 });
+		ajax.calls[0].resolve({ ok: true, source: "upload", result: hit() });
+		assert.match(runStatus(env), /browser-decoded sample/);
+	});
+});
+
+test("Reload last frame fetches it again; a file chosen afterwards takes over and Run uploads a crop", () => {
+	withAjax((ajax) => {
+		const env = boot(REGION_FIELDS, { id: "lf2" });
+		ajax.frames[0].resolve({ size: 1, type: "image/jpeg" }, FRAME_HEADERS);
+		env.document.getElementById("line-finder-reload-frame").dispatch("click");
+		assert.strictEqual(ajax.frames.length, 2);
+		assert.strictEqual(ajax.frames[1].opts.url, "line-finder/last-frame/lf2");
+		ajax.frames[1].resolve(
+			{ size: 1, type: "image/jpeg" },
+			{ ...FRAME_HEADERS, "X-Frame-Received": new Date().toISOString() },
+		);
+		assert.strictEqual(frameCaption(env), "last frame through this node, just now (800×600)");
+
+		loadImage(env);
+		env.window.dispatch("keydown", { key: "Escape" });
+		env.document.getElementById("line-finder-run").dispatch("click");
+		assert.strictEqual(ajax.calls.length, 1);
+		assert.strictEqual(typeof ajax.calls[0].body.image, "string");
+		assert.strictEqual(ajax.calls[0].body.nodeId, undefined);
+		ajax.calls[0].resolve({ ok: true, source: "upload", result: hit() });
+		assert.match(runStatus(env), /browser-decoded sample/);
+	});
+});
+
+test("a frame that does not decode is reported and leaves the caption honest", () => {
+	withAjax((ajax) => {
+		const env = boot(REGION_FIELDS, { id: "lf4" });
+		// a header-less answer with no blob: nothing to load
+		ajax.frames[0].resolve(null, {});
+		assert.strictEqual(frameCaption(env), "no frame yet - deploy and send one, or choose a file");
+		assert.strictEqual(env.document.getElementById("line-finder-run").disabled, true);
+	});
+});
+
+test("every object URL made for a frame is revoked, and Cancel has nothing left to release", () => {
+	withAjax((ajax) => {
+		const env = boot(REGION_FIELDS, { id: "lf3" });
+		ajax.frames[0].resolve({ size: 1, type: "image/png" }, FRAME_HEADERS);
+		assert.strictEqual(env.URL.created, 1);
+		assert.strictEqual(env.URL.revoked, 1, "revoked as soon as the image has decoded");
+		loadImage(env);
+		env.window.dispatch("keydown", { key: "Escape" });
+		assert.strictEqual(env.URL.created, 2);
+		assert.strictEqual(env.URL.revoked, 2);
+		env.def.oneditcancel.call(env.node);
+		assert.strictEqual(env.URL.revoked, 2);
+	});
+});
+
+test("without jQuery in scope the dialog still opens - the frame is simply not fetched", () => {
+	assert.strictEqual(typeof globalThis.$, "undefined");
+	const env = boot(REGION_FIELDS, { id: "lf5" });
+	assert.strictEqual(frameCaption(env), "");
+	assert.strictEqual(env.document.getElementById("line-finder-run").disabled, true);
 });

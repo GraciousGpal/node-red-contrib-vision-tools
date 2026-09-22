@@ -45,6 +45,15 @@
  * once per region, and gets the same result back in frame coordinates,
  * so a region can be tuned against a real photo without deploying.
  *
+ * The last frame each node saw is kept in memory - one per node, by node
+ * id - so the editor can show the operator the real picture instead of
+ * asking for a file every time: GET /line-finder/last-frame/:id serves
+ * it, and a Run request that names `nodeId` and carries no image
+ * searches that frame in full. It is a reference to the payload as it
+ * arrived, not a copy, so the cost is one frame per line-finder node;
+ * it survives a redeploy but not a restart, and a deleted node's entry
+ * goes with it.
+ *
  * Unlike label-crop this needs no OpenCV engine. lib/lineFinder.js is
  * pure JS over a grayscale raster and only touches the region's own
  * pixels, so the cost scales with the boxes the operator drew rather
@@ -84,6 +93,68 @@ module.exports = (RED) => {
 	// the four names that make a rectangle, in label-crop's order
 	const RECT_SIDES = ["left", "right", "top", "bottom"];
 	const DEG = Math.PI / 180;
+
+	/**
+	 * The last frame through each node, by node id, for the editor:
+	 * { payload, width, height, receivedAt, png }. `payload` is the
+	 * message's own payload - the encoded Buffer or the raw descriptor -
+	 * held by reference; `png` memoises a raw frame's encoding from the
+	 * first time the editor asks for it until the next frame replaces the
+	 * entry. Lives in this closure, so it outlasts a redeploy of the flow
+	 * (Node-RED calls this factory once per process) and nothing else.
+	 */
+	const lastFrames = new Map();
+
+	/** The Content-Type an encoded payload should be served under, from its magic bytes. */
+	function sniffImageType(buf) {
+		if (buf.length >= 3 && buf[0] === 0xff && buf[1] === 0xd8 && buf[2] === 0xff) return "image/jpeg";
+		if (buf.length >= 4 && buf[0] === 0x89 && buf[1] === 0x50 && buf[2] === 0x4e && buf[3] === 0x47) {
+			return "image/png";
+		}
+		if (
+			buf.length >= 12 &&
+			buf.toString("latin1", 0, 4) === "RIFF" &&
+			buf.toString("latin1", 8, 12) === "WEBP"
+		) {
+			return "image/webp";
+		}
+		return "application/octet-stream";
+	}
+
+	/**
+	 * A cached entry as bytes the browser can decode: an encoded payload
+	 * as it came, a raw one as PNG - encoded on the first request and kept
+	 * on the entry, at zlib's fastest level because this is a one-off for
+	 * a dialog, not a stream.
+	 */
+	function frameBytes(entry) {
+		const p = entry.payload;
+		if (Buffer.isBuffer(p)) {
+			return Promise.resolve({ bytes: p, contentType: sniffImageType(p) });
+		}
+		if (!entry.png) {
+			const sharp = require("sharp");
+			const data = Buffer.isBuffer(p.data)
+				? p.data
+				: Buffer.from(p.data.buffer, p.data.byteOffset, p.data.byteLength);
+			entry.png = sharp(data, {
+				raw: { width: p.width, height: p.height, channels: p.channels || 1 },
+			})
+				.png({ compressionLevel: 1 })
+				.toBuffer()
+				.catch((err) => {
+					entry.png = null;
+					throw err;
+				});
+		}
+		return entry.png.then((bytes) => ({ bytes, contentType: "image/png" }));
+	}
+
+	function noFrameYet() {
+		const err = new Error("no frame yet");
+		err.status = 404;
+		return err;
+	}
 
 	/**
 	 * Grayscale raster from whatever the flow handed us.
@@ -414,16 +485,25 @@ module.exports = (RED) => {
 	 * coordinates, and every coordinate in the answer is moved back, so the
 	 * editor never has to know the search ran on a crop.
 	 *
-	 * Returns the findLine result with the score gate applied the way the
-	 * input handler applies it, plus `region`, `crop` and the clamped
-	 * `settings` that actually ran, so the editor's explanation of a miss
-	 * quotes the threshold that was used rather than the one typed.
+	 * With `nodeId` and no `image` the search runs instead on the last
+	 * frame that node saw (see lastFrames) - the whole frame, offset 0,0 -
+	 * so the editor tunes against exactly the pixels production will see,
+	 * with no browser decode in between. A 404 when that node has not had
+	 * a frame yet.
+	 *
+	 * Returns { source, result }: `source` is "cached" or "upload", and
+	 * `result` the findLine result with the score gate applied the way
+	 * the input handler applies it, plus `region`, `crop` and the
+	 * clamped `settings` that actually ran, so the editor's explanation
+	 * of a miss quotes the threshold that was used rather than the one
+	 * typed.
 	 */
 	async function runOnCrop(body) {
 		if (!body || typeof body !== "object") {
 			throw new Error("line-finder/run: expected a JSON body");
 		}
-		if (typeof body.image !== "string" || body.image.length === 0) {
+		const cached = body.image === undefined && body.nodeId != null;
+		if (!cached && (typeof body.image !== "string" || body.image.length === 0)) {
 			throw new Error(
 				"line-finder/run: image must be the crop's PNG or JPEG bytes, base64-encoded",
 			);
@@ -437,15 +517,26 @@ module.exports = (RED) => {
 			height: reg.height,
 			angleDeg: reg.angleDeg,
 		};
-		const offset = body.offset && typeof body.offset === "object" ? body.offset : {};
+		const offset = !cached && body.offset && typeof body.offset === "object" ? body.offset : {};
 		const ox = clampFloat(offset.x, 0, COORD);
 		const oy = clampFloat(offset.y, 0, COORD);
 		const cfgIn = body.cfg && typeof body.cfg === "object" ? body.cfg : {};
 		const cfg = settingsFrom(cfgIn);
 		const minScore = clampFloat(cfgIn.minScore, 0, BOUNDS.minScore);
 
-		const bytes = Buffer.from(body.image.replace(/^data:[^,]*,/, ""), "base64");
-		const { gray, width, height } = await toGray(bytes);
+		let source;
+		let decoded;
+		if (cached) {
+			const entry = lastFrames.get(String(body.nodeId));
+			if (!entry) throw noFrameYet();
+			decoded = await toGray(entry.payload);
+			source = "cached";
+		} else {
+			const bytes = Buffer.from(body.image.replace(/^data:[^,]*,/, ""), "base64");
+			decoded = await toGray(bytes);
+			source = "upload";
+		}
+		const { gray, width, height } = decoded;
 		const result = findLine(
 			gray,
 			width,
@@ -477,7 +568,7 @@ module.exports = (RED) => {
 		result.region = region;
 		result.crop = { x: ox, y: oy, width, height };
 		result.settings = { ...cfg, minScore };
-		return result;
+		return { source, result };
 	}
 
 	function LineFinderNode(config) {
@@ -534,6 +625,8 @@ module.exports = (RED) => {
 				}
 
 				const { gray, width, height } = await toGray(msg.payload);
+				// for the editor: the payload by reference, nothing copied or encoded
+				lastFrames.set(this.id, { payload: msg.payload, width, height, receivedAt: Date.now(), png: null });
 				const result = searchRegions(gray, width, height, useRegions, cfg, minScore);
 				result.imageWidth = width;
 				result.imageHeight = height;
@@ -585,20 +678,52 @@ module.exports = (RED) => {
 				done(err);
 			}
 		});
+
+		this.on("close", (removed, done) => {
+			// a deleted node takes its frame with it; a redeploy keeps it, so
+			// the editor still has a picture to draw on after Deploy
+			if (removed) lastFrames.delete(this.id);
+			done();
+		});
 	}
 
 	RED.nodes.registerType("line-finder", LineFinderNode);
+
+	RED.httpAdmin.get(
+		"/line-finder/last-frame/:id",
+		RED.auth.needsPermission("line-finder.read"),
+		async (req, res) => {
+			const entry = lastFrames.get(req.params.id);
+			if (!entry) {
+				res.status(404).json({ ok: false, error: "no frame yet" });
+				return;
+			}
+			try {
+				const { bytes, contentType } = await frameBytes(entry);
+				res.setHeader("Content-Type", contentType);
+				// the next frame replaces it, so the browser must not keep this one
+				res.setHeader("Cache-Control", "no-store");
+				res.setHeader("X-Frame-Width", String(entry.width));
+				res.setHeader("X-Frame-Height", String(entry.height));
+				res.setHeader("X-Frame-Received", new Date(entry.receivedAt).toISOString());
+				res.end(bytes);
+			} catch (err) {
+				res.status(500).json({ ok: false, error: err.message });
+			}
+		},
+	);
 
 	RED.httpAdmin.post(
 		"/line-finder/run",
 		RED.auth.needsPermission("line-finder.write"),
 		async (req, res) => {
 			try {
-				res.json({ ok: true, result: await runOnCrop(req.body) });
+				res.json({ ok: true, ...(await runOnCrop(req.body)) });
 			} catch (err) {
 				// a bad body, an undecodable image or an invalid region: all the
-				// caller's to fix, so 400 with the message rather than 500
-				res.status(400).json({ ok: false, error: err.message });
+				// caller's to fix, so 400 with the message rather than 500; a
+				// node with no frame cached yet is a 404
+				res.status(err.status || 400).json({ ok: false, error: err.message });
 			}
 		},
 	);

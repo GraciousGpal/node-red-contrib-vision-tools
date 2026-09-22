@@ -68,6 +68,14 @@
         <input type="file" id="line-finder-file" accept="image/*" style="width:210px;" />
         <button
           type="button"
+          id="line-finder-reload-frame"
+          class="red-ui-button red-ui-button-small"
+          title="Fetch the last frame that went through this node"
+        >
+          <i class="fa fa-refresh"></i> Reload last frame
+        </button>
+        <button
+          type="button"
           id="line-finder-open-viewer"
           class="red-ui-button red-ui-button-small"
           title="Zoom in and drag the region over the edge"
@@ -87,6 +95,10 @@
         </button>
       </div>
       <div
+        id="line-finder-frame-caption"
+        style="margin-top:4px; color:#999; font-size:12px;"
+      ></div>
+      <div
         id="line-finder-readout"
         style="margin-top:6px; color:#888; font-size:12px; font-family:monospace;"
       >
@@ -97,8 +109,10 @@
         style="margin-top:4px; color:#888; font-size:12px; font-family:monospace;"
       ></div>
       <div style="margin-top:4px; color:#999; font-size:12px;">
-        Load a representative photo, then open the viewer to zoom in and drag
-        <b>across</b> the edge, in the direction the calipers should travel.
+        The last frame this node saw loads by itself once one has been
+        sent; or choose a photo from a file. Open the viewer to zoom in and
+        drag <b>across</b> the edge, in the direction the calipers should
+        travel.
         The orange arrow is that direction, the dashed green line is the edge
         being looked for, and the pale lines are the calipers themselves.
         Corner handles resize, the amber grip rotates, arrow keys nudge by a
@@ -417,6 +431,13 @@
 
   <h3>Tuning</h3>
   <p>
+    The dialog opens on the <b>last frame that went through this node</b>
+    - kept in memory, one per node, since the last restart - so the region
+    is drawn on the picture production actually sees, and a file is only
+    needed before the first message or after a restart. <b>Reload last
+    frame</b> fetches it again after more frames have gone through.
+  </p>
+  <p>
     <b>Run on this image</b> runs the real search on the loaded sample
     with the dialog's current settings, without deploying - every region
     at once - and draws each caliper, its edge point (filled when the fit
@@ -426,8 +447,9 @@
     faint edge, the strongest step any caliper actually saw against the
     threshold. With several the status line gives one verdict per
     region: <code>left ✓ 0.1° · right ✓ · top ✗ contrast 1.2&lt;2.0 ·
-    bottom ✓</code>. The browser decodes the sample, so the runtime's
-    figures can differ by a fraction of a pixel.
+    bottom ✓</code>. On the last frame the search runs on the very pixels
+    the node saw; a sample chosen from a file is decoded by the browser
+    first, so the runtime's figures can differ by a fraction of a pixel.
   </p>
   <p>
     Start with <i>Contrast</i> at 2 and lower it until the edge is found;
@@ -461,6 +483,8 @@
   // as the string an <input> holds, so it stays in this closure instead.
   let lineFinderEditingRegions = null;
   let lineFinderEditingSelected = 0;
+  // revokes the object URL of a frame still loading when the dialog closes
+  let lineFinderEditingRelease = null;
 
   RED.nodes.registerType("line-finder", {
     category: "vision",
@@ -899,6 +923,24 @@
       };
       // EDITOR_RUN_END
 
+      // The caption under the thumbnail says how old the cached frame is.
+      // Pure arithmetic, kept out of the DOM so
+      // test/editorRegionGeometry.test.js can lift it.
+      // EDITOR_FRAME_START
+      /** "just now", "40 s ago", "3 min ago", "2 h ago", "3 days ago"; "" when `thenMs` is not a time. */
+      const relativeTimeEditor = function (thenMs, nowMs) {
+        if (!Number.isFinite(thenMs) || !Number.isFinite(nowMs)) return "";
+        const s = Math.max(0, Math.round((nowMs - thenMs) / 1000));
+        if (s < 5) return "just now";
+        if (s < 60) return s + " s ago";
+        const m = Math.round(s / 60);
+        if (m < 60) return m + " min ago";
+        const h = Math.round(m / 60);
+        if (h < 48) return h + " h ago";
+        return Math.round(h / 24) + " days ago";
+      };
+      // EDITOR_FRAME_END
+
       /**
        * The four corners in the region's own order (top-left, top-right,
        * bottom-right, bottom-left before rotation) rather than in scan
@@ -938,6 +980,8 @@
       const ctx = canvas.getContext("2d");
       const readout = document.getElementById("line-finder-readout");
       const fileInput = document.getElementById("line-finder-file");
+      const reloadButton = document.getElementById("line-finder-reload-frame");
+      const frameCaption = document.getElementById("line-finder-frame-caption");
       const runButton = document.getElementById("line-finder-run");
       const runIcon = document.getElementById("line-finder-run-icon");
       const runStatus = document.getElementById("line-finder-run-status");
@@ -955,6 +999,13 @@
       let image = null;
       let imageW = 0;
       let imageH = 0;
+      // where the loaded image came from: "cached" is the node's own last
+      // frame, so Run can name the node and skip the upload; "file" is a
+      // sample the operator chose, which only the browser has
+      let imageSource = null;
+      // the object URL of a frame still being decoded, revoked once it has
+      // loaded or when the dialog closes, whichever comes first
+      let imageUrl = null;
       // what the last Run on this image came back with, per region name,
       // in image pixels - and the rectangle's corners when four sides made one
       let runResults = null;
@@ -1442,8 +1493,11 @@
           "resid " + r.residualPx.toFixed(2) + " px"
         );
       };
-      const DECODE_NOTE =
-        "   (browser-decoded sample: runtime figures can differ by a fraction of a pixel)";
+      const decodeNote = function () {
+        return imageSource === "cached"
+          ? "   (on the last frame through this node)"
+          : "   (browser-decoded sample: runtime figures can differ by a fraction of a pixel)";
+      };
 
       /**
        * Every region's results are in: one line of status. A single region
@@ -1458,10 +1512,10 @@
           } else if (r.reason === "off-frame") {
             setRunStatus("the region lies wholly outside the image - nothing to search", "miss");
           } else if (r.found) {
-            setRunStatus("found  " + describeRun(r) + DECODE_NOTE, "ok");
+            setRunStatus("found  " + describeRun(r) + decodeNote(), "ok");
           } else {
             setRunStatus(
-              "not found (" + r.reason + "): " + explainMiss(r) + DECODE_NOTE,
+              "not found (" + r.reason + "): " + explainMiss(r) + decodeNote(),
               "miss",
             );
           }
@@ -1488,7 +1542,7 @@
           const anyError = list.some(function (region) {
             return runResults[region.name].error;
           });
-          setRunStatus(text + DECODE_NOTE, anyError ? "error" : allFound ? "ok" : "miss");
+          setRunStatus(text + decodeNote(), anyError ? "error" : allFound ? "ok" : "miss");
         }
         running = false;
         runButton.disabled = !image;
@@ -1498,10 +1552,12 @@
 
       /**
        * The real search, on the loaded image, with the settings as they
-       * stand in the dialog - without a deploy - once per region. Only a
-       * crop around each region crosses the wire: httpAdmin caps a JSON
-       * body at 5MB by default, which a full frame as PNG would not fit, so
-       * the runtime is told where the crop sits and answers in frame
+       * stand in the dialog - without a deploy - once per region. When the
+       * image is the node's own last frame nothing but the node id crosses
+       * the wire and the runtime searches the frame it has. For a file
+       * only a crop around each region does: httpAdmin caps a JSON body at
+       * 5MB by default, which a full frame as PNG would not fit, so the
+       * runtime is told where the crop sits and answers in frame
        * coordinates.
        */
       const runOnImage = function () {
@@ -1527,24 +1583,30 @@
             settle();
             continue;
           }
-          const crop = document.createElement("canvas");
-          crop.width = box.width;
-          crop.height = box.height;
-          crop
-            .getContext("2d")
-            .drawImage(image, box.x, box.y, box.width, box.height, 0, 0, box.width, box.height);
-          const dataUrl = crop.toDataURL("image/png");
+          let request;
+          if (imageSource === "cached") {
+            request = { nodeId: node.id, region: geometry, cfg: currentCfg(region) };
+          } else {
+            const crop = document.createElement("canvas");
+            crop.width = box.width;
+            crop.height = box.height;
+            crop
+              .getContext("2d")
+              .drawImage(image, box.x, box.y, box.width, box.height, 0, 0, box.width, box.height);
+            const dataUrl = crop.toDataURL("image/png");
+            request = {
+              image: dataUrl.slice(dataUrl.indexOf(",") + 1),
+              offset: { x: box.x, y: box.y },
+              region: geometry,
+              cfg: currentCfg(region),
+            };
+          }
           $.ajax({
             url: "line-finder/run",
             type: "POST",
             contentType: "application/json",
             dataType: "json",
-            data: JSON.stringify({
-              image: dataUrl.slice(dataUrl.indexOf(",") + 1),
-              offset: { x: box.x, y: box.y },
-              region: geometry,
-              cfg: currentCfg(region),
-            }),
+            data: JSON.stringify(request),
           })
             .done(function (data) {
               const r = data && data.result;
@@ -2178,27 +2240,104 @@
         .getElementById("line-finder-open-viewer")
         .addEventListener("click", openViewer);
 
-      fileInput.addEventListener("change", function () {
-        const file = fileInput.files && fileInput.files[0];
-        if (!file) return;
-        const url = URL.createObjectURL(file);
+      const releaseUrl = function () {
+        if (imageUrl) URL.revokeObjectURL(imageUrl);
+        imageUrl = null;
+      };
+      lineFinderEditingRelease = releaseUrl;
+      /**
+       * Decode a Blob (a chosen file or the fetched frame) into the image
+       * the thumbnail, viewer and Run all work from. `onLoaded` runs once
+       * it is in; a frame that fails to decode is reported and leaves the
+       * current image alone.
+       */
+      const loadBlob = function (blob, source, onLoaded) {
+        releaseUrl();
+        const url = URL.createObjectURL(blob);
+        imageUrl = url;
         const img = new Image();
         img.onload = function () {
+          if (imageUrl === url) imageUrl = null;
+          URL.revokeObjectURL(url);
           image = img;
           imageW = img.naturalWidth;
           imageH = img.naturalHeight;
-          URL.revokeObjectURL(url);
+          imageSource = source;
           clearRun();
           runButton.disabled = false;
           updateReadout();
           drawThumb();
-          openViewer();
+          if (onLoaded) onLoaded();
         };
         img.onerror = function () {
+          if (imageUrl === url) imageUrl = null;
           URL.revokeObjectURL(url);
           RED.notify("line-finder: could not read that image", "error");
         };
         img.src = url;
+      };
+
+      // ---- the node's own last frame -----------------------------------
+      const NO_FRAME_CAPTION = "no frame yet - deploy and send one, or choose a file";
+      const setFrameCaption = function (text) {
+        frameCaption.textContent = text;
+      };
+      /**
+       * Ask the runtime for the last frame through this node and load it
+       * as the sample. A node that has never been deployed has an id but
+       * no frame, and that is a quiet 404 - the dialog then works from a
+       * file exactly as it did before. jQuery's ajax so the editor's own
+       * auth header goes with the request; the response is a Blob.
+       */
+      const fetchLastFrame = function () {
+        if (typeof $ === "undefined" || !$ || typeof $.ajax !== "function") return;
+        setFrameCaption("fetching the last frame…");
+        $.ajax({
+          url: "line-finder/last-frame/" + node.id,
+          type: "GET",
+          cache: false,
+          xhrFields: { responseType: "blob" },
+        })
+          .done(function (blob, _status, xhr) {
+            if (!blob || typeof blob !== "object") {
+              setFrameCaption(NO_FRAME_CAPTION);
+              return;
+            }
+            const header = function (name) {
+              return xhr && typeof xhr.getResponseHeader === "function" ? xhr.getResponseHeader(name) : null;
+            };
+            const w = Number(header("X-Frame-Width"));
+            const h = Number(header("X-Frame-Height"));
+            const received = Date.parse(header("X-Frame-Received"));
+            loadBlob(blob, "cached", function () {
+              const age = relativeTimeEditor(received, Date.now());
+              setFrameCaption(
+                "last frame through this node" +
+                  (age ? ", " + age : "") +
+                  " (" + (w || imageW) + "×" + (h || imageH) + ")",
+              );
+            });
+          })
+          .fail(function () {
+            if (image && imageSource === "cached") {
+              // The runtime lost its copy (restarted?) but the dialog still
+              // has the frame: Run falls back to uploading what is shown.
+              imageSource = "file";
+              setFrameCaption("runtime has no frame yet - Run will upload the image shown");
+              return;
+            }
+            setFrameCaption(NO_FRAME_CAPTION);
+          });
+      };
+      reloadButton.addEventListener("click", fetchLastFrame);
+
+      fileInput.addEventListener("change", function () {
+        const file = fileInput.files && fileInput.files[0];
+        if (!file) return;
+        loadBlob(file, "file", function () {
+          setFrameCaption("sample from " + (file.name || "a file"));
+          openViewer();
+        });
       });
 
       document
@@ -2300,8 +2439,11 @@
       renderList();
       updateReadout();
       drawThumb();
+      fetchLastFrame();
     },
     oneditsave: function () {
+      if (lineFinderEditingRelease) lineFinderEditingRelease();
+      lineFinderEditingRelease = null;
       const list = lineFinderEditingRegions;
       lineFinderEditingRegions = null;
       if (!Array.isArray(list)) return;
@@ -2344,6 +2486,8 @@
       });
     },
     oneditcancel: function () {
+      if (lineFinderEditingRelease) lineFinderEditingRelease();
+      lineFinderEditingRelease = null;
       lineFinderEditingRegions = null;
     },
   });

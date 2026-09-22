@@ -7,8 +7,9 @@
  *
  * No engine fake is needed - lib/lineFinder.js is pure JS - so these
  * tests cover the glue only: payload shapes, msg overrides, the score
- * gate, status text, the miss-is-not-an-error rule, and the editor's
- * POST /line-finder/run endpoint.
+ * gate, status text, the miss-is-not-an-error rule, the editor's
+ * POST /line-finder/run endpoint, and the last-frame cache behind
+ * GET /line-finder/last-frame/:id.
  */
 
 const test = require("node:test");
@@ -335,6 +336,7 @@ test("the Run endpoint answers in frame coordinates and agrees with a whole-fram
 	});
 	assert.strictEqual(status, 200);
 	assert.strictEqual(body.ok, true);
+	assert.strictEqual(body.source, "upload");
 	const r = body.result;
 	assert.strictEqual(r.found, true, r.reason);
 
@@ -597,4 +599,189 @@ test("the single-region preview shape is unchanged, with lines alongside", async
 	assert.deepStrictEqual(data.lines[0].region, data.region);
 	assert.deepStrictEqual(data.lines[0].line, data.line);
 	assert.strictEqual(data.rect, null);
+});
+
+// ---- the last frame through the node ------------------------------------
+
+/**
+ * Drive one of the node's captured admin routes with a request and record
+ * what went back: { status, headers, body } - `body` the JSON when the
+ * handler used json(), the bytes when it used end() or send(). Headers
+ * are keyed lower-case, the way a client reads them.
+ */
+function callRoute(node, path, req) {
+	const handlers = node.adminRoutes[path];
+	assert.ok(handlers, `${path} should be registered on httpAdmin`);
+	assert.strictEqual(handlers.length, 2, "needsPermission's guard first, the handler last");
+	const handler = handlers[handlers.length - 1];
+	return new Promise((resolve) => {
+		const out = { status: 200, headers: {}, body: undefined };
+		const res = {
+			setHeader(name, value) {
+				out.headers[name.toLowerCase()] = value;
+			},
+			status(code) {
+				out.status = code;
+				return this;
+			},
+			json(payload) {
+				out.body = payload;
+				resolve(out);
+			},
+			send(bytes) {
+				out.body = bytes;
+				resolve(out);
+			},
+			end(bytes) {
+				out.body = bytes;
+				resolve(out);
+			},
+		};
+		handler(req, res);
+	});
+}
+const lastFrame = (h, id = "line-finder-test") =>
+	callRoute(h.node, "/line-finder/last-frame/:id", { params: { id } });
+const runOnNode = (h, body) => callRoute(h.node, "/line-finder/run", { body });
+
+const encodeGray = (format) =>
+	sharp(rawGray().data, { raw: { width: W, height: H, channels: 1 } })[format]().toBuffer();
+
+test("nothing is cached until a frame has been through, and an unknown id is a 404 too", async () => {
+	const h = makeNode({ ...REGION, calipers: 8 });
+	const before = await lastFrame(h);
+	assert.strictEqual(before.status, 404);
+	assert.deepStrictEqual(before.body, { ok: false, error: "no frame yet" });
+
+	await h.run({ payload: rawGray() });
+	assert.strictEqual((await lastFrame(h)).status, 200);
+	const other = await lastFrame(h, "someone-else");
+	assert.strictEqual(other.status, 404);
+	assert.deepStrictEqual(other.body, { ok: false, error: "no frame yet" });
+});
+
+test("a payload the node rejects is not cached", async () => {
+	const h = makeNode({ ...REGION, calipers: 8 });
+	await h.run({ payload: "not an image" });
+	assert.strictEqual(h.doneErrors.length, 1);
+	assert.strictEqual((await lastFrame(h)).status, 404);
+});
+
+test("an encoded frame is served back as the very bytes that came in, typed by its magic number", async () => {
+	const h = makeNode({ ...REGION, scanDirection: "right", calipers: 8 });
+	const png = await encodeGray("png");
+	const t0 = Date.now();
+	await h.run({ payload: png });
+	const res = await lastFrame(h);
+	assert.strictEqual(res.status, 200);
+	assert.strictEqual(res.body, png, "the same Buffer - no copy, no re-encode");
+	assert.strictEqual(res.headers["content-type"], "image/png");
+	assert.strictEqual(res.headers["cache-control"], "no-store");
+	assert.strictEqual(res.headers["x-frame-width"], String(W));
+	assert.strictEqual(res.headers["x-frame-height"], String(H));
+	const received = Date.parse(res.headers["x-frame-received"]);
+	assert.ok(received >= t0 && received <= Date.now(), res.headers["x-frame-received"]);
+
+	const jpeg = await encodeGray("jpeg");
+	await h.run({ payload: jpeg });
+	const asJpeg = await lastFrame(h);
+	assert.strictEqual(asJpeg.body, jpeg, "the second frame replaced the first");
+	assert.strictEqual(asJpeg.headers["content-type"], "image/jpeg");
+
+	const webp = await encodeGray("webp");
+	await h.run({ payload: webp });
+	assert.strictEqual((await lastFrame(h)).headers["content-type"], "image/webp");
+});
+
+test("a raw frame is served as a PNG of the same size, encoded once and kept until the next frame", async () => {
+	const h = makeNode({ ...REGION, scanDirection: "right", calipers: 8 });
+	await h.run({ payload: rawGray() });
+	const first = await lastFrame(h);
+	assert.strictEqual(first.status, 200);
+	assert.strictEqual(first.headers["content-type"], "image/png");
+	assert.strictEqual(first.headers["x-frame-width"], String(W));
+	assert.strictEqual(first.headers["x-frame-height"], String(H));
+	assert.ok(Buffer.isBuffer(first.body));
+	// sharp hands a grey PNG back as sRGB, so compare one channel of each pixel
+	const { data, info } = await sharp(first.body).raw().toBuffer({ resolveWithObject: true });
+	assert.strictEqual(info.width, W);
+	assert.strictEqual(info.height, H);
+	const g = grayFrame();
+	assert.strictEqual(data.length, g.length * info.channels);
+	let mismatched = 0;
+	for (let i = 0; i < g.length; i++) if (data[i * info.channels] !== g[i]) mismatched++;
+	assert.strictEqual(mismatched, 0, "lossless: the pixels that were sent");
+
+	const second = await lastFrame(h);
+	assert.strictEqual(second.body, first.body, "memoised on the entry");
+
+	// an RGB raw frame goes through the same path
+	await h.run({ payload: rawRgb() });
+	const rgb = await lastFrame(h);
+	assert.notStrictEqual(rgb.body, first.body, "a new frame, a new PNG");
+	const meta = await sharp(rgb.body).metadata();
+	assert.strictEqual(meta.width, W);
+	assert.strictEqual(meta.height, H);
+	assert.strictEqual(meta.channels, 3);
+});
+
+test("Run with a nodeId and no image searches the cached frame exactly as a whole-frame findLine does", async () => {
+	const h = makeNode({ ...REGION, scanDirection: "right", polarity: "darkToLight", calipers: 8 });
+	const noFrame = await runOnNode(h, { nodeId: "line-finder-test", region: RUN_REGION, cfg: RUN_CFG });
+	assert.strictEqual(noFrame.status, 404);
+	assert.deepStrictEqual(noFrame.body, { ok: false, error: "no frame yet" });
+
+	const raw = trayFrame();
+	await h.run({ payload: raw });
+	const res = await runOnNode(h, {
+		nodeId: "line-finder-test",
+		// meaningless for the whole frame, so ignored rather than applied
+		offset: { x: 30, y: 60 },
+		region: RUN_REGION,
+		cfg: RUN_CFG,
+	});
+	assert.strictEqual(res.status, 200);
+	assert.strictEqual(res.body.ok, true);
+	assert.strictEqual(res.body.source, "cached");
+	const { region, crop, settings, ...result } = res.body.result;
+	const { minScore, ...cfg } = settings;
+	const gray = new Uint8Array(raw.data.buffer, raw.data.byteOffset, raw.data.byteLength);
+	const { region: _directRegion, ...direct } = findLine(gray, raw.width, raw.height, RUN_REGION, cfg);
+	assert.strictEqual(direct.found, true, direct.reason);
+	// exact, not within tolerance: no crop, no browser decode, offset 0,0
+	assert.deepStrictEqual(result, direct);
+	assert.deepStrictEqual(region, RUN_REGION);
+	assert.deepStrictEqual(crop, { x: 0, y: 0, width: raw.width, height: raw.height });
+	assert.strictEqual(minScore, 0);
+
+	// an encoded frame is decoded for the search the way the node decodes it
+	const png = await sharp(raw.data, { raw: { width: raw.width, height: raw.height, channels: 1 } }).png().toBuffer();
+	await h.run({ payload: png });
+	const again = await runOnNode(h, { nodeId: "line-finder-test", region: RUN_REGION, cfg: RUN_CFG });
+	assert.strictEqual(again.body.source, "cached");
+	assert.deepStrictEqual(again.body.result.line, res.body.result.line, "PNG is lossless, so the same line");
+
+	// an image in the body still wins, nodeId or not
+	const crop2 = { x: 30, y: 60, width: 120, height: 180 };
+	const upload = await runOnNode(h, {
+		nodeId: "line-finder-test",
+		image: (await pngCrop(raw, crop2)).toString("base64"),
+		offset: { x: crop2.x, y: crop2.y },
+		region: RUN_REGION,
+		cfg: RUN_CFG,
+	});
+	assert.strictEqual(upload.body.source, "upload");
+	assert.deepStrictEqual(upload.body.result.crop, crop2);
+});
+
+test("deleting the node drops its frame; a plain redeploy keeps it", async () => {
+	const h = makeNode({ ...REGION, calipers: 8 });
+	await h.run({ payload: rawGray() });
+	assert.strictEqual(typeof h.node.listeners.close, "function", "the node listens for close");
+
+	await new Promise((done) => h.node.listeners.close(false, done));
+	assert.strictEqual((await lastFrame(h)).status, 200, "a redeploy keeps the frame");
+
+	await new Promise((done) => h.node.listeners.close(true, done));
+	assert.strictEqual((await lastFrame(h)).status, 404, "a removed node takes its frame with it");
 });

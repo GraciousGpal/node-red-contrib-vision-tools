@@ -8,6 +8,22 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Added
 
+- **The `line-finder` editor opens on the last frame the node saw.**
+  Tuning a region meant choosing a photo from disk every time the dialog
+  opened, and the photo was rarely the frame the camera was producing. The
+  node now keeps the last payload that went through it - by reference, in
+  memory, one frame per line-finder node, so it survives a redeploy but
+  not a restart and a deleted node's goes with it - and the editor fetches
+  it from a new admin endpoint, `GET /line-finder/last-frame/:id`, as the
+  dialog opens, draws the regions on it and captions it with its age and
+  size. **Reload last frame** fetches it again. **Run on this image** on
+  that frame posts only the node id (`POST /line-finder/run` with
+  `nodeId` and no `image`), so the runtime searches the very pixels it
+  saw with no browser decode in between, and the answer says which it was
+  under `source`. A raw payload is encoded to PNG the first time the
+  editor asks and kept until the next frame; an encoded one is served as
+  it came. With no frame yet the dialog is exactly what it was: choose a
+  file.
 - **One `line-finder` searches several regions, and four of them make a
   rectangle.** Detecting a label meant four line-finder nodes and a
   label-crop to intersect them, which is a lot of nodes to say "find this

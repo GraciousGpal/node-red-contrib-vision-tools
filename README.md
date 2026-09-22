@@ -895,8 +895,20 @@ contrast 1.3, threshold 2.0 - lower Contrast threshold below 1.3 to pick
 it up" - so a faint white-on-white label edge is tuned in a few clicks
 rather than a redeploy per guess. With several, the status line gives one
 verdict per region: `left ✓ 0.1° · right ✓ 90.0° · top ✗ contrast 1.2<2.0
-· bottom ✓ -0.0° · rect 1210×1760 px`. The browser decodes the sample, so
-the runtime's figures can differ by a fraction of a pixel.
+· bottom ✓ -0.0° · rect 1210×1760 px`. A sample chosen from a file is
+decoded by the browser, so the runtime's figures can differ by a fraction
+of a pixel; on the node's own last frame they are the node's own.
+
+The dialog opens on the **last frame that went through the node**, so the
+regions are drawn on the picture production actually sees and a file is
+only needed before the first message. The node keeps that frame in
+memory, by reference - one frame per line-finder node, which is the whole
+memory cost - and it survives a redeploy but not a restart; a deleted
+node's goes with it. **Reload last frame** fetches it again after more
+frames have gone through, and Run on it searches the very pixels the node
+saw (`GET /line-finder/last-frame/:id` serves the frame; `POST
+/line-finder/run` with `nodeId` and no `image` searches it, and answers
+with `source: "cached"`).
 
 ### Four of them make a rectangle
 
@@ -1122,7 +1134,7 @@ nothing is found at all, one message with `msg.text = null` and
 
 ## Tests
 
-`npm test` (Node 18+, no test framework needed — `node --test`), 433
+`npm test` (Node 18+, no test framework needed — `node --test`), 446
 tests. Fixtures are generated with `sharp` rather than read from
 `data/sample_images`, so the suite runs anywhere; the real QC photos are
 gitignored. Coverage spans the lib pipeline (`compare`, `align`, `warp`,

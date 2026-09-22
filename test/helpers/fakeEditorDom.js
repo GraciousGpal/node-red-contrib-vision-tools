@@ -226,9 +226,18 @@ function makeEditorEnv({ script, imageSize = { width: 800, height: 600 } } = {})
 		},
 	};
 
+	// counted rather than recorded: what a test wants to know is that
+	// every URL made was revoked again
 	const URL = {
-		createObjectURL: () => "blob:fake",
-		revokeObjectURL() {},
+		created: 0,
+		revoked: 0,
+		createObjectURL() {
+			URL.created++;
+			return "blob:fake";
+		},
+		revokeObjectURL() {
+			URL.revoked++;
+		},
 	};
 
 	new Function("RED", "document", "window", "Image", "URL", script)(
@@ -244,6 +253,7 @@ function makeEditorEnv({ script, imageSize = { width: 800, height: 600 } } = {})
 		def: RED.registered.def,
 		document,
 		window,
+		URL,
 		byId,
 		created,
 		notifications,
