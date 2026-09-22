@@ -112,6 +112,17 @@ test("resize accepts a percentage mode", { skip }, async () => {
 	assert.strictEqual(image.height, 50);
 });
 
+test("resize with a zero height keeps the aspect ratio, as the native engine does", { skip }, async () => {
+	const frame = labelFrame(800, 600, 0, 360, 220, 3);
+	const { image } = await cvjs.resize(frame, "num", 220, "num", 0, "raw");
+	assert.strictEqual(image.width, 220);
+	assert.strictEqual(image.height, 165);
+	await assert.rejects(
+		cvjs.resize(frame, "num", 0, "num", 0, "raw"),
+		/at least one positive size/,
+	);
+});
+
 test("filter otsu returns a 0/255 mask covering the label", { skip }, async () => {
 	const frame = labelFrame(400, 300, 0, 180, 110, 1);
 	const { image } = await cvjs.filter(frame, "otsu", 3, 0, "raw");

@@ -1137,14 +1137,16 @@
       removePreview(data.id);
 
       const width = Number(data.previewWidth) || 220;
+      const node = RED.nodes.node(data.id) || {};
+      const panelWidth = width * 2 + 30;
       const container = document.createElementNS(
         "http://www.w3.org/2000/svg",
         "foreignObject",
       );
       container.id = "label-crop-preview-container-" + data.id;
-      container.setAttribute("x", "70");
-      container.setAttribute("y", "5");
-      container.setAttribute("width", String(width * 2 + 30));
+      container.setAttribute("x", String((node.w || 0) / 2 - panelWidth / 2));
+      container.setAttribute("y", String((node.h || 0) + 10));
+      container.setAttribute("width", String(panelWidth));
       container.setAttribute("height", String(width * 2 + 45));
       container.style.overflow = "visible";
 
