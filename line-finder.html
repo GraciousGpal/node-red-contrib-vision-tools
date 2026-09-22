@@ -5,6 +5,56 @@
   </div>
 
   <div class="form-row">
+    <label><i class="fa fa-list"></i> Regions</label>
+    <div style="margin-left:105px;">
+      <div
+        id="line-finder-region-list"
+        style="border:1px solid #ccc; border-radius:3px; background:#fafafa; max-height:132px; overflow-y:auto; font-size:12px; font-family:monospace;"
+        title="Click a region to select it; the fields below and the handles in the viewer edit the selected one"
+      ></div>
+      <div style="margin-top:6px;">
+        <button
+          type="button"
+          id="line-finder-region-add"
+          class="red-ui-button red-ui-button-small"
+          title="Add a region"
+        >
+          <i class="fa fa-plus"></i> Add
+        </button>
+        <button
+          type="button"
+          id="line-finder-region-remove"
+          class="red-ui-button red-ui-button-small"
+          title="Remove the selected region"
+        >
+          <i class="fa fa-minus"></i> Remove
+        </button>
+        <button
+          type="button"
+          id="line-finder-add-rect"
+          class="red-ui-button red-ui-button-small"
+          title="Add left, right, top and bottom regions around the image centre, each scanning inwards (replacing any regions already so named)"
+        >
+          <i class="fa fa-square-o"></i> Add rectangle
+        </button>
+        <button
+          type="button"
+          id="line-finder-copy-edge-regions"
+          class="red-ui-button red-ui-button-small"
+          title="Copy the left/right/top/bottom regions and the tuning below as the edgeRegions JSON label-crop's calipers mode takes"
+        >
+          <i class="fa fa-clipboard"></i> Copy as label-crop edgeRegions
+        </button>
+      </div>
+      <div style="margin-top:4px; color:#999; font-size:12px;">
+        One region finds one edge. Name four of them <b>left</b>, <b>right</b>,
+        <b>top</b> and <b>bottom</b> and the node also reports the rectangle
+        they bound; <b>Add rectangle</b> lays those four out for you.
+      </div>
+    </div>
+  </div>
+
+  <div class="form-row">
     <label><i class="fa fa-crop"></i> Search region</label>
     <div style="margin-left:105px;">
       <canvas
@@ -52,10 +102,19 @@
         The orange arrow is that direction, the dashed green line is the edge
         being looked for, and the pale lines are the calipers themselves.
         Corner handles resize, the amber grip rotates, arrow keys nudge by a
-        pixel. <b>Run on this image</b> searches the photo with the settings
-        below and draws what it found - or says why it found nothing.
+        pixel; click another region to select it. <b>Run on this image</b>
+        searches the photo with the settings below and draws what every
+        region found - or says why it found nothing.
       </div>
     </div>
+  </div>
+
+  <div class="form-row">
+    <label for="line-finder-region-name"><i class="fa fa-pencil"></i> Region name</label>
+    <input type="text" id="line-finder-region-name" style="width:130px;" placeholder="name" />
+    <span class="node-input-hint" style="margin-left:10px; color:#999;"
+      >of the selected region; left/right/top/bottom make a rectangle</span
+    >
   </div>
 
   <div class="form-row">
@@ -107,9 +166,16 @@
       <option value="first">first edge</option>
       <option value="last">last edge</option>
     </select>
-    <input type="number" id="node-input-ignoreCount" min="0" style="width:60px; margin-left:10px;" />
-    <span class="node-input-hint" style="margin-left:8px; color:#999;"
-      >edges to skip first</span
+    <span class="node-input-hint" style="margin-left:10px; color:#999;"
+      >which qualifying edge this region keeps</span
+    >
+  </div>
+
+  <div class="form-row">
+    <label for="node-input-ignoreCount"><i class="fa fa-step-forward"></i> Skip edges</label>
+    <input type="number" id="node-input-ignoreCount" min="0" style="width:70px;" />
+    <span class="node-input-hint" style="margin-left:10px; color:#999;"
+      >qualifying edges to step past before selecting; all regions</span
     >
   </div>
 
@@ -117,7 +183,7 @@
     <label for="node-input-calipers"><i class="fa fa-bars"></i> Calipers</label>
     <input type="number" id="node-input-calipers" min="1" max="512" style="width:70px;" />
     <span class="node-input-hint" style="margin-left:10px; color:#999;"
-      >scans across the region; each averages its own slice</span
+      >scans across each region; each averages its own slice</span
     >
   </div>
 
@@ -171,7 +237,7 @@
       style="width:auto; vertical-align:top;"
     />
     <label for="node-input-previewEnabled" style="width:auto; margin-left:5px;"
-      >Draw the region, calipers and fitted line on the flow canvas</label
+      >Draw the regions, calipers and fitted lines on the flow canvas</label
     >
   </div>
 
@@ -189,17 +255,19 @@
     <label for="node-input-minScore"><i class="fa fa-star-o"></i> Min score</label>
     <input type="number" id="node-input-minScore" min="0" max="1" step="0.05" style="width:70px;" />
     <span class="node-input-hint" style="margin-left:10px; color:#999;"
-      >below this the line is reported as not found</span
+      >below this a line is reported as not found</span
     >
   </div>
 </script>
 
 <script type="text/html" data-help-name="line-finder">
   <p>
-    Find one straight edge inside a region you draw. A row of
+    Find a straight edge inside each region you draw. A row of
     <b>calipers</b> scans across the region, each one reports where the
     brightness steps, and a line is fitted through those points with
-    outliers dropped.
+    outliers dropped. One region finds one edge; several find several,
+    and four named <b>left</b>, <b>right</b>, <b>top</b> and <b>bottom</b>
+    are intersected into the rectangle they bound.
   </p>
   <p>
     Use it when a whole-frame search finds the <i>wrong</i> edge. That
@@ -210,7 +278,22 @@
     win.
   </p>
 
-  <h3>Drawing the region</h3>
+  <h3>Regions</h3>
+  <p>
+    The list at the top holds every region. Each carries its own box,
+    angle, <i>Scan</i>, <i>Polarity</i> and <i>Select</i>; the numeric
+    tuning further down (calipers, contrast, smoothing, ...) applies to
+    all of them. Click a region to select it - the fields and the viewer
+    edit the selected one. <i>Add</i> and <i>Remove</i> do what they say;
+    <b>Add rectangle</b> lays out <code>left</code>, <code>right</code>,
+    <code>top</code> and <code>bottom</code> around the image centre,
+    each scanning inwards, ready to be dragged onto the edges.
+    <b>Copy as label-crop edgeRegions</b> puts those four, with the
+    tuning, on the clipboard in the JSON <code>label-crop</code>'s
+    calipers mode pastes in.
+  </p>
+
+  <h3>Drawing a region</h3>
   <p>
     Load a representative photo and the <b>zoom viewer</b> opens on it -
     click the thumbnail or <i>Viewer</i> to reopen it. Drag
@@ -225,27 +308,28 @@
   <p>
     The viewer is where a region actually gets aimed, because at
     thumbnail scale a two-grey-level boundary is not visible at all. It
-    opens zoomed onto the current region and shows what the search will
+    opens zoomed onto the selected region and shows what the search will
     do: the <b>orange arrow</b> is the scan direction, the <b>dashed
     green</b> line is the edge being looked for, and the <b>pale
     lines</b> are the calipers themselves - one per band, drawn where
     that band will measure. Turn them off with <i>Calipers</i> if they
-    get in the way.
+    get in the way. The other regions are drawn fainter, each labelled
+    with its name; click one to select it.
   </p>
   <ul>
     <li>mouse wheel zooms to the cursor; <i>Fit</i> and <i>100%</i>
       jump; right-drag pans at any time, or switch <i>Mode</i> to Pan</li>
-    <li>drag on empty space to draw a new region - the drag direction
-      sets the scan direction, which is the one thing a static box
-      cannot tell you</li>
+    <li>drag on empty space to redraw the selected region - the drag
+      direction sets the scan direction, which is the one thing a static
+      box cannot tell you</li>
     <li>corner handles resize from the opposite corner; dragging inside
       moves the box; the arrow keys nudge it a pixel at a time, ten with
       Shift</li>
     <li>the amber grip rotates the region about its centre, to a tenth
       of a degree - hold Shift to snap to five</li>
     <li><i>Scan</i> cycles the direction without redrawing</li>
-    <li><i>Apply</i> writes the region into the fields; <i>Cancel</i> or
-      Escape leaves them alone</li>
+    <li><i>Apply</i> writes every region back; <i>Cancel</i> or Escape
+      leaves them alone</li>
   </ul>
   <p>
     A region may hang off the frame, but the footer says so: a caliper
@@ -261,14 +345,20 @@
     <b>not</b> modified; this is a measuring tool.
   </p>
   <p>
-    <code>msg.region</code> — optional per-message region
-    <code>{ x, y, width, height, angleDeg }</code>, so one node can be
-    re-aimed rather than copied. Every option below can also be
-    overridden by a same-named <code>msg</code> property.
+    <code>msg.regions</code> — optional per-message list of regions in
+    the configured shape <code>{ name, x, y, width, height, angleDeg,
+    scanDirection, polarity, edgeSelect }</code>, replacing the whole
+    list. <code>msg.region</code> — a single
+    <code>{ x, y, width, height, angleDeg }</code> that re-aims the node
+    to that one region, so one node can be driven rather than copied.
+    Every tuning option below can also be overridden by a same-named
+    <code>msg</code> property; <code>msg.scanDirection</code>,
+    <code>msg.polarity</code> and <code>msg.edgeSelect</code> apply to
+    every region.
   </p>
 
   <h3>Output</h3>
-  <p><code>msg.lineFinder</code>:</p>
+  <p><code>msg.lineFinder</code>, with one region:</p>
   <ul>
     <li><code>found</code> / <code>reason</code> — <code>ok</code>, <code>no-edge</code>,
       <code>too-few-calipers</code>, <code>angle-out-of-tolerance</code>,
@@ -282,6 +372,26 @@
     <li><code>residualPx</code> — RMS distance of the used points from the line</li>
     <li><code>points</code> — every caliper hit, each flagged <code>used</code>
       or not, for overlaying on a debug image</li>
+    <li><code>lines</code> — the same result again as
+      <code>[{ name, ... }]</code>, so a flow written for several regions
+      reads one the same way</li>
+  </ul>
+  <p>With several regions:</p>
+  <ul>
+    <li><code>lines</code> — one entry per region in list order, each
+      <code>{ name, found, reason, line, angleDeg, score, calipers,
+      residualPx, points, region }</code></li>
+    <li><code>found</code> — true only when every region found its line;
+      <code>reason</code> names the first that did not
+      (<code>top:no-edge</code>)</li>
+    <li><code>rect</code> — when regions named left, right, top and bottom
+      exist: <code>{ ok, corners, center, width, height, angleDeg, score,
+      residualPx }</code>, corners in the order top-left, top-right,
+      bottom-right, bottom-left - the shape <code>label-crop</code>
+      reports - or <code>{ ok: false, reason }</code> when a side missed</li>
+    <li><code>intersections</code> — <code>[{ a, b, x, y }]</code> for every
+      pair of found lines that is not parallel within the angle
+      tolerance: the corner of an L-shaped fixture, say</li>
   </ul>
   <p>
     A miss is a normal result, not an error - <code>found</code> is false
@@ -291,11 +401,11 @@
   <h3>Preview</h3>
   <p>
     Switch <i>Preview</i> on and the node draws its result on the flow
-    canvas: the search region as you configured it (a rotated region shows
-    as the parallelogram it is), every caliper hit - <b>green</b> kept,
-    <b>red</b> dropped by the outlier trim - and the <b>yellow</b> fitted
-    line, with the angle, caliper count, score and residual above. Click
-    the preview to dismiss it.
+    canvas: every search region as you configured it (a rotated region
+    shows as the parallelogram it is), every caliper hit - <b>green</b>
+    kept, <b>red</b> dropped by the outlier trim - each <b>yellow</b>
+    fitted line and the <b>cyan</b> rectangle when four sides were found,
+    with a summary above. Click the preview to dismiss it.
   </p>
   <p>
     A <b>miss</b> previews too, which is the point: it shows whether the
@@ -308,12 +418,15 @@
   <h3>Tuning</h3>
   <p>
     <b>Run on this image</b> runs the real search on the loaded sample
-    with the dialog's current settings, without deploying, and draws every
-    caliper, its edge point (filled when the fit kept it, hollow when the
-    outlier trim dropped it) and the fitted line on the thumbnail. On a
-    miss the status line says which gate stopped it and what to move -
-    for a faint edge, the strongest step any caliper actually saw against
-    the threshold. The browser decodes the sample, so the runtime's
+    with the dialog's current settings, without deploying - every region
+    at once - and draws each caliper, its edge point (filled when the fit
+    kept it, hollow when the outlier trim dropped it), each fitted line
+    and the rectangle's corners on the thumbnail. With one region a miss
+    is explained in full: which gate stopped it and what to move - for a
+    faint edge, the strongest step any caliper actually saw against the
+    threshold. With several the status line gives one verdict per
+    region: <code>left ✓ 0.1° · right ✓ · top ✗ contrast 1.2&lt;2.0 ·
+    bottom ✓</code>. The browser decodes the sample, so the runtime's
     figures can differ by a fraction of a pixel.
   </p>
   <p>
@@ -322,31 +435,42 @@
     raising the threshold. <i>Select</i> = <b>first</b> is the
     deterministic choice when two steps of similar strength sit close
     together - <b>strongest</b> can alternate between them from frame to
-    frame. <i>Edges to skip</i> steps past a known structure, such as a
+    frame. <i>Skip edges</i> steps past a known structure, such as a
     frame vignette, without narrowing the box.
   </p>
 
-  <h3>Four of these make a rectangle</h3>
+  <h3>Four of them make a rectangle</h3>
   <p>
-    Feed four line-finders (left, right, top, bottom) into
-    <code>label-crop</code>'s <i>calipers</i> boundary mode and it will
-    intersect them into the label's corners and crop to them - far more
-    stable than a blob search when the boundary is faint. See that node's
-    help.
+    Name four regions left, right, top and bottom and this node reports
+    the rectangle itself in <code>msg.lineFinder.rect</code>. To crop to
+    it as well, <b>Copy as label-crop edgeRegions</b> and paste into
+    <code>label-crop</code>'s <i>calipers</i> boundary mode, which runs
+    the same four searches and deskews to the result - far more stable
+    than a blob search when the boundary is faint. See that node's help.
   </p>
   <p>
     No OpenCV engine is needed: the search is pure JS and only touches
-    the pixels inside the region, so its cost follows the box you drew,
-    not the frame size.
+    the pixels inside the regions, so its cost follows the boxes you
+    drew, not the frame size.
   </p>
 </script>
 
 <script type="text/javascript">
+  // The region list being edited. oneditprepare owns it and oneditsave
+  // reads it back; a hidden node-input would make Node-RED store the list
+  // as the string an <input> holds, so it stays in this closure instead.
+  let lineFinderEditingRegions = null;
+  let lineFinderEditingSelected = 0;
+
   RED.nodes.registerType("line-finder", {
     category: "vision",
     color: "#5DADE2",
     defaults: {
       name: { value: "" },
+      // one entry per region: { name, x, y, width, height, angleDeg,
+      // scanDirection, polarity, edgeSelect }. Empty on a node saved
+      // before it existed, whose one region lives in the fields below.
+      regions: { value: [] },
       regionX: { value: 0, validate: RED.validators.number(true) },
       regionY: { value: 0, validate: RED.validators.number(true) },
       regionWidth: { value: 100, validate: RED.validators.number(true) },
@@ -370,7 +494,9 @@
     outputs: 1,
     icon: "font-awesome/fa-minus",
     label: function () {
-      return this.name || "line finder";
+      if (this.name) return this.name;
+      const n = Array.isArray(this.regions) ? this.regions.length : 0;
+      return n > 1 ? "line finder ×" + n : "line finder";
     },
     paletteLabel: function () {
       return "line finder";
@@ -454,8 +580,158 @@
       };
       // EDITOR_GEOMETRY_END
 
+      // ---- region list maths -----------------------------------------
+      // What a region entry is, how a rectangle's four are laid out, and
+      // the label-crop JSON the Copy button writes. Plain data in, plain
+      // data out, no DOM, so test/lineFinderEditor.test.js can lift the
+      // block and check it against the runtime's own normalisers.
+      // EDITOR_REGIONS_START
+      const SCAN_DIRECTIONS = ["right", "left", "down", "up"];
+      const POLARITIES = ["either", "darkToLight", "lightToDark"];
+      const EDGE_SELECTS = ["best", "first", "last"];
+      const RECT_SIDES = ["left", "right", "top", "bottom"];
+      const numOr = function (v, fallback) {
+        const n = typeof v === "number" ? v : parseFloat(v);
+        return Number.isFinite(n) ? n : fallback;
+      };
+      const oneOf = function (v, allowed, fallback) {
+        return allowed.indexOf(v) === -1 ? fallback : v;
+      };
+
+      /** A stored or typed region entry into the one shape the editor keeps. */
+      const normalizeRegionEditor = function (r, index) {
+        const src = r && typeof r === "object" ? r : {};
+        return {
+          name: String(src.name == null ? "" : src.name).trim() || "region" + ((index || 0) + 1),
+          x: numOr(src.x, 0),
+          y: numOr(src.y, 0),
+          width: Math.max(1, numOr(src.width, 100)),
+          height: Math.max(1, numOr(src.height, 100)),
+          angleDeg: numOr(src.angleDeg, 0),
+          scanDirection: oneOf(src.scanDirection, SCAN_DIRECTIONS, "right"),
+          polarity: oneOf(src.polarity, POLARITIES, "either"),
+          edgeSelect: oneOf(src.edgeSelect, EDGE_SELECTS, "best"),
+        };
+      };
+
+      /**
+       * The four sides of a rectangle assumed to fill the central 60% of
+       * the frame: a box across each edge, 12% of the shorter side deep and
+       * running along 70% of that edge - short of the corners so the sides
+       * do not overlap the ends - each scanning inwards, as label-crop
+       * implies for that side. Sized off the frame so the boxes land on the
+       * image whatever its resolution; they are meant to be dragged onto
+       * the real edges from there.
+       */
+      const rectangleRegionsEditor = function (imageW, imageH) {
+        const W = imageW > 0 ? imageW : 1000;
+        const H = imageH > 0 ? imageH : 750;
+        const cx = W / 2;
+        const cy = H / 2;
+        const rw = W * 0.6;
+        const rh = H * 0.6;
+        const depth = Math.max(8, Math.round(Math.min(W, H) * 0.12));
+        const along = Math.round(rh * 0.7);
+        const across = Math.round(rw * 0.7);
+        const mk = function (name, x, y, width, height, scanDirection) {
+          return {
+            name: name,
+            x: Math.round(x),
+            y: Math.round(y),
+            width: width,
+            height: height,
+            angleDeg: 0,
+            scanDirection: scanDirection,
+            polarity: "either",
+            edgeSelect: "best",
+          };
+        };
+        return [
+          mk("left", cx - rw / 2 - depth / 2, cy - along / 2, depth, along, "right"),
+          mk("right", cx + rw / 2 - depth / 2, cy - along / 2, depth, along, "left"),
+          mk("top", cx - across / 2, cy - rh / 2 - depth / 2, across, depth, "down"),
+          mk("bottom", cx - across / 2, cy + rh / 2 - depth / 2, across, depth, "up"),
+        ];
+      };
+
+      /**
+       * Put the four sides into a list: any region already carrying one of
+       * their names is replaced, the rest are kept, and the untouched
+       * default region a new node starts with is dropped rather than left
+       * as a fifth line nobody asked for.
+       */
+      const mergeRectangleEditor = function (regions, sides) {
+        const names = sides.map(function (r) {
+          return r.name;
+        });
+        const only = regions.length === 1 ? regions[0] : null;
+        const untouched =
+          only &&
+          only.name === "line" &&
+          only.x === 0 &&
+          only.y === 0 &&
+          only.width === 100 &&
+          only.height === 100;
+        const kept = untouched
+          ? []
+          : regions.filter(function (r) {
+              return names.indexOf(r.name) === -1;
+            });
+        return kept.concat(sides);
+      };
+
+      /**
+       * The `edgeRegions` object label-crop's calipers mode takes: one
+       * entry per side, each the box plus the line-finder options that
+       * tuned it. The scan direction is left out on purpose - label-crop
+       * implies it from the side, and a value here would override that.
+       * Null until all four sides exist.
+       */
+      const edgeRegionsEditor = function (regions, cfg) {
+        const byName = {};
+        for (const r of regions) byName[r.name] = r;
+        if (
+          !RECT_SIDES.every(function (s) {
+            return byName[s];
+          })
+        ) {
+          return null;
+        }
+        const out = {};
+        for (const side of RECT_SIDES) {
+          const r = byName[side];
+          const spec = {
+            x: Math.round(r.x),
+            y: Math.round(r.y),
+            width: Math.max(1, Math.round(r.width)),
+            height: Math.max(1, Math.round(r.height)),
+          };
+          if (r.angleDeg) spec.angleDeg = r.angleDeg;
+          if (r.polarity && r.polarity !== "either") spec.polarity = r.polarity;
+          if (r.edgeSelect && r.edgeSelect !== "best") spec.edgeSelect = r.edgeSelect;
+          for (const k of [
+            "calipers",
+            "contrastThreshold",
+            "filterHalfWidth",
+            "ignoreCount",
+            "outlierTolerancePx",
+            "minCaliperFraction",
+          ]) {
+            const n = numOr(cfg[k], null);
+            if (n !== null) spec[k] = n;
+          }
+          spec.angleToleranceDeg =
+            cfg.angleToleranceDeg === "" || cfg.angleToleranceDeg == null
+              ? null
+              : numOr(cfg.angleToleranceDeg, 10);
+          out[side] = spec;
+        }
+        return out;
+      };
+      // EDITOR_REGIONS_END
+
       // ---- run-on-this-image maths -----------------------------------
-      // The crop the Run button sends and the sentence it writes about a
+      // The crop the Run button sends and the sentences it writes about a
       // miss. Both are plain arithmetic on the result and kept free of the
       // DOM, so test/editorRegionGeometry.test.js can lift them out with
       // the geometry block above and check them.
@@ -553,6 +829,74 @@
           fmtContrast(d.medianPeakContrast) + ", or lower Min calipers"
         );
       };
+
+      /**
+       * The same verdict in a few characters, for the one-line-per-region
+       * summary when several regions ran: "contrast 1.2<2.0", "calipers
+       * 3/16", "angle 23.4°>10°".
+       */
+      const shortMiss = function (result) {
+        const d = result.diagnostics || {};
+        const s = result.settings || {};
+        if (result.error) return "error: " + result.error;
+        if (result.reason === "off-frame" || !d.calipersInImage) return "off the frame";
+        if (result.reason === "below-min-score") {
+          return "score " + Number(result.score).toFixed(2) + "<" + s.minScore;
+        }
+        if (result.reason === "angle-out-of-tolerance") {
+          return "angle " + Number(result.angleDeg).toFixed(1) + "°>" + s.angleToleranceDeg + "°";
+        }
+        const peak = d.peakContrast || 0;
+        const threshold = Number(s.contrastThreshold) || 0;
+        if (peak < threshold) return "contrast " + fmtContrast(peak) + "<" + fmtContrast(threshold);
+        if (
+          !d.calipersWithEdge && d.peakPolarity &&
+          s.polarity !== "either" && s.polarity !== d.peakPolarity
+        ) {
+          return "polarity is " + d.peakPolarity;
+        }
+        return "calipers " + (d.calipersWithEdge || 0) + "/" + ((result.calipers && result.calipers.total) || 0);
+      };
+
+      /**
+       * Where two fitted lines cross, or null when they are near-parallel -
+       * the same arithmetic and the same half-degree floor as
+       * intersectLines in lib/lineFinder.js, so the corners the editor
+       * draws are the corners the node will report.
+       */
+      const intersectLinesEditor = function (a, b) {
+        const denom = a.dx * -b.dy - a.dy * -b.dx;
+        if (Math.abs(denom) < 1e-3) return null;
+        const rx = b.x - a.x;
+        const ry = b.y - a.y;
+        const t = (rx * -b.dy - ry * -b.dx) / denom;
+        return { x: a.x + a.dx * t, y: a.y + a.dy * t };
+      };
+
+      /**
+       * The rectangle's corners - top-left, top-right, bottom-right,
+       * bottom-left, as rectFromLines orders them - from the per-region
+       * results keyed by name, or null unless all four sides were found
+       * and none came out parallel.
+       */
+      const rectCornersEditor = function (byName) {
+        const side = function (s) {
+          const r = byName[s];
+          return r && r.found && r.line ? r.line : null;
+        };
+        const left = side("left");
+        const right = side("right");
+        const top = side("top");
+        const bottom = side("bottom");
+        if (!left || !right || !top || !bottom) return null;
+        const corners = [
+          intersectLinesEditor(left, top),
+          intersectLinesEditor(right, top),
+          intersectLinesEditor(right, bottom),
+          intersectLinesEditor(left, bottom),
+        ];
+        return corners.every(Boolean) ? corners : null;
+      };
       // EDITOR_RUN_END
 
       /**
@@ -583,8 +927,13 @@
         const dy = py - (region.y + region.height / 2);
         return { u: dx * ca + dy * sa, v: -dx * sa + dy * ca };
       };
+      const insideRegion = function (region, px, py) {
+        const l = toLocal(region, px, py);
+        return Math.abs(l.u) <= region.width / 2 && Math.abs(l.v) <= region.height / 2;
+      };
 
       // ---- fields ----------------------------------------------------
+      const node = this;
       const canvas = document.getElementById("line-finder-canvas");
       const ctx = canvas.getContext("2d");
       const readout = document.getElementById("line-finder-readout");
@@ -592,6 +941,12 @@
       const runButton = document.getElementById("line-finder-run");
       const runIcon = document.getElementById("line-finder-run-icon");
       const runStatus = document.getElementById("line-finder-run-status");
+      const listEl = document.getElementById("line-finder-region-list");
+      const nameField = document.getElementById("line-finder-region-name");
+      const addButton = document.getElementById("line-finder-region-add");
+      const removeButton = document.getElementById("line-finder-region-remove");
+      const addRectButton = document.getElementById("line-finder-add-rect");
+      const copyButton = document.getElementById("line-finder-copy-edge-regions");
 
       const SCAN_ORDER = ["right", "down", "left", "up"];
       const SCAN_ARROW = { right: "→", left: "←", down: "↓", up: "↑" };
@@ -600,8 +955,10 @@
       let image = null;
       let imageW = 0;
       let imageH = 0;
-      // what the last Run on this image came back with, in image pixels
-      let runResult = null;
+      // what the last Run on this image came back with, per region name,
+      // in image pixels - and the rectangle's corners when four sides made one
+      let runResults = null;
+      let runRect = null;
       let running = false;
 
       const field = function (id) {
@@ -614,6 +971,38 @@
       const clamp = function (v, lo, hi) {
         return Math.min(hi, Math.max(lo, v));
       };
+
+      // ---- the region list -------------------------------------------
+      // `regions` is the store; the fields show the selected entry and
+      // write back into it on change. A node saved before the list existed
+      // has its one region in the fields, so that is where the list starts.
+      let regions;
+      let selected = 0;
+      {
+        const stored = Array.isArray(node.regions) ? node.regions : [];
+        regions = stored
+          .filter(function (r) {
+            return r && typeof r === "object";
+          })
+          .map(normalizeRegionEditor);
+        if (!regions.length) {
+          regions = [
+            normalizeRegionEditor({
+              name: "line",
+              x: field("regionX").value,
+              y: field("regionY").value,
+              width: field("regionWidth").value,
+              height: field("regionHeight").value,
+              angleDeg: field("regionAngleDeg").value,
+              scanDirection: field("scanDirection").value,
+              polarity: field("polarity").value,
+              edgeSelect: field("edgeSelect").value,
+            }),
+          ];
+        }
+      }
+      lineFinderEditingRegions = regions;
+      lineFinderEditingSelected = 0;
 
       const currentRegion = function () {
         return {
@@ -631,12 +1020,10 @@
         const n = parseInt(field("calipers").value, 10);
         return Number.isFinite(n) ? clamp(n, 1, 512) : 16;
       };
-      // the settings oneditsave stores, by the names the runtime reads them
-      // under; sent as typed, the runtime clamps them the way a deploy would
+      // the node-wide settings oneditsave stores, by the names the runtime
+      // reads them under; sent as typed, the runtime clamps them the way a
+      // deploy would. The three per-region modes are added per region.
       const RUN_SETTINGS = [
-        "scanDirection",
-        "polarity",
-        "edgeSelect",
         "ignoreCount",
         "calipers",
         "contrastThreshold",
@@ -646,10 +1033,24 @@
         "angleToleranceDeg",
         "minScore",
       ];
-      const currentCfg = function () {
+      const currentCfg = function (region) {
         const cfg = {};
         for (const id of RUN_SETTINGS) cfg[id] = field(id).value;
+        if (region) {
+          cfg.scanDirection = region.scanDirection;
+          cfg.polarity = region.polarity;
+          cfg.edgeSelect = region.edgeSelect;
+        }
         return cfg;
+      };
+      const geometryOf = function (region) {
+        return {
+          x: region.x,
+          y: region.y,
+          width: region.width,
+          height: region.height,
+          angleDeg: region.angleDeg,
+        };
       };
       const writeRegion = function (region, scanDirection) {
         field("regionX").value = Math.round(region.x);
@@ -659,6 +1060,38 @@
         field("regionAngleDeg").value =
           Math.round((region.angleDeg || 0) * 10) / 10;
         field("scanDirection").value = scanDirection;
+      };
+      /** Show a list entry in the fields. */
+      const writeFields = function (region) {
+        writeRegion(region, region.scanDirection);
+        field("polarity").value = region.polarity;
+        field("edgeSelect").value = region.edgeSelect;
+        nameField.value = region.name;
+      };
+      /** The fields as a list entry, keeping the name unique in the list. */
+      const readFields = function () {
+        const r = normalizeRegionEditor({
+          name: nameField.value,
+          x: field("regionX").value,
+          y: field("regionY").value,
+          width: field("regionWidth").value,
+          height: field("regionHeight").value,
+          angleDeg: field("regionAngleDeg").value,
+          scanDirection: currentScan(),
+          polarity: field("polarity").value,
+          edgeSelect: field("edgeSelect").value,
+        }, selected);
+        return r;
+      };
+      const uniqueName = function (base, skipIndex) {
+        const taken = {};
+        regions.forEach(function (r, i) {
+          if (i !== skipIndex) taken[r.name] = true;
+        });
+        if (!taken[base]) return base;
+        let n = 2;
+        while (taken[base + n]) n++;
+        return base + n;
       };
 
       const hasRegion = function (r) {
@@ -691,13 +1124,70 @@
           return;
         }
         readout.textContent =
+          (regions.length > 1 ? regions[selected].name + ":  " : "") +
           describeRegion(r, currentScan()) +
           (imageW ? "   (image " + imageW + "×" + imageH + ")" : "") +
           (outsideFrame(r, currentScan()) ? "   ⚠ past the frame" : "");
       };
 
+      const hasRectSides = function (list) {
+        const names = list.map(function (r) {
+          return r.name;
+        });
+        return RECT_SIDES.every(function (s) {
+          return names.indexOf(s) !== -1;
+        });
+      };
+
+      /** Redraw the list: one row per region, the selected one highlighted. */
+      const renderList = function () {
+        const rows = regions.map(function (r, i) {
+          const row = document.createElement("div");
+          row.style.cssText =
+            "padding:2px 6px; cursor:pointer; white-space:nowrap; overflow:hidden; text-overflow:ellipsis;" +
+            (i === selected
+              ? "background:#2196f3; color:#fff;"
+              : i % 2 ? "background:#f2f2f2;" : "");
+          row.textContent =
+            r.name + "  " + SCAN_ARROW[r.scanDirection] +
+            "  x " + Math.round(r.x) + " y " + Math.round(r.y) +
+            "  " + Math.round(r.width) + "×" + Math.round(r.height) +
+            (r.angleDeg ? "  " + (Math.round(r.angleDeg * 10) / 10) + "°" : "") +
+            (r.polarity !== "either" ? "  " + r.polarity : "") +
+            (r.edgeSelect !== "best" ? "  " + r.edgeSelect : "");
+          row.title = "select " + r.name;
+          row.addEventListener("click", function () {
+            selectRegion(i);
+          });
+          return row;
+        });
+        listEl.replaceChildren.apply(listEl, rows);
+        removeButton.disabled = regions.length <= 1;
+        copyButton.disabled = !hasRectSides(regions);
+      };
+
+      /** Make region i the one the fields and the viewer edit. */
+      const selectRegion = function (i) {
+        if (i < 0 || i >= regions.length) return;
+        selected = i;
+        lineFinderEditingSelected = i;
+        writeFields(regions[i]);
+        renderList();
+        updateReadout();
+        drawThumb();
+      };
+
+      /** The fields changed: write them into the selected entry. */
+      const commitFields = function () {
+        const r = readFields();
+        r.name = uniqueName(r.name, selected);
+        regions[selected] = r;
+        if (nameField.value !== r.name) nameField.value = r.name;
+        renderList();
+      };
+
       // ---- shared overlay drawing ------------------------------------
-      // Both the thumbnail and the viewer draw the region through this, in
+      // Both the thumbnail and the viewer draw the regions through this, in
       // screen coordinates, so line weights stay one pixel at any zoom.
       const drawArrow = function (c, x0, y0, x1, y1) {
         c.beginPath();
@@ -713,6 +1203,11 @@
         c.fill();
       };
 
+      /**
+       * One region. `opts.passive` draws it fainter - a region that is
+       * not the one being edited - and `opts.label` writes its name just
+       * outside the edge the scan starts from.
+       */
       const drawRegion = function (c, region, scanDirection, toScreen, opts) {
         if (!hasRegion(region)) return;
         const o = opts || {};
@@ -729,15 +1224,15 @@
         c.moveTo(box[0].x, box[0].y);
         for (let i = 1; i < box.length; i++) c.lineTo(box[i].x, box[i].y);
         c.closePath();
-        c.fillStyle = "rgba(33,150,243,0.12)";
+        c.fillStyle = o.passive ? "rgba(33,150,243,0.06)" : "rgba(33,150,243,0.12)";
         c.fill();
         // a dark under-stroke so the box reads on pale and dark frames alike
         c.lineJoin = "round";
-        c.strokeStyle = "rgba(0,0,0,0.6)";
-        c.lineWidth = 3;
+        c.strokeStyle = o.passive ? "rgba(0,0,0,0.4)" : "rgba(0,0,0,0.6)";
+        c.lineWidth = o.passive ? 2 : 3;
         c.stroke();
-        c.strokeStyle = "#2196f3";
-        c.lineWidth = 1.5;
+        c.strokeStyle = o.passive ? "rgba(33,150,243,0.75)" : "#2196f3";
+        c.lineWidth = o.passive ? 1 : 1.5;
         c.stroke();
 
         // one line per caliper, along the scan axis at the band's centre:
@@ -766,7 +1261,7 @@
         // the edge being looked for runs across the scan, through the middle
         const e0 = S(f.depth / 2, 0);
         const e1 = S(f.depth / 2, f.length);
-        c.strokeStyle = "rgba(76,175,80,0.9)";
+        c.strokeStyle = o.passive ? "rgba(76,175,80,0.5)" : "rgba(76,175,80,0.9)";
         c.lineWidth = 1;
         c.setLineDash([5, 4]);
         c.beginPath();
@@ -778,24 +1273,59 @@
         // and the scan direction, from the starting edge inward
         const a0 = S(0, f.length / 2);
         const a1 = S(f.depth, f.length / 2);
-        c.strokeStyle = "#e65100";
-        c.fillStyle = "#e65100";
-        c.lineWidth = 2;
+        c.strokeStyle = o.passive ? "rgba(230,81,0,0.6)" : "#e65100";
+        c.fillStyle = c.strokeStyle;
+        c.lineWidth = o.passive ? 1 : 2;
         drawArrow(c, a0.x, a0.y, a1.x, a1.y);
+
+        // the name, a little outside the edge the scan starts from
+        if (o.label) {
+          const len = Math.hypot(a1.x - a0.x, a1.y - a0.y) || 1;
+          const px = a0.x - ((a1.x - a0.x) / len) * 9;
+          const py = a0.y - ((a1.y - a0.y) / len) * 9;
+          c.font = (o.passive ? "11px" : "bold 11px") + " sans-serif";
+          c.textAlign = "center";
+          c.textBaseline = "middle";
+          c.lineWidth = 3;
+          c.strokeStyle = "rgba(0,0,0,0.7)";
+          c.strokeText(o.label, px, py);
+          c.fillStyle = o.passive ? "#e3f2fd" : "#ffffff";
+          c.fillText(o.label, px, py);
+        }
+      };
+
+      /** Every region in a list, the selected one on top and in full. */
+      const drawRegions = function (c, list, selIndex, toScreen, opts) {
+        const o = opts || {};
+        const many = list.length > 1;
+        list.forEach(function (r, i) {
+          if (i === selIndex) return;
+          drawRegion(c, geometryOf(r), r.scanDirection, toScreen, {
+            passive: true,
+            label: many ? r.name : null,
+          });
+        });
+        const sel = list[selIndex];
+        if (sel) {
+          drawRegion(c, o.geometry || geometryOf(sel), o.scan || sel.scanDirection, toScreen, {
+            showCalipers: o.showCalipers,
+            label: many ? sel.name : null,
+          });
+        }
       };
 
       // ---- run result overlay ----------------------------------------
       // What the last Run found, drawn through the same mapping as the
-      // region so it lands on the pixels it measured: every caliper as a
+      // regions so it lands on the pixels it measured: every caliper as a
       // thin line (red when its band fell past the frame), its edge point
       // filled when the fit kept it and hollow when the outlier trim
-      // dropped it, and the fitted line in yellow across the region.
-      const drawRunResult = function (c, toScreen) {
-        if (!runResult) return;
+      // dropped it, the fitted line in yellow across the region, and the
+      // rectangle in cyan when four sides made one.
+      const drawOneResult = function (c, r, toScreen) {
         const S = function (p) {
           return toScreen(p.x, p.y);
         };
-        for (const cal of runResult.caliperLines || []) {
+        for (const cal of r.caliperLines || []) {
           const a = S(cal.p0);
           const z = S(cal.p1);
           c.strokeStyle = cal.complete ? "rgba(255,255,255,0.7)" : "rgba(239,83,80,0.6)";
@@ -817,9 +1347,9 @@
             c.stroke();
           }
         }
-        if (runResult.line) {
-          const a = S(runResult.line.p0);
-          const z = S(runResult.line.p1);
+        if (r.line) {
+          const a = S(r.line.p0);
+          const z = S(r.line.p1);
           c.beginPath();
           c.moveTo(a.x, a.y);
           c.lineTo(z.x, z.y);
@@ -829,6 +1359,33 @@
           c.strokeStyle = "#ffeb3b";
           c.lineWidth = 1.5;
           c.stroke();
+        }
+      };
+      const drawRunResult = function (c, toScreen) {
+        if (!runResults) return;
+        for (const name of Object.keys(runResults)) {
+          drawOneResult(c, runResults[name], toScreen);
+        }
+        if (runRect) {
+          const pts = runRect.map(function (p) {
+            return toScreen(p.x, p.y);
+          });
+          c.beginPath();
+          c.moveTo(pts[0].x, pts[0].y);
+          for (let i = 1; i < pts.length; i++) c.lineTo(pts[i].x, pts[i].y);
+          c.closePath();
+          c.strokeStyle = "rgba(0,0,0,0.6)";
+          c.lineWidth = 3;
+          c.stroke();
+          c.strokeStyle = "#00e5ff";
+          c.lineWidth = 1.5;
+          c.stroke();
+          for (const p of pts) {
+            c.beginPath();
+            c.arc(p.x, p.y, 4, 0, Math.PI * 2);
+            c.fillStyle = "#00e5ff";
+            c.fill();
+          }
         }
       };
 
@@ -858,7 +1415,11 @@
           return { x: f.dx + x * f.s, y: f.dy + y * f.s };
         };
         ctx.drawImage(image, f.dx, f.dy, imageW * f.s, imageH * f.s);
-        drawRegion(ctx, currentRegion(), currentScan(), toScreen, { showCalipers: false });
+        drawRegions(ctx, regions, selected, toScreen, {
+          geometry: currentRegion(),
+          scan: currentScan(),
+          showCalipers: false,
+        });
         drawRunResult(ctx, toScreen);
       };
 
@@ -869,7 +1430,8 @@
           tone === "ok" ? "#2e7d32" : tone === "miss" ? "#b26a00" : tone === "error" ? "#c62828" : "#888";
       };
       const clearRun = function () {
-        runResult = null;
+        runResults = null;
+        runRect = null;
         setRunStatus("", "");
       };
       const describeRun = function (r) {
@@ -884,77 +1446,166 @@
         "   (browser-decoded sample: runtime figures can differ by a fraction of a pixel)";
 
       /**
+       * Every region's results are in: one line of status. A single region
+       * gets the full explanation; several get a verdict each, and the
+       * rectangle's size when left/right/top/bottom all found their edge.
+       */
+      const finishRun = function (list) {
+        if (list.length === 1) {
+          const r = runResults[list[0].name];
+          if (r.error) {
+            setRunStatus("run failed: " + r.error, "error");
+          } else if (r.reason === "off-frame") {
+            setRunStatus("the region lies wholly outside the image - nothing to search", "miss");
+          } else if (r.found) {
+            setRunStatus("found  " + describeRun(r) + DECODE_NOTE, "ok");
+          } else {
+            setRunStatus(
+              "not found (" + r.reason + "): " + explainMiss(r) + DECODE_NOTE,
+              "miss",
+            );
+          }
+        } else {
+          const parts = list.map(function (region) {
+            const r = runResults[region.name];
+            return r.found
+              ? region.name + " ✓ " + Number(r.angleDeg).toFixed(1) + "°"
+              : region.name + " ✗ " + shortMiss(r);
+          });
+          runRect = rectCornersEditor(runResults);
+          let text = parts.join("  ·  ");
+          if (runRect) {
+            const d = function (p, q) {
+              return Math.hypot(p.x - q.x, p.y - q.y);
+            };
+            const w = (d(runRect[0], runRect[1]) + d(runRect[3], runRect[2])) / 2;
+            const h = (d(runRect[0], runRect[3]) + d(runRect[1], runRect[2])) / 2;
+            text += "  ·  rect " + Math.round(w) + "×" + Math.round(h) + " px";
+          }
+          const allFound = list.every(function (region) {
+            return runResults[region.name].found;
+          });
+          const anyError = list.some(function (region) {
+            return runResults[region.name].error;
+          });
+          setRunStatus(text + DECODE_NOTE, anyError ? "error" : allFound ? "ok" : "miss");
+        }
+        running = false;
+        runButton.disabled = !image;
+        runIcon.className = "fa fa-play";
+        drawThumb();
+      };
+
+      /**
        * The real search, on the loaded image, with the settings as they
-       * stand in the dialog - without a deploy. Only a crop around the
-       * region crosses the wire: httpAdmin caps a JSON body at 5MB by
-       * default, which a full frame as PNG would not fit, so the runtime is
-       * told where the crop sits and answers in frame coordinates.
+       * stand in the dialog - without a deploy - once per region. Only a
+       * crop around each region crosses the wire: httpAdmin caps a JSON
+       * body at 5MB by default, which a full frame as PNG would not fit, so
+       * the runtime is told where the crop sits and answers in frame
+       * coordinates.
        */
       const runOnImage = function () {
         if (!image || running) return;
-        const region = currentRegion();
-        const scan = currentScan();
-        const box = cropBoxEditor(region, scan, currentCalipers(), imageW, imageH);
-        if (!box) {
-          runResult = null;
-          setRunStatus("the region lies wholly outside the image - nothing to search", "miss");
-          drawThumb();
-          return;
-        }
-        const crop = document.createElement("canvas");
-        crop.width = box.width;
-        crop.height = box.height;
-        crop
-          .getContext("2d")
-          .drawImage(image, box.x, box.y, box.width, box.height, 0, 0, box.width, box.height);
-        const dataUrl = crop.toDataURL("image/png");
-
+        commitFields();
+        const list = regions.slice();
+        runResults = {};
+        runRect = null;
         running = true;
         runButton.disabled = true;
         runIcon.className = "fa fa-spinner fa-spin";
         setRunStatus("running…", "");
-        $.ajax({
-          url: "line-finder/run",
-          type: "POST",
-          contentType: "application/json",
-          dataType: "json",
-          data: JSON.stringify({
-            image: dataUrl.slice(dataUrl.indexOf(",") + 1),
-            offset: { x: box.x, y: box.y },
-            region: region,
-            cfg: currentCfg(),
-          }),
-        })
-          .done(function (data) {
-            const r = data && data.result;
-            if (!r) {
-              setRunStatus("run failed: no result came back", "error");
-              return;
-            }
-            runResult = r;
-            if (r.found) {
-              setRunStatus("found  " + describeRun(r) + DECODE_NOTE, "ok");
-            } else {
-              setRunStatus(
-                "not found (" + r.reason + "): " + explainMiss(r) + DECODE_NOTE,
-                "miss",
-              );
-            }
-            drawThumb();
+        let pending = list.length;
+        const settle = function () {
+          pending--;
+          if (pending === 0) finishRun(list);
+        };
+        for (const region of list) {
+          const geometry = geometryOf(region);
+          const box = cropBoxEditor(geometry, region.scanDirection, currentCalipers(), imageW, imageH);
+          if (!box) {
+            runResults[region.name] = { found: false, reason: "off-frame", calipers: null };
+            settle();
+            continue;
+          }
+          const crop = document.createElement("canvas");
+          crop.width = box.width;
+          crop.height = box.height;
+          crop
+            .getContext("2d")
+            .drawImage(image, box.x, box.y, box.width, box.height, 0, 0, box.width, box.height);
+          const dataUrl = crop.toDataURL("image/png");
+          $.ajax({
+            url: "line-finder/run",
+            type: "POST",
+            contentType: "application/json",
+            dataType: "json",
+            data: JSON.stringify({
+              image: dataUrl.slice(dataUrl.indexOf(",") + 1),
+              offset: { x: box.x, y: box.y },
+              region: geometry,
+              cfg: currentCfg(region),
+            }),
           })
-          .fail(function (xhr) {
-            const body = xhr && xhr.responseJSON;
+            .done(function (data) {
+              const r = data && data.result;
+              runResults[region.name] = r || { found: false, reason: "error", error: "no result came back" };
+            })
+            .fail(function (xhr) {
+              const body = xhr && xhr.responseJSON;
+              runResults[region.name] = {
+                found: false,
+                reason: "error",
+                error: (body && body.error) || (xhr && xhr.statusText) || "no response",
+              };
+            })
+            .always(settle);
+        }
+      };
+
+      // ---- copy as label-crop edgeRegions ----------------------------
+      const copyText = function (text) {
+        const nav = window.navigator;
+        if (nav && nav.clipboard && typeof nav.clipboard.writeText === "function") {
+          return nav.clipboard.writeText(text);
+        }
+        // the older path: select the text in an off-screen textarea and
+        // ask the document to copy it
+        const ta = document.createElement("textarea");
+        ta.value = text;
+        ta.style.cssText = "position:fixed; left:-9999px; top:0;";
+        document.body.appendChild(ta);
+        ta.focus();
+        if (typeof ta.select === "function") ta.select();
+        let ok = false;
+        try {
+          ok = typeof document.execCommand === "function" && document.execCommand("copy");
+        } catch (e) {
+          ok = false;
+        }
+        ta.remove();
+        return ok ? Promise.resolve() : Promise.reject(new Error("copy is not available here"));
+      };
+      const copyEdgeRegions = function () {
+        commitFields();
+        const spec = edgeRegionsEditor(regions, currentCfg());
+        if (!spec) {
+          setRunStatus("name four regions left, right, top and bottom first", "miss");
+          return;
+        }
+        const json = JSON.stringify(spec, null, 2);
+        copyText(json).then(
+          function () {
             setRunStatus(
-              "run failed: " +
-                ((body && body.error) || (xhr && xhr.statusText) || "no response"),
-              "error",
+              "copied edgeRegions for left/right/top/bottom - paste into label-crop's Edge regions",
+              "ok",
             );
-          })
-          .always(function () {
-            running = false;
-            runButton.disabled = !image;
-            runIcon.className = "fa fa-play";
-          });
+          },
+          function (err) {
+            setRunStatus("could not copy: " + ((err && err.message) || err), "error");
+            RED.notify("line-finder: the clipboard is not available - the JSON is in the browser console", "warning");
+            if (window.console) window.console.log(json);
+          },
+        );
       };
 
       // ---- zoomable modal viewer -------------------------------------
@@ -966,13 +1617,23 @@
           return;
         }
         if (viewer) return;
+        commitFields();
 
         const dpr = window.devicePixelRatio || 1;
-        // the region being edited, committed to the fields only on Apply
-        let reg = currentRegion();
-        let scan = currentScan();
+        // the list being edited, committed to `regions` only on Apply; `reg`
+        // and `scan` are the selected entry's geometry and direction, kept
+        // separate because every gesture below rewrites them wholesale
+        const vregs = regions.map(function (r) {
+          return Object.assign({}, r);
+        });
+        let vsel = selected;
+        let reg = geometryOf(vregs[vsel]);
+        let scan = vregs[vsel].scanDirection;
         let showCalipers = true;
         let mode = "draw";
+        const syncSel = function () {
+          vregs[vsel] = Object.assign({}, vregs[vsel], reg, { scanDirection: scan });
+        };
 
         const overlay = document.createElement("div");
         overlay.style.cssText =
@@ -1039,7 +1700,7 @@
         const footReadout = document.createElement("span");
         footReadout.style.color = "#bbb";
         footReadout.style.fontFamily = "monospace";
-        const btnApply = mkButton("Apply", "Write this region into the node's fields");
+        const btnApply = mkButton("Apply", "Write the regions into the node");
         btnApply.style.background = "#3574f0";
         btnApply.style.borderColor = "#3574f0";
         btnApply.style.marginLeft = "auto";
@@ -1109,10 +1770,21 @@
           return Math.hypot(r.x - sx, r.y - sy) <= TOL;
         };
         const inside = function (px, py) {
-          const l = toLocal(reg, px, py);
-          return (
-            Math.abs(l.u) <= reg.width / 2 && Math.abs(l.v) <= reg.height / 2
-          );
+          return insideRegion(reg, px, py);
+        };
+        /** Another region under the pointer, or -1. */
+        const hitOtherRegion = function (px, py) {
+          for (let i = 0; i < vregs.length; i++) {
+            if (i !== vsel && insideRegion(vregs[i], px, py)) return i;
+          }
+          return -1;
+        };
+        const selectInViewer = function (i) {
+          syncSel();
+          vsel = i;
+          reg = geometryOf(vregs[vsel]);
+          scan = vregs[vsel].scanDirection;
+          btnScan.textContent = "Scan " + SCAN_ARROW[scan];
         };
 
         // ---- edits ---------------------------------------------------
@@ -1203,7 +1875,11 @@
           vctx.lineWidth = 1;
           vctx.strokeRect(tl.x, tl.y, br.x - tl.x, br.y - tl.y);
 
-          drawRegion(vctx, reg, scan, toScreen, { showCalipers: showCalipers });
+          drawRegions(vctx, vregs, vsel, toScreen, {
+            geometry: reg,
+            scan: scan,
+            showCalipers: showCalipers,
+          });
           drawRunResult(vctx, toScreen);
 
           // resize handles and the rotation grip
@@ -1236,6 +1912,7 @@
         const updateFootReadout = function () {
           imgInfo.textContent = imageW + " × " + imageH + " px";
           let txt = "zoom " + Math.round(view.scale * 100) + "%  ·  " +
+            (vregs.length > 1 ? vregs[vsel].name + ":  " : "") +
             describeRegion(reg, scan);
           if (outsideFrame(reg, scan)) {
             txt += "  ·  ⚠ past the frame: bands outside it are skipped";
@@ -1267,6 +1944,11 @@
               drag = { type: "handle", handle: handleIndex };
             } else if (inside(p.x, p.y)) {
               drag = { type: "move", ix: p.x, iy: p.y, start: reg };
+            } else if (hitOtherRegion(p.x, p.y) >= 0) {
+              // a click on another region selects it; nothing is dragged
+              selectInViewer(hitOtherRegion(p.x, p.y));
+              drag = null;
+              repaint();
             } else {
               drag = { type: "new", from: p, prev: reg, prevScan: scan };
             }
@@ -1429,7 +2111,13 @@
         btnClose.addEventListener("click", closeViewer);
         btnCancel.addEventListener("click", closeViewer);
         btnApply.addEventListener("click", function () {
-          writeRegion(reg, scan);
+          syncSel();
+          regions = vregs;
+          lineFinderEditingRegions = regions;
+          selected = vsel;
+          lineFinderEditingSelected = vsel;
+          writeFields(regions[selected]);
+          renderList();
           clearRun();
           updateReadout();
           drawThumb();
@@ -1466,7 +2154,26 @@
       };
 
       // ---- wiring ----------------------------------------------------
-      canvas.addEventListener("click", openViewer);
+      // a click on the thumbnail selects the region under it when that is
+      // not the selected one, and opens the viewer otherwise
+      canvas.addEventListener("click", function (ev) {
+        if (image && regions.length > 1 && ev && Number.isFinite(ev.clientX)) {
+          const b = canvas.getBoundingClientRect();
+          const f = fit();
+          const sx = ((ev.clientX - b.left) * canvas.width) / (b.width || canvas.width);
+          const sy = ((ev.clientY - b.top) * canvas.height) / (b.height || canvas.height);
+          const px = (sx - f.dx) / f.s;
+          const py = (sy - f.dy) / f.s;
+          for (let i = 0; i < regions.length; i++) {
+            if (i !== selected && insideRegion(regions[i], px, py)) {
+              commitFields();
+              selectRegion(i);
+              return;
+            }
+          }
+        }
+        openViewer();
+      });
       document
         .getElementById("line-finder-open-viewer")
         .addEventListener("click", openViewer);
@@ -1501,6 +2208,7 @@
             { x: 0, y: 0, width: 100, height: 100, angleDeg: 0 },
             currentScan(),
           );
+          commitFields();
           clearRun();
           updateReadout();
           drawThumb();
@@ -1509,7 +2217,45 @@
       runButton.addEventListener("click", runOnImage);
       runButton.disabled = true;
 
-      // a result belongs to the region it was run on: moving the region or
+      addButton.addEventListener("click", function () {
+        commitFields();
+        const size = 100;
+        regions.push(
+          normalizeRegionEditor({
+            name: uniqueName("line", -1),
+            x: imageW ? Math.round(imageW / 2 - size / 2) : 0,
+            y: imageH ? Math.round(imageH / 2 - size / 2) : 0,
+            width: size,
+            height: size,
+            angleDeg: 0,
+            scanDirection: currentScan(),
+            polarity: field("polarity").value,
+            edgeSelect: field("edgeSelect").value,
+          }),
+        );
+        clearRun();
+        selectRegion(regions.length - 1);
+      });
+      removeButton.addEventListener("click", function () {
+        if (regions.length <= 1) return;
+        regions.splice(selected, 1);
+        clearRun();
+        selectRegion(Math.min(selected, regions.length - 1));
+      });
+      addRectButton.addEventListener("click", function () {
+        commitFields();
+        regions = mergeRectangleEditor(regions, rectangleRegionsEditor(imageW, imageH));
+        lineFinderEditingRegions = regions;
+        clearRun();
+        selectRegion(
+          regions.findIndex(function (r) {
+            return r.name === "left";
+          }),
+        );
+      });
+      copyButton.addEventListener("click", copyEdgeRegions);
+
+      // a result belongs to the regions it was run on: moving one or
       // changing the caliper count makes it stale, so it goes
       for (const id of [
         "regionX",
@@ -1518,14 +2264,28 @@
         "regionHeight",
         "regionAngleDeg",
         "scanDirection",
-        "calipers",
+        "polarity",
+        "edgeSelect",
       ]) {
         field(id).addEventListener("change", function () {
+          commitFields();
           clearRun();
           updateReadout();
           drawThumb();
         });
       }
+      for (const type of ["change", "input"]) {
+        nameField.addEventListener(type, function () {
+          commitFields();
+          updateReadout();
+          drawThumb();
+        });
+      }
+      field("calipers").addEventListener("change", function () {
+        clearRun();
+        updateReadout();
+        drawThumb();
+      });
 
       // preview width only means anything when the preview is on
       const previewCheckbox = document.getElementById("node-input-previewEnabled");
@@ -1536,8 +2296,55 @@
       previewCheckbox.addEventListener("change", updatePreviewVisibility);
       updatePreviewVisibility();
 
+      writeFields(regions[selected]);
+      renderList();
       updateReadout();
       drawThumb();
+    },
+    oneditsave: function () {
+      const list = lineFinderEditingRegions;
+      lineFinderEditingRegions = null;
+      if (!Array.isArray(list)) return;
+      // the fields hold the selected entry and may have been typed into
+      // without a change event firing yet
+      const sel = list[lineFinderEditingSelected];
+      if (sel) {
+        const read = function (id, fallback) {
+          const el = document.getElementById("node-input-" + id);
+          const v = el ? parseFloat(el.value) : NaN;
+          return Number.isFinite(v) ? v : fallback;
+        };
+        const pick = function (id, fallback) {
+          const el = document.getElementById("node-input-" + id);
+          return el && el.value ? el.value : fallback;
+        };
+        const nameEl = document.getElementById("line-finder-region-name");
+        sel.name = (nameEl && String(nameEl.value).trim()) || sel.name;
+        sel.x = read("regionX", sel.x);
+        sel.y = read("regionY", sel.y);
+        sel.width = Math.max(1, read("regionWidth", sel.width));
+        sel.height = Math.max(1, read("regionHeight", sel.height));
+        sel.angleDeg = read("regionAngleDeg", sel.angleDeg);
+        sel.scanDirection = pick("scanDirection", sel.scanDirection);
+        sel.polarity = pick("polarity", sel.polarity);
+        sel.edgeSelect = pick("edgeSelect", sel.edgeSelect);
+      }
+      this.regions = list.map(function (r) {
+        return {
+          name: r.name,
+          x: r.x,
+          y: r.y,
+          width: r.width,
+          height: r.height,
+          angleDeg: r.angleDeg,
+          scanDirection: r.scanDirection,
+          polarity: r.polarity,
+          edgeSelect: r.edgeSelect,
+        };
+      });
+    },
+    oneditcancel: function () {
+      lineFinderEditingRegions = null;
     },
   });
 
@@ -1545,7 +2352,9 @@
   // One subscription for every line-finder node, registered once. The
   // overlay is drawn from image-pixel coordinates scaled to the
   // thumbnail, so a rotated region shows as the parallelogram it is
-  // rather than as a misleading upright box.
+  // rather than as a misleading upright box. Every region in `lines` is
+  // drawn; a runtime that sent only the single-region fields is read the
+  // same way.
   if (!window.lineFinderPreviewRendererInitialized) {
     window.lineFinderPreviewRendererInitialized = true;
 
@@ -1569,6 +2378,12 @@
       const width = Number(data.previewWidth) || 260;
       const scale = width / data.imageWidth;
       const height = Math.round(data.imageHeight * scale);
+      const lines =
+        Array.isArray(data.lines) && data.lines.length
+          ? data.lines
+          : [{ name: "line", region: data.region, found: data.found, reason: data.reason,
+              angleDeg: data.angleDeg, calipers: data.calipers, score: data.score,
+              residualPx: data.residualPx, line: data.line, points: data.points }];
 
       const container = document.createElementNS(
         "http://www.w3.org/2000/svg",
@@ -1596,12 +2411,27 @@
       const caption = document.createElementNS("http://www.w3.org/1999/xhtml", "div");
       caption.style.paddingBottom = "3px";
       caption.style.textAlign = "center";
-      caption.textContent = data.found
-        ? data.angleDeg.toFixed(2) +
-          "° · " + data.calipers.used + "/" + data.calipers.total +
-          " · score " + data.score.toFixed(2) +
-          " · resid " + data.residualPx.toFixed(2) + "px"
-        : "not found (" + data.reason + ")";
+      if (lines.length === 1) {
+        const l = lines[0];
+        caption.textContent = l.found
+          ? l.angleDeg.toFixed(2) +
+            "° · " + l.calipers.used + "/" + l.calipers.total +
+            " · score " + l.score.toFixed(2) +
+            " · resid " + l.residualPx.toFixed(2) + "px"
+          : "not found (" + l.reason + ")";
+      } else {
+        caption.textContent =
+          lines
+            .map(function (l) {
+              return l.found
+                ? l.name + " ✓ " + Number(l.angleDeg).toFixed(1) + "°"
+                : l.name + " ✗ " + l.reason;
+            })
+            .join(" · ") +
+          (data.rect
+            ? " · rect " + Math.round(data.rect.width) + "×" + Math.round(data.rect.height)
+            : "");
+      }
       caption.style.color = data.found ? "#a5d6a7" : "#ffcc80";
 
       const canvas = document.createElementNS("http://www.w3.org/1999/xhtml", "canvas");
@@ -1617,37 +2447,57 @@
         ctx.drawImage(img, 0, 0, width, height);
         const sx = function (v) { return v * scale; };
 
-        // the search region, as drawn
-        if (Array.isArray(data.region) && data.region.length === 4) {
-          ctx.strokeStyle = "#2196f3";
-          ctx.lineWidth = 1;
-          ctx.fillStyle = "rgba(33,150,243,0.15)";
-          ctx.beginPath();
-          ctx.moveTo(sx(data.region[0].x), sx(data.region[0].y));
-          for (let i = 1; i < 4; i++) {
-            ctx.lineTo(sx(data.region[i].x), sx(data.region[i].y));
+        for (const l of lines) {
+          // the search region, as drawn
+          if (Array.isArray(l.region) && l.region.length === 4) {
+            ctx.strokeStyle = "#2196f3";
+            ctx.lineWidth = 1;
+            ctx.fillStyle = "rgba(33,150,243,0.15)";
+            ctx.beginPath();
+            ctx.moveTo(sx(l.region[0].x), sx(l.region[0].y));
+            for (let i = 1; i < 4; i++) {
+              ctx.lineTo(sx(l.region[i].x), sx(l.region[i].y));
+            }
+            ctx.closePath();
+            ctx.fill();
+            ctx.stroke();
           }
-          ctx.closePath();
-          ctx.fill();
-          ctx.stroke();
+
+          // every caliper hit: green kept, red dropped by the outlier trim
+          for (const p of l.points || []) {
+            ctx.fillStyle = p.used ? "#66bb6a" : "#ef5350";
+            ctx.beginPath();
+            ctx.arc(sx(p.x), sx(p.y), 1.8, 0, Math.PI * 2);
+            ctx.fill();
+          }
+
+          // the fitted line
+          if (l.line) {
+            ctx.strokeStyle = "#ffeb3b";
+            ctx.lineWidth = 1.5;
+            ctx.beginPath();
+            ctx.moveTo(sx(l.line.p0.x), sx(l.line.p0.y));
+            ctx.lineTo(sx(l.line.p1.x), sx(l.line.p1.y));
+            ctx.stroke();
+          }
         }
 
-        // every caliper hit: green kept, red dropped by the outlier trim
-        for (const p of data.points || []) {
-          ctx.fillStyle = p.used ? "#66bb6a" : "#ef5350";
-          ctx.beginPath();
-          ctx.arc(sx(p.x), sx(p.y), 1.8, 0, Math.PI * 2);
-          ctx.fill();
-        }
-
-        // the fitted line
-        if (data.line) {
-          ctx.strokeStyle = "#ffeb3b";
+        // the rectangle four sides made
+        if (data.rect && Array.isArray(data.rect.corners) && data.rect.corners.length === 4) {
+          const c = data.rect.corners;
+          ctx.strokeStyle = "#00e5ff";
           ctx.lineWidth = 1.5;
           ctx.beginPath();
-          ctx.moveTo(sx(data.line.p0.x), sx(data.line.p0.y));
-          ctx.lineTo(sx(data.line.p1.x), sx(data.line.p1.y));
+          ctx.moveTo(sx(c[0].x), sx(c[0].y));
+          for (let i = 1; i < 4; i++) ctx.lineTo(sx(c[i].x), sx(c[i].y));
+          ctx.closePath();
           ctx.stroke();
+          ctx.fillStyle = "#00e5ff";
+          for (const p of c) {
+            ctx.beginPath();
+            ctx.arc(sx(p.x), sx(p.y), 2.5, 0, Math.PI * 2);
+            ctx.fill();
+          }
         }
       };
       img.src = "data:image/" + (data.mimeType || "jpeg") + ";base64," + data.image;

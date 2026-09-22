@@ -41,8 +41,10 @@ const IMG = { width: 800, height: 600 };
 const FIT = { scale: 0.96, ox: 66, oy: 12 };
 const toScreen = (x, y) => [FIT.ox + x * FIT.scale, FIT.oy + y * FIT.scale];
 
-function boot(overrides = {}) {
+/** Boot the editor on `node` - the object oneditprepare/oneditsave see as `this`. */
+function boot(overrides = {}, node = {}) {
 	const env = makeEditorEnv({ script: SCRIPT, imageSize: IMG });
+	env.node = node;
 	const thumb = env.document.getElementById("line-finder-canvas");
 	thumb.width = THUMB.width;
 	thumb.height = THUMB.height;
@@ -51,9 +53,16 @@ function boot(overrides = {}) {
 		if (spec.value !== undefined && spec.value !== null) el.value = spec.value;
 	}
 	for (const [key, value] of Object.entries(overrides)) env.field(key).value = value;
-	env.def.oneditprepare.call({});
+	env.def.oneditprepare.call(node);
 	return env;
 }
+/** What Done would store: oneditsave on the booted node, then its regions. */
+function save(env) {
+	env.def.oneditsave.call(env.node);
+	return env.node.regions;
+}
+const listRows = (env) => env.document.getElementById("line-finder-region-list").children;
+const regionName = (env) => env.document.getElementById("line-finder-region-name");
 
 /** Hand the editor an image the way the file input does. */
 function loadImage(env) {
@@ -572,5 +581,294 @@ test("Reset restores a usable region without touching the scan direction", () =>
 	env.document.getElementById("line-finder-clear").dispatch("click");
 	assert.deepStrictEqual(fields(env), {
 		x: 0, y: 0, width: 100, height: 100, angleDeg: 0, scan: "up",
+	});
+});
+
+// ---- the region list ----------------------------------------------------
+
+const SIDES = [
+	{ name: "left", x: 100, y: 200, width: 40, height: 200, angleDeg: 0, scanDirection: "right", polarity: "darkToLight", edgeSelect: "last" },
+	{ name: "right", x: 460, y: 200, width: 40, height: 200, angleDeg: 0, scanDirection: "left", polarity: "darkToLight", edgeSelect: "last" },
+	{ name: "top", x: 200, y: 130, width: 200, height: 40, angleDeg: 1.5, scanDirection: "down", polarity: "either", edgeSelect: "best" },
+	{ name: "bottom", x: 200, y: 430, width: 200, height: 40, angleDeg: 0, scanDirection: "up", polarity: "either", edgeSelect: "first" },
+];
+
+test("a stored region list is shown, edited through the fields, and stored back as it came", () => {
+	const env = boot({}, { regions: SIDES.map((r) => ({ ...r })) });
+	// the list shows every region and the first is selected into the fields
+	assert.strictEqual(listRows(env).length, 4);
+	assert.match(listRows(env)[0].textContent, /^left\s+→/);
+	assert.match(listRows(env)[3].textContent, /^bottom\s+↑/);
+	assert.deepStrictEqual(fields(env), { x: 100, y: 200, width: 40, height: 200, angleDeg: 0, scan: "right" });
+	assert.strictEqual(env.field("polarity").value, "darkToLight");
+	assert.strictEqual(env.field("edgeSelect").value, "last");
+	assert.strictEqual(regionName(env).value, "left");
+	assert.match(env.document.getElementById("line-finder-readout").textContent, /^left: /);
+	// untouched, the round trip is exact
+	assert.deepStrictEqual(save(env), SIDES);
+});
+
+test("clicking a row selects that region; a field edit lands on the selected one only", () => {
+	const env = boot({}, { regions: SIDES.map((r) => ({ ...r })) });
+	listRows(env)[2].dispatch("click");
+	assert.deepStrictEqual(fields(env), { x: 200, y: 130, width: 200, height: 40, angleDeg: 1.5, scan: "down" });
+	assert.strictEqual(regionName(env).value, "top");
+	env.field("regionX").value = 210;
+	env.field("regionX").dispatch("change");
+	env.field("polarity").value = "lightToDark";
+	env.field("polarity").dispatch("change");
+	regionName(env).value = "top edge";
+	regionName(env).dispatch("change");
+	assert.match(listRows(env)[2].textContent, /^top edge\s+↓\s+x 210/);
+	const saved = save(env);
+	assert.strictEqual(saved[2].x, 210);
+	assert.strictEqual(saved[2].polarity, "lightToDark");
+	assert.strictEqual(saved[2].name, "top edge");
+	assert.deepStrictEqual(saved[0], SIDES[0], "the others are untouched");
+	assert.deepStrictEqual(saved[3], SIDES[3]);
+});
+
+test("a node saved before regions existed seeds one region from its fields", () => {
+	const env = boot({
+		regionX: 300, regionY: 8, regionWidth: 2400, regionHeight: 90, regionAngleDeg: 0.4,
+		scanDirection: "down", polarity: "lightToDark", edgeSelect: "first",
+	});
+	assert.strictEqual(listRows(env).length, 1);
+	assert.strictEqual(regionName(env).value, "line");
+	assert.deepStrictEqual(save(env), [{
+		name: "line", x: 300, y: 8, width: 2400, height: 90, angleDeg: 0.4,
+		scanDirection: "down", polarity: "lightToDark", edgeSelect: "first",
+	}]);
+});
+
+test("a value typed into a field without a change event is still what gets saved", () => {
+	// Done can be clicked straight after typing; oneditsave reads the fields
+	// itself rather than trusting that every change handler has fired
+	const env = boot({ regionX: 10, regionY: 20, regionWidth: 30, regionHeight: 40 });
+	env.field("regionWidth").value = 333;
+	regionName(env).value = "seam";
+	assert.deepStrictEqual(save(env), [{
+		name: "seam", x: 10, y: 20, width: 333, height: 40, angleDeg: 0,
+		scanDirection: "right", polarity: "either", edgeSelect: "best",
+	}]);
+});
+
+test("Add appends a region and selects it; Remove takes the selected one and never the last", () => {
+	const env = boot({ regionX: 10, regionY: 20, regionWidth: 30, regionHeight: 40 });
+	const add = env.document.getElementById("line-finder-region-add");
+	const remove = env.document.getElementById("line-finder-region-remove");
+	assert.strictEqual(remove.disabled, true, "one region cannot be removed");
+	add.dispatch("click");
+	add.dispatch("click");
+	assert.strictEqual(listRows(env).length, 3);
+	assert.strictEqual(regionName(env).value, "line3", "names stay unique");
+	assert.strictEqual(remove.disabled, false);
+	// a duplicate name typed in is made unique too
+	regionName(env).value = "line";
+	regionName(env).dispatch("change");
+	assert.strictEqual(regionName(env).value, "line3", "line and line2 are taken");
+	remove.dispatch("click");
+	assert.strictEqual(listRows(env).length, 2);
+	assert.strictEqual(regionName(env).value, "line2", "the neighbour is selected");
+	remove.dispatch("click");
+	assert.strictEqual(listRows(env).length, 1);
+	assert.strictEqual(remove.disabled, true);
+	remove.dispatch("click");
+	assert.strictEqual(listRows(env).length, 1, "the last region stays");
+	assert.deepStrictEqual(save(env).map((r) => r.name), ["line"]);
+});
+
+test("Add rectangle lays four inward-scanning sides over the loaded frame and selects left", () => {
+	const env = boot();
+	loadImage(env);
+	env.window.dispatch("keydown", { key: "Escape" });
+	env.document.getElementById("line-finder-add-rect").dispatch("click");
+	const saved = save(env);
+	assert.deepStrictEqual(saved.map((r) => r.name), ["left", "right", "top", "bottom"], "the untouched default is dropped");
+	assert.deepStrictEqual(saved.map((r) => r.scanDirection), ["right", "left", "down", "up"]);
+	for (const r of saved) {
+		assert.ok(r.x >= 0 && r.y >= 0 && r.x + r.width <= IMG.width && r.y + r.height <= IMG.height, JSON.stringify(r));
+	}
+	assert.strictEqual(regionName(env).value, "left");
+	assert.strictEqual(listRows(env).length, 4);
+	// the thumbnail now labels every region by name
+	const texts = env.document.getElementById("line-finder-canvas").getContext().calls
+		.filter((c) => c.op === "fillText").map((c) => c.args[0]);
+	for (const name of ["left", "right", "top", "bottom"]) assert.ok(texts.includes(name), `${name} labelled`);
+});
+
+test("Copy as label-crop edgeRegions needs all four sides and writes their JSON to the clipboard", async () => {
+	const env = boot({}, { regions: SIDES.slice(0, 3).map((r) => ({ ...r })) });
+	const copy = env.document.getElementById("line-finder-copy-edge-regions");
+	assert.strictEqual(copy.disabled, true, "three sides are not a rectangle");
+	env.document.getElementById("line-finder-region-add").dispatch("click");
+	regionName(env).value = "bottom";
+	regionName(env).dispatch("change");
+	assert.strictEqual(copy.disabled, false);
+
+	const written = [];
+	env.window.navigator = { clipboard: { writeText: (t) => { written.push(t); return Promise.resolve(); } } };
+	env.field("contrastThreshold").value = "1.5";
+	env.field("angleToleranceDeg").value = "";
+	copy.dispatch("click");
+	await Promise.resolve();
+	assert.strictEqual(written.length, 1);
+	const spec = JSON.parse(written[0]);
+	assert.deepStrictEqual(Object.keys(spec), ["left", "right", "top", "bottom"]);
+	assert.deepStrictEqual(
+		spec.left,
+		{ x: 100, y: 200, width: 40, height: 200, polarity: "darkToLight", edgeSelect: "last",
+			calipers: 16, contrastThreshold: 1.5, filterHalfWidth: 2, ignoreCount: 0,
+			outlierTolerancePx: 2.5, minCaliperFraction: 0.5, angleToleranceDeg: null },
+	);
+	assert.strictEqual(spec.left.scanDirection, undefined, "label-crop implies the scan from the side");
+	assert.strictEqual(spec.top.angleDeg, 1.5);
+	assert.match(runStatus(env), /copied edgeRegions/);
+});
+
+test("without a clipboard API the JSON goes through a textarea and execCommand", async () => {
+	const env = boot({}, { regions: SIDES.map((r) => ({ ...r })) });
+	let copied = false;
+	env.document.execCommand = (cmd) => {
+		copied = cmd === "copy";
+		return true;
+	};
+	env.document.getElementById("line-finder-copy-edge-regions").dispatch("click");
+	await Promise.resolve();
+	assert.strictEqual(copied, true);
+	const ta = env.created.find((e) => e.tagName === "TEXTAREA");
+	assert.ok(ta && ta.removed, "the scratch textarea is taken down again");
+	assert.deepStrictEqual(Object.keys(JSON.parse(ta.value)), ["left", "right", "top", "bottom"]);
+	assert.strictEqual(env.document.body.children.length, 0);
+});
+
+test("in the viewer, clicking another region selects it, and Apply writes every region back", () => {
+	const env = boot({}, { regions: SIDES.map((r) => ({ ...r })) });
+	loadImage(env);
+	const v = viewerParts(env);
+	v.button("Fit").click();
+	assert.match(v.footer.textContent, /left: /);
+	// a click inside the right region (460..500 x 200..400) selects it
+	drag(v.canvas, toScreen(480, 300), toScreen(480, 300));
+	assert.match(v.footer.textContent, /right: /);
+	assert.match(v.footer.textContent, /scan ←/);
+	// now drag inside it: it moves, the others stay
+	drag(v.canvas, toScreen(480, 300), toScreen(500, 320));
+	v.button("Apply").click();
+	assert.strictEqual(regionName(env).value, "right", "the selection follows Apply");
+	assert.deepStrictEqual(fields(env), { x: 480, y: 220, width: 40, height: 200, angleDeg: 0, scan: "left" });
+	const saved = save(env);
+	assert.deepStrictEqual(saved[0], SIDES[0]);
+	assert.strictEqual(saved[1].x, 480);
+	assert.deepStrictEqual(saved[2], SIDES[2]);
+});
+
+test("Cancel in the viewer discards a selection change as well as a drag", () => {
+	const env = boot({}, { regions: SIDES.map((r) => ({ ...r })) });
+	loadImage(env);
+	const v = viewerParts(env);
+	v.button("Fit").click();
+	drag(v.canvas, toScreen(480, 300), toScreen(480, 300));
+	drag(v.canvas, toScreen(480, 300), toScreen(520, 340));
+	v.button("Cancel").click();
+	assert.strictEqual(regionName(env).value, "left");
+	assert.deepStrictEqual(save(env), SIDES);
+});
+
+test("a click on the thumbnail over another region selects it instead of opening the viewer", () => {
+	const env = boot({}, { regions: SIDES.map((r) => ({ ...r })) });
+	loadImage(env);
+	env.window.dispatch("keydown", { key: "Escape" });
+	const thumb = env.document.getElementById("line-finder-canvas");
+	// the fake thumbnail is 900x600 CSS px for a 360x240 canvas showing 800x600
+	const s = Math.min(THUMB.width / IMG.width, THUMB.height / IMG.height);
+	const dx = (THUMB.width - IMG.width * s) / 2;
+	const dy = (THUMB.height - IMG.height * s) / 2;
+	const css = (x, y) => ({
+		clientX: ((dx + x * s) * thumb.rect.width) / THUMB.width,
+		clientY: ((dy + y * s) * thumb.rect.height) / THUMB.height,
+	});
+	thumb.dispatch("click", css(300, 150));
+	assert.strictEqual(regionName(env).value, "top");
+	assert.strictEqual(env.document.body.children.length, 0, "no viewer opened");
+	// clicking on the selected region, or on nothing, opens the viewer as before
+	thumb.dispatch("click", css(300, 150));
+	assert.strictEqual(env.document.body.children.length, 1);
+});
+
+test("Run searches every region, one crop each, and sums them up in one line with the rectangle", () => {
+	withAjax((ajax) => {
+		const env = boot({ calipers: 8 }, { regions: SIDES.map((r) => ({ ...r })) });
+		loadImage(env);
+		env.window.dispatch("keydown", { key: "Escape" });
+		const run = env.document.getElementById("line-finder-run");
+		const thumb = env.document.getElementById("line-finder-canvas").getContext();
+		run.dispatch("click");
+		assert.strictEqual(ajax.calls.length, 4, "one request per region");
+		for (let i = 0; i < 4; i++) {
+			const { body } = ajax.calls[i];
+			const { name, scanDirection, polarity, edgeSelect, ...geometry } = SIDES[i];
+			assert.deepStrictEqual(body.region, geometry, `${name} is searched where it was drawn`);
+			assert.strictEqual(body.cfg.scanDirection, scanDirection, `${name} scans its own way`);
+			assert.strictEqual(body.cfg.polarity, polarity);
+			assert.strictEqual(body.cfg.edgeSelect, edgeSelect);
+			assert.strictEqual(Number(body.cfg.calipers), 8, "the tuning is shared");
+		}
+		assert.strictEqual(run.disabled, true);
+
+		const vertical = (x) => hit({ angleDeg: 90, line: { x, y: 300, dx: 0, dy: 1, p0: { x, y: 200 }, p1: { x, y: 400 } }, caliperLines: [] });
+		const horizontal = (y, angleDeg) => hit({ angleDeg, line: { x: 300, y, dx: 1, dy: 0, p0: { x: 200, y }, p1: { x: 400, y } }, caliperLines: [] });
+		const before = thumb.calls.length;
+		ajax.calls[0].resolve({ ok: true, result: vertical(100) });
+		ajax.calls[1].resolve({ ok: true, result: vertical(500) });
+		assert.match(runStatus(env), /running/, "nothing is said until every region has answered");
+		ajax.calls[2].resolve({ ok: true, result: horizontal(150, 0.12) });
+		ajax.calls[3].resolve({ ok: true, result: horizontal(450, -0.04) });
+
+		const status = runStatus(env);
+		assert.match(status, /left ✓ 90\.0°\s+·\s+right ✓ 90\.0°\s+·\s+top ✓ 0\.1°\s+·\s+bottom ✓ -0\.0°/);
+		assert.match(status, /rect 400×300 px/);
+		assert.strictEqual(env.document.getElementById("line-finder-run-status").style.color, "#2e7d32");
+		assert.strictEqual(run.disabled, false);
+		// the four corners are drawn on the thumbnail, where its mapping puts them
+		const calls = thumb.calls.slice(before);
+		const arcs = calls.filter((c) => c.op === "arc");
+		assert.strictEqual(arcs.length, 4);
+		const s = Math.min(THUMB.width / IMG.width, THUMB.height / IMG.height);
+		const at = (x, y) => [(THUMB.width - IMG.width * s) / 2 + x * s, (THUMB.height - IMG.height * s) / 2 + y * s];
+		for (const [x, y] of [[100, 150], [500, 150], [500, 450], [100, 450]]) {
+			const [ex, ey] = at(x, y);
+			assert.ok(arcs.some((c) => Math.abs(c.args[0] - ex) < 1e-9 && Math.abs(c.args[1] - ey) < 1e-9), `corner at ${x},${y}`);
+		}
+
+		// a side that misses is named with the short reason, and there is no rectangle
+		run.dispatch("click");
+		ajax.calls[4].resolve({ ok: true, result: vertical(100) });
+		ajax.calls[5].resolve({ ok: true, result: vertical(500) });
+		ajax.calls[6].resolve({
+			ok: true,
+			result: hit({
+				found: false, reason: "no-edge", score: 0, angleDeg: null, line: null, caliperLines: [],
+				calipers: { total: 8, found: 0, used: 0 },
+				diagnostics: { peakContrast: 1.3, medianPeakContrast: 1.3, calipersWithEdge: 0, calipersInImage: 8, peakPolarity: "lightToDark" },
+			}),
+		});
+		ajax.calls[7].reject({ responseJSON: { ok: false, error: "line-finder: region needs finite x and y" } });
+		const missed = runStatus(env);
+		assert.match(missed, /left ✓ 90\.0°\s+·\s+right ✓ 90\.0°\s+·\s+top ✗ contrast 1\.3<2\.0\s+·\s+bottom ✗ error: line-finder: region needs finite x and y/);
+		assert.doesNotMatch(missed, /rect/);
+		assert.strictEqual(run.disabled, false);
+	});
+});
+
+test("a region wholly off the frame is reported without a request being made", () => {
+	withAjax((ajax) => {
+		const env = boot({}, { regions: [SIDES[0], { ...SIDES[1], name: "far", x: 2000, y: 2000 }] });
+		loadImage(env);
+		env.window.dispatch("keydown", { key: "Escape" });
+		env.document.getElementById("line-finder-run").dispatch("click");
+		assert.strictEqual(ajax.calls.length, 1, "only the region on the frame is sent");
+		ajax.calls[0].resolve({ ok: true, result: hit() });
+		assert.match(runStatus(env), /left ✓ 0\.1°\s+·\s+far ✗ off the frame/);
 	});
 });

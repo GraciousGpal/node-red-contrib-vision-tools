@@ -778,7 +778,8 @@ latency matters.
 
 ## How `line-finder` works
 
-Find one straight edge inside a region you draw.
+Find a straight edge inside each region you draw - one region for one
+edge, or several for the sides of a rectangle.
 
 Use it when a whole-frame search finds the **wrong** edge - which happens
 whenever the strongest contrast near the boundary you want belongs to
@@ -802,14 +803,44 @@ Per region:
    the single worst outlier per pass.
 
 `msg.payload` passes through untouched; the result lands on
-`msg.lineFinder` as `{ found, reason, line, angleDeg, score, calipers,
-residualPx, points, region, imageWidth, imageHeight, timings }`. A miss
-is a normal outcome - only an unusable payload is an error.
+`msg.lineFinder`. With one region it is `{ found, reason, line,
+angleDeg, score, calipers, residualPx, points, region, imageWidth,
+imageHeight, timings }`, plus `lines: [{ name, ...the same }]` so a flow
+written for several regions reads one the same way. A miss is a normal
+outcome - only an unusable payload is an error.
 
-Every setting can be overridden per message by name (`msg.calipers`,
-`msg.contrastThreshold`, `msg.edgeSelect`, …), and `msg.region`
-replaces the configured region wholesale, so one node can be re-aimed
-per message — four edges driven from a list, say — without four copies.
+### Several regions
+
+The node holds a list of regions, each with its own box, angle, scan
+direction, polarity and edge select; the numeric tuning (calipers,
+contrast, smoothing, outlier tolerance, ...) is shared by all of them.
+With more than one region:
+
+- `lines` — one entry per region in list order, each `{ name, found,
+  reason, line, angleDeg, score, calipers, residualPx, points, region }`.
+- `found` is true only when every region found its line; `reason` names
+  the first that did not (`top:no-edge`).
+- `rect` — when regions named `left`, `right`, `top` and `bottom`
+  exist: `{ ok, corners, center, width, height, angleDeg, score,
+  residualPx }`, corners in the order top-left, top-right, bottom-right,
+  bottom-left - the same shape `label-crop` reports - or
+  `{ ok: false, reason }` naming the side that missed.
+- `intersections` — `[{ a, b, x, y }]` for every pair of found lines that
+  is not parallel within the angle tolerance: the corner of an L-shaped
+  fixture, say. Near-parallel pairs are skipped rather than reported as a
+  crossing somewhere in the noise.
+
+A flow saved before the list existed stores its one region in the flat
+`regionX`/`regionY`/`regionWidth`/`regionHeight`/`regionAngleDeg` fields
+and keeps working unchanged - an empty `regions` list falls back to them,
+as a region named `line`.
+
+Every tuning setting can be overridden per message by name
+(`msg.calipers`, `msg.contrastThreshold`, …; `msg.scanDirection`,
+`msg.polarity` and `msg.edgeSelect` apply to every region).
+`msg.regions` replaces the whole list for that message, and `msg.region`
+re-aims the node to a single region, so one node can be driven per
+message rather than copied.
 
 No OpenCV engine is needed, and only the region's own pixels are read, so
 the cost follows the box you drew rather than the frame size.
@@ -818,27 +849,36 @@ measurements behind that choice.
 
 ### Aiming the region
 
+The list at the top of the dialog holds the regions; click one to select
+it, and the fields, the thumbnail's handles and the viewer edit that one.
+*Add* and *Remove* do what they say. **Add rectangle** lays out `left`,
+`right`, `top` and `bottom` around the image centre - a box across each
+edge of the central 60% of the frame, each scanning inwards - ready to be
+dragged onto the real edges.
+
 The editor's region selector is a zoom viewer, not a thumbnail: at
 thumbnail scale the boundary this node exists to find is not visible at
-all. Load a sample and it opens on it, zoomed onto the current region,
+all. Load a sample and it opens on it, zoomed onto the selected region,
 drawing the scan direction, the edge being looked for, and one line per
-caliper where that band will measure.
+caliper where that band will measure. The other regions are drawn
+fainter, each labelled with its name; clicking one selects it.
 
 Wheel zooms to the cursor, `Fit`/`100%` jump, right-drag pans. Dragging
 on empty space draws a new region and takes the scan direction from the
 drag; corner handles resize from the opposite corner, dragging inside
 moves, the arrow keys nudge by a pixel (ten with Shift), and the amber
-grip rotates about the centre to a tenth of a degree. `Apply` writes the
-fields, `Cancel` and Escape do not. The footer warns when the box hangs
+grip rotates about the centre to a tenth of a degree. `Apply` writes
+every region back, `Cancel` and Escape do not. The footer warns when the box hangs
 off the frame, which matters more than it looks: a caliper band that is
 not wholly inside the image is skipped, so a box half over the edge
 silently loses calipers rather than reading a partial average.
 
 ### Seeing what it did
 
-`previewEnabled` draws the result on the flow canvas: the search region as
-configured, every caliper hit (green kept, red dropped by the outlier
-trim), and the fitted line, with angle, caliper count, score and residual.
+`previewEnabled` draws the result on the flow canvas: every search region
+as configured, every caliper hit (green kept, red dropped by the outlier
+trim), each fitted line and the rectangle when four sides made one, with
+angle, caliper count, score and residual - or one verdict per region.
 Misses preview too - a score of 0.4 does not tell you whether the box is
 aimed at the wrong edge, clipped by the frame, or straddling two steps,
 and the picture tells you all three. It re-encodes the frame per message,
@@ -846,19 +886,29 @@ so it is for tuning, not production.
 
 The editor's **Run on this image** button does the same without a deploy:
 it runs the real search on the loaded sample with the dialog's current
-settings and draws every caliper, its edge point (filled when the fit kept
-it, hollow when the outlier trim dropped it) and the fitted line over the
-thumbnail. On a miss the status line says which gate stopped it and what
-to move, from the strongest step any caliper actually saw - "strongest
-edge contrast 1.3, threshold 2.0 - lower Contrast threshold below 1.3 to
-pick it up" - so a faint white-on-white label edge is tuned in a few
-clicks rather than a redeploy per guess. The browser decodes the sample,
-so the runtime's figures can differ by a fraction of a pixel.
+settings, every region at once, and draws each caliper, its edge point
+(filled when the fit kept it, hollow when the outlier trim dropped it),
+each fitted line and the rectangle's corners over the thumbnail. With one
+region a miss is explained in full - which gate stopped it and what to
+move, from the strongest step any caliper actually saw: "strongest edge
+contrast 1.3, threshold 2.0 - lower Contrast threshold below 1.3 to pick
+it up" - so a faint white-on-white label edge is tuned in a few clicks
+rather than a redeploy per guess. With several, the status line gives one
+verdict per region: `left ✓ 0.1° · right ✓ 90.0° · top ✗ contrast 1.2<2.0
+· bottom ✓ -0.0° · rect 1210×1760 px`. The browser decodes the sample, so
+the runtime's figures can differ by a fraction of a pixel.
 
 ### Four of them make a rectangle
 
-`label-crop`'s `boundaryMode: "calipers"` takes four `edgeRegions` and
-intersects the fitted lines into the label's corners. On the Inspection
+Name four regions `left`, `right`, `top` and `bottom` and the node
+reports the rectangle itself in `msg.lineFinder.rect`. To crop to it as
+well, **Copy as label-crop edgeRegions** (enabled once all four exist)
+puts the four tuned regions on the clipboard - box, angle, polarity, edge
+select and the shared tuning, the scan direction left for label-crop to
+imply from the side - as the JSON `label-crop`'s
+`boundaryMode: "calipers"` pastes into its *Edge regions* field. That
+mode runs the same four searches and intersects the fitted lines into the
+label's corners. On the Inspection
 sample set the whole-frame blob search cropped 76 of 148 good frames with
 the output aspect swinging 14%; calipers cropped 148 of 148 with the
 recovered height stable to 3.5px and the angle to 0.04 degrees.
@@ -1072,7 +1122,7 @@ nothing is found at all, one message with `msg.text = null` and
 
 ## Tests
 
-`npm test` (Node 18+, no test framework needed — `node --test`), 394
+`npm test` (Node 18+, no test framework needed — `node --test`), 433
 tests. Fixtures are generated with `sharp` rather than read from
 `data/sample_images`, so the suite runs anywhere; the real QC photos are
 gitignored. Coverage spans the lib pipeline (`compare`, `align`, `warp`,
@@ -1101,8 +1151,10 @@ Several suites assert something other than a value:
   `.html` file and compares every entry against its runtime fallback.
   Node-RED does not backfill a new default into existing node instances,
   so a disagreement only shows up in flows nobody is editing.
-- `test/editorRegionGeometry.test.js` lifts the region geometry out of
-  `line-finder.html` and runs it against `lib/lineFinder.js`. The editor
+- `test/editorRegionGeometry.test.js` lifts the region geometry, the Run
+  button maths and the region-list maths (rectangle layout, the label-crop
+  JSON) out of `line-finder.html` and runs them against
+  `lib/lineFinder.js`. The editor
   needs its own copy to draw what the runtime will scan, and two copies
   of a rotation convention drift silently — the box drawn stops being the
   box searched. `test/lineFinderEditor.test.js` drives the viewer itself

@@ -69,6 +69,12 @@ class FakeElement {
 		this.children.push(node);
 		return node;
 	}
+	/** Swap every child for the given nodes, the way a list redraw does. */
+	replaceChildren(...nodes) {
+		for (const c of this.children) c.parent = null;
+		this.children = [];
+		for (const n of nodes) this.appendChild(n);
+	}
 	remove() {
 		this.removed = true;
 		if (this.parent) {
@@ -126,7 +132,7 @@ class FakeContext {
 		this.imageSmoothingEnabled = true;
 		this.imageSmoothingQuality = "";
 		for (const op of [
-			"clearRect", "fillRect", "strokeRect", "fillText", "drawImage",
+			"clearRect", "fillRect", "strokeRect", "fillText", "strokeText", "drawImage",
 			"beginPath", "moveTo", "lineTo", "closePath", "fill", "stroke",
 			"arc", "setLineDash", "save", "restore", "translate", "scale",
 			"setTransform", "rotate", "clip", "quadraticCurveTo",

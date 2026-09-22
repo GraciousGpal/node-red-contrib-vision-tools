@@ -89,6 +89,34 @@ test("finds the edge and reports it on msg.lineFinder", async () => {
 	assert.strictEqual(h.statuses.at(-1).fill, "green");
 });
 
+test("a legacy single-region config reports exactly the shape it always has", async () => {
+	// Pinned before regions were added: a flow saved with regionX/Y/Width/
+	// Height/AngleDeg and no `regions` must see the same msg.lineFinder,
+	// field for field, with the new `lines` array alongside rather than in
+	// place of anything. The values are checked against findLine itself,
+	// which is the runtime's own definition of "identical".
+	const h = makeNode({ ...REGION, scanDirection: "right", polarity: "darkToLight", calipers: 8 });
+	await h.run({ payload: rawGray() });
+	const r = h.sent[0].lineFinder;
+	const legacyKeys = [
+		"found", "reason", "line", "angleDeg", "score", "calipers", "residualPx",
+		"points", "caliperLines", "diagnostics", "region", "imageWidth", "imageHeight", "timings",
+	];
+	for (const k of legacyKeys) assert.ok(k in r, `${k} is missing from msg.lineFinder`);
+	const extra = Object.keys(r).filter((k) => !legacyKeys.includes(k));
+	assert.deepStrictEqual(extra, extra.includes("lines") ? ["lines"] : [], `unexpected keys ${extra}`);
+
+	const region = { x: 60, y: 20, width: 80, height: 160, angleDeg: 0 };
+	const direct = findLine(grayFrame(), W, H, region, {
+		scanDirection: "right", polarity: "darkToLight", calipers: 8,
+	});
+	const { timings, lines, ...rest } = r;
+	assert.deepStrictEqual(rest, { ...direct, region, imageWidth: W, imageHeight: H });
+	assert.deepStrictEqual(r.region, region, "region carries geometry only, as before");
+	assert.ok(timings.totalMs >= 0);
+	assert.strictEqual(h.statuses.at(-1).text, `90.00° · 8/8 · score ${r.score.toFixed(2)}`);
+});
+
 test("the payload is passed through untouched - this is a measuring tool", async () => {
 	const h = makeNode({ ...REGION, scanDirection: "right", calipers: 8 });
 	const payload = rawGray();
@@ -391,4 +419,182 @@ test("a preview failure warns but does not fail the frame", async () => {
 	assert.ok(h.sent[0].lineFinder, "the result is still reported");
 	assert.strictEqual(warnings.length, 1);
 	assert.match(warnings[0], /line-finder preview/);
+});
+
+// ---- several regions ---------------------------------------------------
+
+// the pale panel's other edges, for a second and third region on the
+// same frame: its top edge sits at y = 99.5 when the panel is boxed
+function panelFrame() {
+	const g = new Uint8Array(W * H);
+	g.fill(40);
+	for (let y = 100; y < H; y++) {
+		const row = y * W;
+		for (let x = 100; x < W; x++) g[row + x] = 200;
+	}
+	return { data: Buffer.from(g.buffer, g.byteOffset, g.byteLength), width: W, height: H, channels: 1 };
+}
+const LEFT = { name: "left", x: 60, y: 120, width: 80, height: 70, scanDirection: "right", polarity: "darkToLight" };
+const TOP = { name: "top", x: 120, y: 60, width: 100, height: 80, scanDirection: "down", polarity: "darkToLight" };
+
+test("two regions report one entry each in lines, and found only when both found", async () => {
+	const h = makeNode({ regions: [LEFT, TOP], calipers: 8 });
+	await h.run({ payload: panelFrame() });
+	assert.deepStrictEqual(h.doneErrors, []);
+	const r = h.sent[0].lineFinder;
+	assert.strictEqual(r.lines.length, 2);
+	assert.deepStrictEqual(r.lines.map((l) => l.name), ["left", "top"], "configured order");
+	assert.strictEqual(r.lines[0].found, true, r.lines[0].reason);
+	assert.strictEqual(r.lines[1].found, true, r.lines[1].reason);
+	assert.ok(Math.abs(r.lines[0].line.x - 99.5) < 1, `left edge at ${r.lines[0].line.x}`);
+	assert.ok(Math.abs(r.lines[1].line.y - 99.5) < 1, `top edge at ${r.lines[1].line.y}`);
+	// each entry carries the region it searched, modes included
+	assert.strictEqual(r.lines[1].region.scanDirection, "down");
+	assert.strictEqual(r.lines[1].region.name, "top");
+	assert.strictEqual(r.found, true);
+	assert.strictEqual(r.reason, "ok");
+	// the single-region fields are not faked up at the top level
+	assert.strictEqual(r.line, undefined);
+	assert.strictEqual(r.rect, undefined, "no rectangle from two sides");
+	// the two lines cross at the panel's corner
+	assert.strictEqual(r.intersections.length, 1);
+	assert.deepStrictEqual([r.intersections[0].a, r.intersections[0].b], ["left", "top"]);
+	assert.ok(Math.abs(r.intersections[0].x - 99.5) < 1 && Math.abs(r.intersections[0].y - 99.5) < 1);
+	assert.strictEqual(h.statuses.at(-1).text, "2/2 lines");
+	assert.strictEqual(h.statuses.at(-1).fill, "green");
+});
+
+test("one region missing makes the whole result a miss that names it", async () => {
+	// the top region is aimed at plain background
+	const h = makeNode({ regions: [LEFT, { ...TOP, x: 10, y: 10, width: 40, height: 40 }], calipers: 8 });
+	await h.run({ payload: panelFrame() });
+	const r = h.sent[0].lineFinder;
+	assert.strictEqual(r.lines[0].found, true);
+	assert.strictEqual(r.lines[1].found, false);
+	assert.strictEqual(r.found, false);
+	assert.strictEqual(r.reason, "top:no-edge");
+	assert.deepStrictEqual(r.intersections, [], "nothing to intersect a miss with");
+	assert.strictEqual(h.statuses.at(-1).text, "not found (top:no-edge)");
+	assert.strictEqual(h.statuses.at(-1).fill, "yellow");
+});
+
+test("two near-parallel lines are not intersected", async () => {
+	// the same edge searched twice: parallel within any tolerance
+	const h = makeNode({ regions: [LEFT, { ...LEFT, name: "left2", y: 30, height: 60 }], calipers: 8 });
+	await h.run({ payload: rawGray() });
+	const r = h.sent[0].lineFinder;
+	assert.strictEqual(r.found, true, r.reason);
+	assert.deepStrictEqual(r.intersections, []);
+});
+
+test("msg.regions replaces the configured list for that message", async () => {
+	const h = makeNode({ ...REGION, scanDirection: "right", polarity: "darkToLight", calipers: 8 });
+	await h.run({ payload: panelFrame(), regions: [LEFT, TOP] });
+	const r = h.sent[0].lineFinder;
+	assert.strictEqual(r.lines.length, 2);
+	assert.strictEqual(r.found, true, r.reason);
+	// an entry that leaves its modes out inherits the node's
+	await h.run({ payload: panelFrame(), regions: [{ name: "a", x: 60, y: 120, width: 80, height: 70 }] });
+	const one = h.sent[1].lineFinder;
+	assert.strictEqual(one.lines.length, 1);
+	assert.strictEqual(one.lines[0].region.polarity, "darkToLight");
+	assert.strictEqual(one.found, true, one.reason);
+	// and with one region the top level is the single-region shape again
+	assert.ok(one.line, "line at the top level");
+	assert.deepStrictEqual(one.region, { x: 60, y: 120, width: 80, height: 70, angleDeg: 0 });
+	// an unusable override falls back to the configuration
+	await h.run({ payload: rawGray(), regions: "nonsense" });
+	assert.strictEqual(h.sent[2].lineFinder.lines.length, 1);
+	assert.strictEqual(h.sent[2].lineFinder.lines[0].name, "line");
+});
+
+test("four regions named left/right/top/bottom become the label's rectangle", async () => {
+	// the tray fixture: a 240x156 label centred at (200,150), tilted 7°;
+	// its corners follow from that, and the found rectangle must land on them
+	const raw = trayFrame();
+	const a = (7 * Math.PI) / 180;
+	const corner = (u, v) => ({
+		x: 200 + u * Math.cos(a) - v * Math.sin(a),
+		y: 150 + u * Math.sin(a) + v * Math.cos(a),
+	});
+	const expected = [corner(-120, -78), corner(120, -78), corner(120, 78), corner(-120, 78)];
+	const h = makeNode({
+		regions: [
+			{ name: "left", x: 56, y: 85, width: 50, height: 100, angleDeg: 7, scanDirection: "right", polarity: "darkToLight" },
+			{ name: "right", x: 294, y: 115, width: 50, height: 100, angleDeg: 7, scanDirection: "left", polarity: "darkToLight" },
+			{ name: "top", x: 160, y: 53, width: 100, height: 40, angleDeg: 7, scanDirection: "down", polarity: "darkToLight" },
+			{ name: "bottom", x: 140, y: 207, width: 100, height: 40, angleDeg: 7, scanDirection: "up", polarity: "darkToLight" },
+		],
+		calipers: 8,
+		contrastThreshold: 3,
+		previewEnabled: true,
+	});
+	await h.run({ payload: raw });
+	assert.deepStrictEqual(h.doneErrors, []);
+	const r = h.sent[0].lineFinder;
+	assert.strictEqual(r.found, true, r.reason);
+	assert.strictEqual(r.lines.length, 4);
+	assert.ok(r.rect, "a rectangle from the four sides");
+	assert.strictEqual(r.rect.ok, true, r.rect.reason);
+	// label-crop's field names and corner order: tl, tr, br, bl
+	assert.deepStrictEqual(Object.keys(r.rect).sort(), [
+		"angleDeg", "center", "corners", "height", "ok", "reason", "residualPx", "score", "width",
+	]);
+	assert.strictEqual(r.rect.corners.length, 4);
+	for (let i = 0; i < 4; i++) {
+		const d = Math.hypot(r.rect.corners[i].x - expected[i].x, r.rect.corners[i].y - expected[i].y);
+		assert.ok(d < 1.5, `corner ${i}: ${JSON.stringify(r.rect.corners[i])} vs ${JSON.stringify(expected[i])} (${d.toFixed(2)}px)`);
+	}
+	assert.ok(Math.abs(r.rect.width - 240) < 1.5, `width ${r.rect.width}`);
+	assert.ok(Math.abs(r.rect.height - 156) < 1.5, `height ${r.rect.height}`);
+	assert.ok(Math.abs(r.rect.center.x - 200) < 1 && Math.abs(r.rect.center.y - 150) < 1, `centre ${JSON.stringify(r.rect.center)}`);
+	assert.ok(Math.abs(r.rect.angleDeg - 7) < 0.5, `angle ${r.rect.angleDeg}`);
+	// the four corners are also the four crossings of adjacent sides
+	assert.strictEqual(r.intersections.length, 4, JSON.stringify(r.intersections.map((i) => [i.a, i.b])));
+	assert.match(h.statuses.at(-1).text, /^4\/4 lines · rect 240×15[56]$/);
+
+	// the preview draws every region and the rectangle
+	const data = h.published.filter((p) => p.topic === "line-finder-preview").at(-1).data;
+	assert.strictEqual(data.lines.length, 4);
+	assert.deepStrictEqual(data.lines.map((l) => l.name), ["left", "right", "top", "bottom"]);
+	assert.ok(data.lines.every((l) => l.region.length === 4 && l.line && l.points.length === 8));
+	assert.strictEqual(data.rect.corners.length, 4);
+	assert.strictEqual(data.found, true);
+	assert.strictEqual(data.region, null, "no single-region geometry to mislead a drawer");
+});
+
+test("a rectangle with a side missing says which, rather than guessing a corner", async () => {
+	const raw = trayFrame();
+	const h = makeNode({
+		regions: [
+			{ name: "left", x: 56, y: 85, width: 50, height: 100, angleDeg: 7, scanDirection: "right", polarity: "darkToLight" },
+			{ name: "right", x: 294, y: 115, width: 50, height: 100, angleDeg: 7, scanDirection: "left", polarity: "darkToLight" },
+			{ name: "top", x: 160, y: 53, width: 100, height: 40, angleDeg: 7, scanDirection: "down", polarity: "darkToLight" },
+			// the bottom region is off on the tray
+			{ name: "bottom", x: 20, y: 250, width: 60, height: 30, scanDirection: "up" },
+		],
+		calipers: 8,
+		contrastThreshold: 3,
+	});
+	await h.run({ payload: raw });
+	const r = h.sent[0].lineFinder;
+	assert.strictEqual(r.found, false);
+	assert.strictEqual(r.reason, "bottom:no-edge");
+	assert.deepStrictEqual(r.rect, { ok: false, reason: "missing-edge:bottom", missing: ["bottom"] });
+	// the three found sides still cross where they should
+	assert.strictEqual(r.intersections.length, 2);
+});
+
+test("the single-region preview shape is unchanged, with lines alongside", async () => {
+	const h = makeNode({
+		...REGION, scanDirection: "right", polarity: "darkToLight",
+		calipers: 8, previewEnabled: true,
+	});
+	await h.run({ payload: rawGray() });
+	const data = h.published.filter((p) => p.topic === "line-finder-preview").at(-1).data;
+	assert.strictEqual(data.lines.length, 1);
+	assert.strictEqual(data.lines[0].name, "line");
+	assert.deepStrictEqual(data.lines[0].region, data.region);
+	assert.deepStrictEqual(data.lines[0].line, data.line);
+	assert.strictEqual(data.rect, null);
 });

@@ -6,6 +6,51 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Added
+
+- **One `line-finder` searches several regions, and four of them make a
+  rectangle.** Detecting a label meant four line-finder nodes and a
+  label-crop to intersect them, which is a lot of nodes to say "find this
+  rectangle". The node now holds a list of regions, each with its own box,
+  angle, scan direction, polarity and edge select (the numeric tuning stays
+  node-wide), and reports one result per region in
+  `msg.lineFinder.lines`. Name four of them `left`, `right`, `top` and
+  `bottom` and `msg.lineFinder.rect` carries the rectangle they bound -
+  corners, centre, size and angle in the shape label-crop reports; every
+  pair of found lines that is not parallel within the angle tolerance is
+  also intersected into `intersections`, for an L-shaped fixture. With
+  several regions the top-level `found` is true only when every region
+  found its line and `reason` names the first that did not
+  (`top:no-edge`). With one region nothing changes: the output keeps its
+  shape field for field, with `lines[0]` a copy of it, and a flow saved
+  before the list existed keeps working from the flat region fields.
+  `msg.regions` replaces the list per message the way `msg.region` re-aims
+  a single one. The editor gains the list, with Add, Remove and an **Add
+  rectangle** button that lays the four sides out around the image centre
+  scanning inwards; every region is drawn and labelled, the selected one
+  with handles, and clicking another selects it. **Run on this image**
+  now runs every region and sums them up per region - `left ✓ 0.1° ·
+  right ✓ · top ✗ contrast 1.2<2.0 · bottom ✓` - drawing the rectangle's
+  corners when four sides are found, and **Copy as label-crop
+  edgeRegions** puts the four tuned regions on the clipboard as the JSON
+  label-crop's calipers mode pastes in. The flow-canvas preview draws
+  every region, line and the rectangle.
+- **The `line-finder` editor runs the search on the loaded image.** The
+  dialog could load a sample and draw the region on it, but the only way
+  to see whether the settings found the line was to deploy and push a
+  message; a greyish label edge on a slightly whiter background could not
+  be tuned that way. **Run on this image** cuts the region's bounding box
+  out of the loaded sample and posts it to a new admin endpoint,
+  `POST /line-finder/run`, which runs the same `findLine` the node runs
+  and answers in frame coordinates. The editor draws each caliper, its
+  edge point (filled when the fit kept it, hollow when the outlier trim
+  dropped it) and the fitted line. On a miss the status line walks the
+  gates in the finder's order and names the one that failed - for
+  contrast, quoting the strongest step any caliper actually saw, which is
+  literally the threshold that would have found it. `findLine`'s result
+  gains a `caliperLines` entry per band and a `diagnostics` block to
+  support that; every pre-existing field is unchanged.
+
 ### Changed
 
 - **Heat maps and debug stages are JPEG by default, and encoded

@@ -77,8 +77,13 @@ for (const file of HTML_FILES) {
 		// editor - either the row was dropped or the default is dead
 		const html = fs.readFileSync(path.join(DIR, file), "utf8");
 		// ...unless a custom widget edits it. barcode-locate builds its region
-		// rows itself, so there is no one element holding the value.
-		const CUSTOM_WIDGET = { "barcode-locate.html": ["regions"] };
+		// rows itself, so there is no one element holding the value, and
+		// line-finder keeps its region list in the editor script - a hidden
+		// node-input would make Node-RED store the array as a string.
+		const CUSTOM_WIDGET = {
+			"barcode-locate.html": ["regions"],
+			"line-finder.html": ["regions"],
+		};
 		const { script, templates } = split(html);
 		const markup = templates.join("\n");
 		const block = script.match(/defaults:\s*\{([\s\S]*?)\n\s{4}\},/);
