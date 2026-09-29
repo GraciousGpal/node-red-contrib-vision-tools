@@ -41,6 +41,7 @@ const inspector = require("./lib/inspector.js");
 const { toShared } = require("./lib/shared.js");
 const { readScaleFile } = require("./lib/scaleFile.js");
 const { rescaleHomography, isIdentityLike } = require("./lib/homography.js");
+const { formatMs } = require("./lib/formatMs.js");
 const {
 	clampInt,
 	pickMode,
@@ -191,7 +192,7 @@ module.exports = (RED) => {
 					node.status({
 						fill: "yellow",
 						shape: "ring",
-						text: `not rectified (${reason})`,
+						text: `not rectified (${reason}) · ${formatMs(performance.now() - t0)}`,
 					});
 					if (node.lastPassWarning !== reason) {
 						node.lastPassWarning = reason;
@@ -292,9 +293,11 @@ module.exports = (RED) => {
 				node.status({
 					fill: "green",
 					shape: "dot",
-					text: identity
-						? `identity · ${out.width}×${out.height}`
-						: `rectified ${out.width}×${out.height} · ${msg.rectify.timings.warpMs}ms`,
+					text:
+						(identity
+							? `identity · ${out.width}×${out.height}`
+							: `rectified ${out.width}×${out.height}`) +
+						` · ${formatMs(performance.now() - t0)}`,
 				});
 				send(msg);
 				done();

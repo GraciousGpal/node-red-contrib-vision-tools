@@ -75,6 +75,7 @@ module.exports = (RED) => {
 		EDGE_SELECTS,
 	} = require("./lib/lineFinder.js");
 	const { clampInt, clampFloat, pickMode } = require("./lib/nodeInput.js");
+	const { formatMs } = require("./lib/formatMs.js");
 
 	const BOUNDS = {
 		calipers: [1, 512],
@@ -667,7 +668,7 @@ module.exports = (RED) => {
 				this.status({
 					fill: result.found ? "green" : "yellow",
 					shape: result.found ? "dot" : "ring",
-					text,
+					text: `${text} · ${formatMs(performance.now() - started)}`,
 				});
 				send(msg);
 				done();

@@ -316,7 +316,7 @@ test("label-crop in upstream mode crops the rectangle a line-finder found", asyn
 		);
 		assert.strictEqual(msg.labelCrop.polarity, null);
 		// the status prints the metadata width and height, to a tenth of a pixel
-		assert.match(statuses.at(-1).text, /^deskewed 2(39|40|41)(\.\d)?×15[5-7](\.\d)?$/);
+		assert.match(statuses.at(-1).text, /^deskewed 2(39|40|41)(\.\d)?×15[5-7](\.\d)? · \d+ms$/);
 		// the line-finder's own result stays on the message for a debug node
 		assert.strictEqual(msg.lineFinder.lines.length, 4);
 	} finally {
@@ -350,7 +350,7 @@ test("msg.rect overrides msg.lineFinder.rect in upstream mode", async () => {
 		assert.strictEqual(sent[1].labelCrop.detected, false);
 		assert.strictEqual(sent[1].labelCrop.reason, "upstream-rect:missing-edge:top");
 		assert.strictEqual(sent[1].payload, frame, "the frame passes through");
-		assert.strictEqual(statuses.at(-1).text, "not detected (upstream-rect:missing-edge:top)");
+		assert.match(statuses.at(-1).text, /^not detected \(upstream-rect:missing-edge:top\) · \d+ms$/);
 		assert.deepStrictEqual(doneErrors, []);
 	} finally {
 		_resetBridge();
@@ -368,7 +368,7 @@ test("upstream mode with nothing in front is a no-upstream-rect miss, and only u
 		assert.strictEqual(sent[0].labelCrop.detected, false);
 		assert.strictEqual(sent[0].labelCrop.reason, "no-upstream-rect");
 		assert.strictEqual(sent[0].payload, frame);
-		assert.strictEqual(statuses.at(-1).text, "not detected (no-upstream-rect)");
+		assert.match(statuses.at(-1).text, /^not detected \(no-upstream-rect\) · \d+ms$/);
 
 		// in blob mode a msg.rect is not consulted: the pixel fake's Otsu is a
 		// pass-through, so the blob search finds nothing and says so

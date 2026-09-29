@@ -115,7 +115,11 @@ test("a legacy single-region config reports exactly the shape it always has", as
 	assert.deepStrictEqual(rest, { ...direct, region, imageWidth: W, imageHeight: H });
 	assert.deepStrictEqual(r.region, region, "region carries geometry only, as before");
 	assert.ok(timings.totalMs >= 0);
-	assert.strictEqual(h.statuses.at(-1).text, `90.00° · 8/8 · score ${r.score.toFixed(2)}`);
+	// the score is a real number, so the regex escapes its dot too
+	assert.match(
+		h.statuses.at(-1).text,
+		new RegExp("^90[.]00° · 8/8 · score " + r.score.toFixed(2).replace(".", "[.]") + " · [0-9]+ms$"),
+	);
 });
 
 test("the payload is passed through untouched - this is a measuring tool", async () => {
@@ -462,7 +466,7 @@ test("two regions report one entry each in lines, and found only when both found
 	assert.strictEqual(r.intersections.length, 1);
 	assert.deepStrictEqual([r.intersections[0].a, r.intersections[0].b], ["left", "top"]);
 	assert.ok(Math.abs(r.intersections[0].x - 99.5) < 1 && Math.abs(r.intersections[0].y - 99.5) < 1);
-	assert.strictEqual(h.statuses.at(-1).text, "2/2 lines");
+	assert.match(h.statuses.at(-1).text, /^2\/2 lines · \d+ms$/);
 	assert.strictEqual(h.statuses.at(-1).fill, "green");
 });
 
@@ -476,7 +480,7 @@ test("one region missing makes the whole result a miss that names it", async () 
 	assert.strictEqual(r.found, false);
 	assert.strictEqual(r.reason, "top:no-edge");
 	assert.deepStrictEqual(r.intersections, [], "nothing to intersect a miss with");
-	assert.strictEqual(h.statuses.at(-1).text, "not found (top:no-edge)");
+	assert.match(h.statuses.at(-1).text, /^not found \(top:no-edge\) · \d+ms$/);
 	assert.strictEqual(h.statuses.at(-1).fill, "yellow");
 });
 
@@ -553,7 +557,7 @@ test("four regions named left/right/top/bottom become the label's rectangle", as
 	assert.ok(Math.abs(r.rect.angleDeg - 7) < 0.5, `angle ${r.rect.angleDeg}`);
 	// the four corners are also the four crossings of adjacent sides
 	assert.strictEqual(r.intersections.length, 4, JSON.stringify(r.intersections.map((i) => [i.a, i.b])));
-	assert.match(h.statuses.at(-1).text, /^4\/4 lines · rect 240×15[56]$/);
+	assert.match(h.statuses.at(-1).text, /^4\/4 lines · rect 240×15[56] · \d+ms$/);
 
 	// the preview draws every region and the rectangle
 	const data = h.published.filter((p) => p.topic === "line-finder-preview").at(-1).data;

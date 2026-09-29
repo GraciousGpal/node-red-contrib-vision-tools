@@ -26,6 +26,7 @@ const { performance } = require("node:perf_hooks");
 module.exports = (RED) => {
 	const { labelCrop, available, getBridge } = require("./lib/labelCrop.js");
 	const { clampInt, clampFloat, pickMode } = require("./lib/nodeInput.js");
+	const { formatMs } = require("./lib/formatMs.js");
 
 	// Settle the engine choice and pay its start-up cost now rather than on
 	// the first frame: the WASM build takes ~200ms to instantiate, and the
@@ -174,6 +175,7 @@ module.exports = (RED) => {
 		);
 
 		this.on("input", async (msg, send, done) => {
+			const started = performance.now();
 			try {
 				if (!available()) {
 					throw new Error(
@@ -225,9 +227,11 @@ module.exports = (RED) => {
 				this.status({
 					fill: res.detected ? "green" : "yellow",
 					shape: res.detected ? "dot" : "ring",
-					text: res.detected
-						? `deskewed ${res.metadata.width}×${res.metadata.height}`
-						: `not detected (${res.metadata.reason})`,
+					text:
+						(res.detected
+							? `deskewed ${res.metadata.width}×${res.metadata.height}`
+							: `not detected (${res.metadata.reason})`) +
+						` · ${formatMs(performance.now() - started)}`,
 				});
 				// In calipers mode a miss names the edge that failed, and that
 				// is nearly always a region that needs re-aiming rather than a

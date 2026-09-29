@@ -90,6 +90,17 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Changed
 
+- **Every node's status ends with the time the frame took.** `golden-compare`
+  and `barcode-locate` showed a time; `checkerboard-calibrate`, `label-crop`
+  and `line-finder` showed none, and `perspective-rectify` showed only the
+  warp stage, so reading a flow's cost off the editor meant a debug node on
+  every other message. Each verdict now ends in ` · 84ms` or ` · 1.23s`,
+  wall-clock from the message arriving to the status, previews and encoding
+  included - so what the editor shows is what the flow waits for. The
+  per-stage timings on the message are unchanged. `barcode-locate`'s
+  `none found (12ms)` and `2 found (regions, 12ms)` become `none found ·
+  12ms` and `2 found (regions) · 12ms`, and its time now covers the decode
+  rather than the scans alone.
 - **Heat maps and debug stages are JPEG by default, and encoded
   concurrently.** Turning on the two heat maps cost ~317ms a frame and
   the seven debug stages ~734ms, on a 460ms inspection - not the compose

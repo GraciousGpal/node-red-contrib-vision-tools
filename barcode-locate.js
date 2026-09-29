@@ -29,6 +29,7 @@
 
 const { locateBarcodes, DEFAULT_FORMATS } = require("./lib/locate.js");
 const { resolveImage } = require("./lib/nodeInput.js");
+const { formatMs } = require("./lib/formatMs.js");
 
 module.exports = (RED) => {
 	function normalizeRegions(regions) {
@@ -42,10 +43,6 @@ module.exports = (RED) => {
 				height: parseInt(r.height, 10) || 0,
 			}))
 			.filter((r) => r.width > 0 && r.height > 0);
-	}
-
-	function totalMs(timings) {
-		return (timings.regionsMs || 0) + (timings.fullImageMs || 0);
 	}
 
 	function BarcodeLocateNode(config) {
@@ -65,6 +62,7 @@ module.exports = (RED) => {
 
 		node.on("input", async (msg, send, done) => {
 			send = send || function () { node.send.apply(node, arguments); };
+			const started = performance.now();
 			try {
 				const buffer = await resolveImage(msg.payload, "msg.payload");
 				const regions = msg.regions !== undefined ? normalizeRegions(msg.regions) : node.regions;
@@ -90,7 +88,11 @@ module.exports = (RED) => {
 						timings,
 					});
 					send(noneMsg);
-					node.status({ fill: "yellow", shape: "ring", text: `none found (${totalMs(timings)}ms)` });
+					node.status({
+						fill: "yellow",
+						shape: "ring",
+						text: `none found · ${formatMs(performance.now() - started)}`,
+					});
 					done();
 					return;
 				}
@@ -115,7 +117,7 @@ module.exports = (RED) => {
 				node.status({
 					fill: "green",
 					shape: "dot",
-					text: `${results.length} found (${usedFullImage ? "full image" : "regions"}, ${totalMs(timings)}ms)`,
+					text: `${results.length} found (${usedFullImage ? "full image" : "regions"}) · ${formatMs(performance.now() - started)}`,
 				});
 				done();
 			} catch (err) {

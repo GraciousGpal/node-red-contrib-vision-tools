@@ -46,6 +46,12 @@ in [CHANGELOG.md](CHANGELOG.md).
 - **`barcode-locate`** — finds and decodes 1D and 2D barcodes, optionally
   restricted to pre-defined pixel regions with a whole-image fallback.
 
+Every node ends its status line with the time the frame took, `84ms` or
+`1.23s`: wall-clock from the message arriving to the verdict, previews and
+encoding included, so the editor shows what the flow waits for. The
+per-stage breakdown, where a node has one, is on the message (`msg.timings`,
+`msg.labelCrop.timings`, `msg.lineFinder.timings`, `msg.rectify.timings`).
+
 A ~23MP camera frame decodes, aligns, diffs and heat-maps in well under a
 second: around 0.45s against a same-scale golden, and roughly double that
 when magnification and stretch both have to be searched over a wide range
@@ -508,7 +514,8 @@ trusting it.
   leave this off outside debugging.
 - `node.status()` — green dot `pass · align <score> · Nms` / red ring
   `fail (position+print+background, whichever failed) · align <score> ·
-  Nms`, or `different label? · align <score>` when `mismatchSuspected`.
+  Nms`, or `different label? · align <score> · Nms` when
+  `mismatchSuspected`.
   The node's log line additionally carries the recovered angle and
   magnification, which is usually the first thing worth looking at when a
   whole batch starts failing at once.

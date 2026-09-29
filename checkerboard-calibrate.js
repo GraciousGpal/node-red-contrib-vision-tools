@@ -24,6 +24,7 @@
 const inspector = require("./lib/inspector.js");
 const { toShared } = require("./lib/shared.js");
 const { readScaleFile, writeScaleFile } = require("./lib/scaleFile.js");
+const { formatMs: fmtMs } = require("./lib/formatMs.js");
 const { clampInt, clampFloat, resolveImage } = require("./lib/nodeInput.js");
 
 module.exports = (RED) => {
@@ -31,9 +32,6 @@ module.exports = (RED) => {
 		return Math.round(v * 1000) / 1000;
 	}
 
-	function fmtMs(ms) {
-		return ms < 1000 ? `${Math.round(ms)}ms` : `${(ms / 1000).toFixed(2)}s`;
-	}
 
 	function CheckerboardCalibrateNode(config) {
 		RED.nodes.createNode(this, config);
@@ -105,7 +103,11 @@ module.exports = (RED) => {
 					};
 					msg.timings = { totalMs: Math.round(performance.now() - totalStart) };
 					send(msg);
-					node.status({ fill: "red", shape: "ring", text: "not detected" });
+					node.status({
+						fill: "red",
+						shape: "ring",
+						text: `not detected · ${fmtMs(performance.now() - totalStart)}`,
+					});
 					node.warn(`checkerboard-calibrate: not detected - ${measured.reason}`);
 					done();
 					return;
@@ -182,7 +184,7 @@ module.exports = (RED) => {
 				node.status({
 					fill: bootstrap ? "blue" : pass ? "green" : "red",
 					shape: bootstrap ? "dot" : pass ? "dot" : "ring",
-					text: statusText,
+					text: `${statusText} · ${fmtMs(performance.now() - totalStart)}`,
 				});
 				node.log(
 					`checkerboard-calibrate: detected=${detectedScale.toFixed(6)}mm/px ` +

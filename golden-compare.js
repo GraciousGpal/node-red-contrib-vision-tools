@@ -19,6 +19,7 @@ const crypto = require("crypto");
 const inspector = require("./lib/inspector.js");
 const { toShared } = require("./lib/shared.js");
 const { readScaleFile } = require("./lib/scaleFile.js");
+const { formatMs: fmtMs } = require("./lib/formatMs.js");
 const {
 	readTransformFile,
 	writeTransformFile,
@@ -62,9 +63,6 @@ module.exports = (RED) => {
 	const HEATMAP_FORMATS = ["jpg", "png", "raw"];
 	const UNIT_BOUNDS = [0, 1];
 
-	function fmtMs(ms) {
-		return ms < 1000 ? `${Math.round(ms)}ms` : `${(ms / 1000).toFixed(2)}s`;
-	}
 
 	/** A raw descriptor that cannot fit in the buffer it travels with
 	 * would be decoded past the end by sharp (libvips's generic 'memory
@@ -1098,11 +1096,13 @@ module.exports = (RED) => {
 				node.status({
 					fill: result.pass ? "green" : "red",
 					shape: result.pass ? "dot" : "ring",
-					text: result.match.mismatchSuspected
-						? `different label? · align ${result.match.score.toFixed(3)}`
-						: result.pass
-							? `pass · align ${result.match.score.toFixed(3)} · ${msg.timings.totalMs}ms`
-							: `fail (${failedParts.join("+")}) · align ${result.match.score.toFixed(3)} · ${msg.timings.totalMs}ms`,
+					text:
+						(result.match.mismatchSuspected
+							? `different label? · align ${result.match.score.toFixed(3)}`
+							: result.pass
+								? `pass · align ${result.match.score.toFixed(3)}`
+								: `fail (${failedParts.join("+")}) · align ${result.match.score.toFixed(3)}`) +
+						` · ${fmtMs(performance.now() - totalStart)}`,
 				});
 				const pos = result.position;
 				const posStr =

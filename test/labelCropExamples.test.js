@@ -169,7 +169,7 @@ test(`${RECT_EXAMPLE}: runs end to end on its own synthetic frame`, async () => 
 		);
 		assert.strictEqual(out.labelCrop.crop.rotated, true);
 		// the status prints the metadata's width and height, to a tenth of a pixel
-		assert.match(statuses.at(-1).text, /^deskewed 4(79|80|81)(\.\d)?×31[1-3](\.\d)?$/);
+		assert.match(statuses.at(-1).text, /^deskewed 4(79|80|81)(\.\d)?×31[1-3](\.\d)? · \d+ms$/);
 	} finally {
 		_resetBridge();
 	}
