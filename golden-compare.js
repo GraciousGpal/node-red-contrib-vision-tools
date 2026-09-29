@@ -813,13 +813,25 @@ module.exports = (RED) => {
 						noveltyPass: result.backgroundBlemish.noveltyPass,
 					},
 				};
+				const t = result.timings;
+				const ms = (v) => Math.round(v || 0);
 				msg.timings = {
-					decodeMs: Math.round(result.timings.decodeMs),
-					alignMs: Math.round(result.timings.alignMs),
-					diffMs: Math.round(result.timings.diffMs),
-					heatmapMs: Math.round(result.timings.heatmapMs),
-					stagesMs: Math.round(result.timings.stagesMs),
+					decodeMs: ms(t.decodeMs),
+					alignMs: ms(t.alignMs),
+					diffMs: ms(t.diffMs),
+					heatmapMs: ms(t.heatmapMs),
+					stagesMs: ms(t.stagesMs),
 					totalMs: Math.round(performance.now() - totalStart),
+					// the align bucket's own split: it is the number that moves,
+					// and its parts answer to different settings
+					nativeAlignMs: ms(t.nativeAlignMs),
+					seedMs: ms(t.seedMs),
+					tableMs: ms(t.tableMs),
+					searchMs: ms(t.searchMs),
+					warpMs: ms(t.warpMs),
+					localAlignMs: ms(t.localAlignMs),
+					thresholdMs: ms(t.thresholdMs),
+					nativeFallbackMs: ms(t.nativeFallbackMs),
 				};
 				setOrDelete(msg, "printHeatmap", result.printBlemish.heatmap);
 				setOrDelete(msg, "backgroundHeatmap", result.backgroundBlemish.heatmap);
@@ -860,15 +872,38 @@ module.exports = (RED) => {
 				const matchStr = `align(${result.match.grade} ${result.match.score.toFixed(4)}${
 					result.match.mismatchSuspected ? " DIFFERENT-LABEL?" : ""
 				}) `;
+				// which way the frame was aligned, and the align time by stage,
+				// so a slow frame says where it was slow without a debug node
+				const route = result.transform.native
+					? "native"
+					: result.transform.seeded
+						? "js+seed"
+						: "js";
+				const alignSplit = [
+					["native", t.nativeAlignMs],
+					["seed", t.seedMs],
+					["table", t.tableMs],
+					["search", t.searchMs],
+					["warp", t.warpMs],
+					["local", t.localAlignMs],
+					["threshold", t.thresholdMs],
+					["discarded", t.nativeFallbackMs],
+				]
+					.filter(([, v]) => v > 0)
+					.map(([k, v]) => `${k} ${fmtMs(v)}`)
+					.join(" ");
+				const routeStr = result.transform.nativeFallback
+					? `${route} after native fallback: ${result.transform.nativeFallback}`
+					: route;
 				node.log(
 					`golden-compare: ${result.pass ? "PASS" : "FAIL"} [${failedParts.join("+") || "none"}] ` +
 						matchStr +
 						`position(${pos.pass ? "ok" : "FAIL"} ${posStr}) ` +
 						`print(${result.printBlemish.pass ? "ok" : "FAIL"} ratio=${result.printBlemish.defectRatio.toFixed(5)} regions=${result.printBlemish.regions.length}) ` +
 						`background(${result.backgroundBlemish.pass ? "ok" : "FAIL"} ratio=${result.backgroundBlemish.defectRatio.toFixed(5)} regions=${result.backgroundBlemish.regions.length}) | ` +
-						`decode ${fmtMs(result.timings.decodeMs)}, align ${fmtMs(result.timings.alignMs)}, ` +
-						`diff ${fmtMs(result.timings.diffMs)}, heatmap ${fmtMs(result.timings.heatmapMs)}, ` +
-						`stages ${fmtMs(result.timings.stagesMs)}, total ${fmtMs(msg.timings.totalMs)}`,
+						`decode ${fmtMs(t.decodeMs)}, align ${fmtMs(t.alignMs)} [${alignSplit}], ` +
+						`diff ${fmtMs(t.diffMs)}, heatmap ${fmtMs(t.heatmapMs)}, ` +
+						`stages ${fmtMs(t.stagesMs)}, total ${fmtMs(msg.timings.totalMs)} | ${routeStr}`,
 				);
 				done();
 			} catch (err) {
