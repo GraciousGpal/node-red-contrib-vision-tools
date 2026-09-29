@@ -91,19 +91,33 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 ### Changed
 
 - **`golden-compare` fails as fast as it passes.** With the OpenCV fast
-  path on and a trained transform, a heavily defective print took 0.4-6.6s
-  against 0.27s for a pass, all of it in alignment: the native result was
-  thrown away whenever more than 15% of pixels disagreed with the golden,
-  and the frame re-run through the full JS search. Disagreement cannot
-  tell a misaligned frame from a defective one, and under a pin it does
-  not have to - the native transform has already been held to the trained
-  scale and the angle limit - so that gate now applies only to the
-  unpinned search, and a validated native alignment is kept with its
-  disagreement reported as the defect it is. The JS polish is bounded too:
-  a step size may improve for at most `POLISH_MAX_ROUNDS` (8) rounds
-  before the next takes over. A clean frame converges in two to four; a
-  defective one has no floor to settle on and used to wander for seconds.
-  Every step size still runs.
+  path and seed on and a trained transform, a heavily defective print
+  took 0.5-8s against 0.15s for a pass, all of it in alignment. The rig's
+  own log, once it said where the time went, put nearly all of it in one
+  place: OpenCV's full alignment fails on such a frame (nothing back, or
+  a transform 77-92% off in scale or 26° in angle), and the ORB+ECC seed
+  then ran on the same frame with the same engine - the same call at full
+  resolution with more iterations - for 0.3s to produce nothing again, or
+  4-7s to produce a seed the polish made nothing of. The seed is no
+  longer tried on a frame the fast path has just failed on; the JS sweeps
+  find the start in ~200ms. Measured on the rig's 14 known-bad frames:
+  the seven that fell back went from 0.57-8.2s a frame to 0.26-0.72s,
+  with the same verdicts; the seven that did not are unchanged at ~140ms.
+
+  Two smaller things in the same area. The fast path's 15% disagreement
+  gate now applies only to the unpinned search: under a pin the transform
+  has already been held to the trained scale and angle, and disagreement
+  cannot tell a misaligned frame from a defective one, so a validated
+  native alignment is kept and the disagreement reported as the defect
+  it is (1.4s to 0.4s on a frame with most of its label blanked). And the
+  JS polish is bounded: a step size may improve for at most
+  `POLISH_MAX_ROUNDS` (8) rounds before the next takes over, several
+  times what a clean frame needs, with every step size still run.
+
+  `msg.timings` now carries the align bucket's split (`seedMs`,
+  `searchMs`, `localAlignMs` and the rest) and the node's log line prints
+  it with the route taken and the fallback reason, which is how the
+  above was found.
 - **`golden-compare` declares each setting once.** The forty settings were
   clamped by hand twice - once off the node config, once off the message -
   and their bounds kept in a third place; `loadImage` and

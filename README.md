@@ -412,6 +412,13 @@ defective print through the full JS search (seconds on the rig, against
 ~70ms) to reach the same verdict. A validated native alignment is kept and
 the disagreement is reported as the defect it is.
 
+When the fast path does fall back, the `nativeAlignSeed` seed is **not**
+tried on that frame: it is the same engine call again at full resolution
+with more iterations, so on a frame OpenCV has just failed it can only
+fail slower. On the rig that second call was where every slow fail spent
+its time - 0.3s to produce nothing, 4-7s to produce a seed the polish
+made nothing of. The JS sweeps find the start instead, in ~200ms.
+
 This prototype is intentionally **not result-compatible** with the JS path.
 OpenCV fits an unrestricted affine transform (including shear), uses nearest
 neighbour for its warp, does not preserve the trained magnifications, and its
@@ -505,6 +512,11 @@ trusting it.
   anything is displayed. The same setting governs the grey `msg.stages`
   images; mask stages are PNG or raw, never JPEG.
 - `msg.timings` — `{ decodeMs, alignMs, diffMs, heatmapMs, stagesMs, totalMs }`
+  plus the align bucket's own split, `nativeAlignMs`, `seedMs`, `tableMs`,
+  `searchMs`, `warpMs`, `localAlignMs`, `thresholdMs` and, after a native
+  fallback, the `nativeFallbackMs` the discarded attempt cost. The node's
+  log line prints the same split and which way the frame was aligned
+  (`native`, `js`, `js+seed`) with the fallback reason when there was one.
 - `msg.stages` — only if `debugStages` is on: `Buffer`s for each
   pipeline step (`goldenGray`, `goldenFg`, `goldenFgDilatedBackground`,
   `targetGray`, `targetFg`, `targetGrayAligned`, `targetFgAligned`,

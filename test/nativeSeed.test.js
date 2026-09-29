@@ -248,6 +248,37 @@ test("under a pin, a validated native alignment is kept however poor its score",
 	}
 });
 
+test("after the fast path fails on a frame, the seed is not tried on it", async () => {
+	// the seed is the same engine call again, at full resolution with more
+	// iterations: on a frame OpenCV has just failed, it can only fail
+	// slower, and on the rig that was seconds per defective frame
+	let calls = 0;
+	nativeSeed._setEngine({
+		async imageAlign() {
+			calls++;
+			return { success: false };
+		},
+	});
+	try {
+		const goldenBuf = await sharp(svg(400, 560)).png().toBuffer();
+		const golden = await prepareGolden(goldenBuf, CFG);
+		const result = await compareFrame(goldenBuf, golden, {
+			...CFG,
+			pinnedScale: { mx: 1, my: 1 },
+			nativeFastAlign: true,
+			nativeAlignSeed: true,
+		});
+		assert.strictEqual(calls, 1, "one native attempt, not a second one as the seed");
+		assert.strictEqual(result.transform.native, false);
+		assert.ok(!result.transform.seeded, "the sweeps found the start");
+		assert.match(result.transform.nativeFallback, /no alignment/);
+		assert.strictEqual(result.timings.seedMs, 0);
+		assert.strictEqual(result.transform.score, 0);
+	} finally {
+		nativeSeed._resetEngine();
+	}
+});
+
 test("under a pin, a native transform off the trained scale still falls back", async () => {
 	nativeSeed._setEngine({
 		async imageAlign(reference) {
