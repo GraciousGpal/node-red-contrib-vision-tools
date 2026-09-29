@@ -1074,6 +1074,11 @@ channels is a separate question.
 
 ## Editing the node
 
+A `golden-compare` setting is declared once, in the `SETTINGS` table at the
+top of `golden-compare.js`: default, clamp, and whether a message may
+override it. The editor's `defaults` block carries the same default, and
+`test/editorDefaults.test.js` reads the two against each other.
+
 Two things that bite when adding a setting, both learned the hard way:
 
 - **Node-RED does not backfill a new default into existing node

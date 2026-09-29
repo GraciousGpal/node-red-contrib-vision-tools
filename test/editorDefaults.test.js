@@ -33,22 +33,23 @@ const path = require("node:path");
 
 const DIR = path.join(__dirname, "..");
 
-/** Pull the `defaults: { ... }` object out of a node's .html by matching
- * braces - it contains JS (validator calls), so it cannot be JSON.parsed
- * and a regex over the whole file would run past the end of the block. */
-function defaultsBlock(html) {
-	const at = html.indexOf("defaults:");
-	assert.ok(at > 0, "no defaults block found");
-	const open = html.indexOf("{", at);
+/** Pull the object literal after `marker` out of a source file by matching
+ * braces - the editor's `defaults:` block contains JS (validator calls), so
+ * it cannot be JSON.parsed and a regex over the whole file would run past
+ * the end of the block. */
+function braceBlock(text, marker) {
+	const at = text.indexOf(marker);
+	assert.ok(at > 0, `no ${marker} block found`);
+	const open = text.indexOf("{", at);
 	let depth = 0;
 	let i = open;
 	do {
-		if (html[i] === "{") depth++;
-		else if (html[i] === "}") depth--;
+		if (text[i] === "{") depth++;
+		else if (text[i] === "}") depth--;
 		i++;
-	} while (depth > 0 && i < html.length);
-	assert.strictEqual(depth, 0, "unbalanced braces in the defaults block");
-	return html.slice(open, i);
+	} while (depth > 0 && i < text.length);
+	assert.strictEqual(depth, 0, `unbalanced braces in the ${marker} block`);
+	return text.slice(open, i);
 }
 
 /** name -> { value, validated } for each entry in that block. */
@@ -69,9 +70,11 @@ function parseDefaults(block) {
 	return out;
 }
 
-/** The runtime fallback for `name`, read out of the node's .js. Covers the
- * clamp calls and the boolean/mode idioms alike. */
-function runtimeDefault(js, name) {
+/** The runtime fallback for `name`, read out of the node's .js. Covers a
+ * settings table in the editor's own `name: { value }` shape, the clamp
+ * calls, and the boolean/mode idioms alike. */
+function runtimeDefault(js, name, table) {
+	if (table[name]) return table[name].value;
 	const clamp = new RegExp(
 		`clamp(?:Int|Float)\\(\\s*(?:config|msg)\\.${name}\\s*,\\s*([^,]+),`,
 	).exec(js);
@@ -138,7 +141,10 @@ for (const node of NODES) {
 	const libs = [...nodeJs.matchAll(/require\("(\.\/lib\/[\w.]+\.js)"\)/g)]
 		.map((m) => fs.readFileSync(path.join(DIR, m[1]), "utf8"));
 	const js = [nodeJs, ...libs].join("\n");
-	const defaults = parseDefaults(defaultsBlock(html));
+	const defaults = parseDefaults(braceBlock(html, "defaults:"));
+	const table = js.includes("SETTINGS = {")
+		? parseDefaults(braceBlock(js, "SETTINGS = "))
+		: {};
 
 	test(`${node.html}: every editor default matches the runtime fallback`, () => {
 		const names = Object.keys(defaults);
@@ -147,7 +153,7 @@ for (const node of NODES) {
 		let compared = 0;
 		for (const name of names) {
 			if (NO_RUNTIME_EQUIVALENT.has(name)) continue;
-			const runtime = runtimeDefault(js, name);
+			const runtime = runtimeDefault(js, name, table);
 			assert.ok(
 				runtime !== null,
 				`${name} has an editor default (${defaults[name].value}) but no ` +

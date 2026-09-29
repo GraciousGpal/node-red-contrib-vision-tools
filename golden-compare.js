@@ -12,7 +12,7 @@
  * carry their geometry on the object, msg.rawInfo, or msg.images[].
  * Per-message overrides: msg.golden (path/Buffer - swaps and re-caches
  * the golden reference), msg.goldenKey / msg.goldenRawInfo for it, and
- * every setting the cfg block below reads from msg by the same name.
+ * every setting in SETTINGS below, by the same name.
  */
 
 const crypto = require("crypto");
@@ -36,33 +36,97 @@ const {
 } = require("./lib/nodeInput.js");
 
 module.exports = (RED) => {
-	const BOUNDS = {
-		workingSize: [64, 4096],
-		threshold: [0, 255],
-		tolerance: [0, 50],
-		alignSearch: [0, 200],
-		blockSize: [4, 256],
-		positionPx: [0, 1000],
-		positionMm: [0, 1000],
-		angleDeg: [0, 30],
-		aspect: [0, 0.5],
-		aspectSteps: [1, 21],
-		angleSteps: [1, 21],
-		scale: [0.1, 10],
-		scaleSteps: [1, 61],
-		sauvolaRadius: [2, 200],
-		sauvolaK: [0.01, 1],
-		inkMargin: [0, 128],
-		alignCandidates: [1, 16],
-		localAlignTile: [16, 512],
-		localAlignMax: [1, 16],
-		workers: [0, 64],
-		mismatchScore: [0, 1],
+	/**
+	 * Every setting the editor saves and a message may override by the same
+	 * name: the runtime fallback and the clamp, declared once. The
+	 * constructor reads each off `config`, and the input handler reads it
+	 * again off `msg` with the node's value as the fallback; `fixed` marks
+	 * the few a message may not change. test/editorDefaults.test.js reads
+	 * this block against the editor's `defaults`, so it keeps that shape.
+	 */
+	const SETTINGS = {
+		workingSize: { value: 1024, int: [64, 4096], fixed: true },
+		threshold: { value: 128, int: [0, 255] },
+		// otsu by default, not a fixed level: the golden is normally PDF
+		// artwork - synthetic pure black on pure white - and the frame is a
+		// photograph. No single grey level is correct for both.
+		thresholdMode: { value: "otsu", modes: ["fixed", "otsu", "sauvola"] },
+		sauvolaRadius: { value: 24, int: [2, 200] },
+		sauvolaK: { value: 0.2, float: [0.01, 1] },
+		inkMargin: { value: 8, int: [0, 128] },
+		// Wide by default: on a frame already at the golden's scale the extra
+		// rungs cost almost nothing, while a narrow default would silently
+		// fail every artwork-as-golden setup - the case the search exists for.
+		scaleSearchMin: { value: 0.6, float: [0.1, 10] },
+		scaleSearchMax: { value: 2.5, float: [0.1, 10] },
+		scaleSearchSteps: { value: 19, int: [1, 61] },
+		// Presses stretch print along the media-feed axis relative to the
+		// artwork, 5-6% on this project's own samples. Left unsearched it
+		// puts every feature several pixels out toward the ends of the long
+		// axis and fails a good part on both blemish checks.
+		alignCandidates: { value: 5, int: [1, 16] },
+		// 0 = auto, one per core, capped at 16, leaving one for the event
+		// loop. 1 disables the pool and keeps every stage on this thread.
+		workers: { value: 0, int: [0, 64] },
+		// 0 disables the "this is a different label" check entirely
+		mismatchScore: { value: 0.15, float: [0, 1] },
+		localAlign: { value: true },
+		localAlignTile: { value: 96, int: [16, 512] },
+		localAlignMax: { value: 3, int: [1, 16] },
+		maxAspect: { value: 0.06, float: [0, 0.5] },
+		aspectSteps: { value: 7, int: [1, 21] },
+		maxAngleDeg: { value: 2, float: [0, 30] },
+		angleSteps: { value: 5, int: [1, 21] },
+		positionToleranceAngleDeg: { value: 1, float: [0, 30] },
+		// tight because localAlign is on by default: the dilation no longer
+		// has to absorb registration error, only genuine edge variation
+		printTolerance: { value: 2, int: [0, 50] },
+		backgroundTolerance: { value: 1, int: [0, 50] },
+		alignSearch: { value: 16, int: [0, 200] },
+		positionToleranceXMm: { value: 2, float: [0, 1000] },
+		positionToleranceYMm: { value: 2, float: [0, 1000] },
+		positionToleranceXPx: { value: 16, int: [0, 1000] },
+		positionToleranceYPx: { value: 16, int: [0, 1000] },
+		blockSize: { value: 16, int: [4, 256] },
+		blockThreshold: { value: 0.15, float: [0, 1] },
+		failThreshold: { value: 0.3, float: [0, 1] },
+		failRatio: { value: 0.002, float: [0, 1] },
+		outputPrintHeatmap: { value: true },
+		outputBackgroundHeatmap: { value: true },
+		// JPEG unless asked for PNG: a heat map is a picture for a person,
+		// and PNG was ~150ms per image at working size (see encodeImage in
+		// lib/compare.js). Also applies to msg.stages.
+		heatmapFormat: { value: "jpg", modes: ["jpg", "png", "raw"] },
+		heatmapQuality: { value: 85, int: [1, 100] },
+		debugStages: { value: false },
+		trainTransform: { value: false },
+		trainNuisance: { value: false },
+		// 0 disables the gate outright. The measured window on the reference
+		// run is 0.27-0.32; lib/nuisanceMap.js says why it is that narrow.
+		noveltyThreshold: { value: 0.3, float: [0, 1], fixed: true },
+		// PROTOTYPES, default off - see lib/nativeSeed.js. The seed replaces
+		// the staged sweeps with a native ORB+ECC alignment when the optional
+		// @rosepetal/node-red-contrib-image-tools engine is installed, and is
+		// inert without it; the fast path lets OpenCV own the affine solve and
+		// global warp, and may produce different inspection results.
+		nativeAlignSeed: { value: false },
+		nativeFastAlign: { value: false },
 	};
-	const THRESHOLD_MODES = ["fixed", "otsu", "sauvola"];
-	const HEATMAP_FORMATS = ["jpg", "png", "raw"];
-	const UNIT_BOUNDS = [0, 1];
 
+	/** One setting off `config` or `msg`, clamped, with `fallback` for a
+	 * missing or unusable value. */
+	function readSetting(spec, raw, fallback) {
+		if (spec.int) return clampInt(raw, fallback, spec.int);
+		if (spec.float) return clampFloat(raw, fallback, spec.float);
+		if (spec.modes) return pickMode(raw, fallback, spec.modes);
+		return raw == null ? fallback : !!raw;
+	}
+
+	/** msg[key] is this frame's value or absent - never a previous frame's. */
+	function setOrDelete(msg, key, value) {
+		if (value) msg[key] = value;
+		else delete msg[key];
+	}
 
 	/** A raw descriptor that cannot fit in the buffer it travels with
 	 * would be decoded past the end by sharp (libvips's generic 'memory
@@ -106,123 +170,95 @@ module.exports = (RED) => {
 		return Buffer.from(store, 0, src.byteLength);
 	}
 
+	const sha1 = (bytes) =>
+		crypto
+			.createHash("sha1")
+			.update(Buffer.isBuffer(bytes) ? bytes : Buffer.from(bytes))
+			.digest("hex");
+
+	const objectFormError = (label) =>
+		`${label} object must contain "data"/"buffer" or an existing "path"`;
+
 	/**
-	 * Load an image source (Buffer/path/object) to { buffer, raw }.
-	 *
-	 * Every guard the node has ever applied lives here: the size cap, the
-	 * regular-file check, the distinct missing-file errors for a path string
-	 * versus a path inside an object, and the raw-descriptor length check.
-	 *
-	 * `prefetched` is an already-open handle from fingerprintImage, so a
-	 * path golden that has just been stat'ed for its cache key is read
-	 * through the *same* handle rather than reopened - the file cannot be
-	 * swapped between the two, which is the race the single-handle
-	 * open/fstat/read was written to avoid in the first place.
+	 * Where an image source keeps its bytes: `{ data }` for the in-memory
+	 * forms, checked against the size cap, or `{ path, missing }` for a
+	 * file, `missing` being the error to raise if it is not there - a bare
+	 * path string and a path inside an object have always said different
+	 * things. Anything else is refused here.
 	 */
-	async function loadImage(source, label, prefetched) {
-		if (source == null || source === "") {
-			throw new Error(`${label} is empty`);
-		}
+	function locateSource(source, label) {
+		if (source == null || source === "") throw new Error(`${label} is empty`);
 		const data = bytesOf(source);
 		if (data) {
 			assertUnderCap(data, label);
-			// A real Buffer is already exactly what sharp wants, so it is not
-			// copied here. Uint8Array and ArrayBuffer must be - those can be
-			// views onto a larger buffer the caller keeps writing to - and when
-			// they are, the copy goes *straight into shared memory*. The frame
-			// has to end up there anyway to reach the inspector, and doing it
-			// in two steps (Buffer.from, then toShared) copied a 68MB
-			// framebuffer twice: 10.3ms + 12.6ms, both on the event loop.
-			const buffer = Buffer.isBuffer(data) ? data : sharedCopy(data);
-			const raw = rawGeometry(source);
-			assertRawFits(buffer, raw, label);
-			return { buffer, raw };
+			return { data };
 		}
 		if (typeof source === "string") {
-			if (prefetched) return { buffer: await prefetched.handle.readFile() };
-			const buffer = await readRegularFile(source, label);
-			if (!buffer) {
-				throw new Error(`${label} does not exist on disk: "${source}"`);
-			}
-			return { buffer };
+			return { path: source, missing: `${label} does not exist on disk: "${source}"` };
 		}
-		if (typeof source === "object") {
-			if (typeof source.path === "string") {
-				if (prefetched) return { buffer: await prefetched.handle.readFile() };
-				const buffer = await readRegularFile(source.path, label);
-				if (buffer) return { buffer };
-			}
-			throw new Error(
-				`${label} object must contain "data"/"buffer" or an existing "path"`,
-			);
+		if (typeof source === "object" && typeof source.path === "string") {
+			return { path: source.path, missing: objectFormError(label) };
 		}
+		if (typeof source === "object") throw new Error(objectFormError(label));
 		throw new Error(`unsupported ${label} type: ${typeof source}`);
 	}
 
 	/**
-	 * A cheap, stable fingerprint of an image source, *without* reading or
-	 * hashing its bytes wherever that can be avoided. This runs on every
-	 * message; loadImage only runs when the golden cache misses.
-	 *
-	 * Costs, per form:
-	 *  - a path is fingerprinted by mtime and size, so overwriting the golden
-	 *    in place still re-prepares the cache (and refuses the stale trained
-	 *    transform measured against the old bytes). The handle stays open for
-	 *    loadImage, so a hit costs one open+fstat and no read at all.
-	 *  - a named key (msg.goldenKey) skips the SHA-1 entirely.
-	 *  - an unnamed buffer still has to be hashed. There is nothing else in
-	 *    it that says whether it changed.
-	 *
-	 * The caller must always call close(), hit or miss.
+	 * Load an image source to { buffer, raw }. `prefetched` is the handle
+	 * fingerprintImage already holds open on a path golden, so the bytes are
+	 * read through it rather than reopened - the file cannot be swapped
+	 * between the stat and the read.
+	 */
+	async function loadImage(source, label, prefetched) {
+		const at = locateSource(source, label);
+		if (at.data) {
+			// A Buffer is what sharp wants and is not copied. A Uint8Array or
+			// ArrayBuffer may be a view onto memory the caller keeps writing
+			// to, so it is copied - straight into shared memory, where the
+			// frame has to end up anyway to reach the inspector.
+			const buffer = Buffer.isBuffer(at.data) ? at.data : sharedCopy(at.data);
+			const raw = rawGeometry(source);
+			assertRawFits(buffer, raw, label);
+			return { buffer, raw };
+		}
+		if (prefetched) return { buffer: await prefetched.handle.readFile() };
+		const buffer = await readRegularFile(at.path, label);
+		if (!buffer) throw new Error(at.missing);
+		return { buffer };
+	}
+
+	/**
+	 * A cheap, stable fingerprint of an image source, without reading or
+	 * hashing its bytes wherever that can be avoided - this runs on every
+	 * message, loadImage only when the golden cache misses. A path is
+	 * fingerprinted by mtime and size, so overwriting the golden in place
+	 * still re-prepares the cache, and the handle stays open for loadImage;
+	 * a named key (msg.goldenKey) skips the hash; an unnamed buffer has to
+	 * be hashed, there being nothing else in it that says whether it
+	 * changed. The caller must always call close(), hit or miss.
 	 */
 	async function fingerprintImage(source, label, namedKey) {
-		if (source == null || source === "") {
-			throw new Error(`${label} is empty`);
-		}
 		const named = namedKey ? `key:${namedKey}` : null;
-		const data = bytesOf(source);
-		if (data) {
-			assertUnderCap(data, label);
+		const at = locateSource(source, label);
+		if (at.data) {
 			return {
-				key:
-					named ||
-					`buf:${crypto.createHash("sha1").update(Buffer.isBuffer(data) ? data : Buffer.from(data)).digest("hex")}`,
-				// cheap, and the only thing a named key can be cross-checked
-				// against without reading the bytes it deliberately ignores
-				byteLength: data.byteLength,
+				key: named || `buf:${sha1(at.data)}`,
+				// the only thing a named key can be cross-checked against
+				// without reading the bytes it deliberately ignores
+				byteLength: at.data.byteLength,
 				close: async () => {},
 			};
 		}
-		const p =
-			typeof source === "string"
-				? source
-				: source && typeof source === "object" && typeof source.path === "string"
-					? source.path
-					: null;
-		if (p !== null) {
-			// Stat even under a named key. It costs ~0.02ms, it keeps a deleted
-			// or swapped-for-a-directory golden an error rather than a silently
-			// reused cache entry, and only the *read* was ever expensive.
-			const open = await openRegularFile(p, label);
-			if (!open) {
-				throw new Error(
-					typeof source === "string"
-						? `${label} does not exist on disk: "${p}"`
-						: `${label} object must contain "data"/"buffer" or an existing "path"`,
-				);
-			}
-			return {
-				key: named || `path:${p}:${open.mtimeMs}:${open.size}`,
-				handle: open.handle,
-				close: () => open.handle.close(),
-			};
-		}
-		if (typeof source === "object") {
-			throw new Error(
-				`${label} object must contain "data"/"buffer" or an existing "path"`,
-			);
-		}
-		throw new Error(`unsupported ${label} type: ${typeof source}`);
+		// Stat even under a named key. It costs ~0.02ms, and it keeps a
+		// deleted or swapped-for-a-directory golden an error rather than a
+		// silently reused cache entry; only the read was ever expensive.
+		const open = await openRegularFile(at.path, label);
+		if (!open) throw new Error(at.missing);
+		return {
+			key: named || `path:${at.path}:${open.mtimeMs}:${open.size}`,
+			handle: open.handle,
+			close: () => open.handle.close(),
+		};
 	}
 
 	/**
@@ -307,129 +343,20 @@ module.exports = (RED) => {
 		RED.nodes.createNode(this, config);
 		const node = this;
 
+		for (const [key, spec] of Object.entries(SETTINGS)) {
+			node[key] = readSetting(spec, config[key], spec.value);
+		}
 		node.goldenPath = String(config.goldenPath || "").trim();
-		node.workingSize = clampInt(config.workingSize, 1024, BOUNDS.workingSize);
-		node.threshold = clampInt(config.threshold, 128, BOUNDS.threshold);
-		// otsu by default, not a fixed level: the golden is normally PDF
-		// artwork - synthetic pure black on pure white - and the frame is a
-		// photograph. There is no single grey level that is correct for
-		// both, and no reason to make the operator discover that.
-		node.thresholdMode = pickMode(config.thresholdMode, "otsu", THRESHOLD_MODES);
-		node.sauvolaRadius = clampInt(config.sauvolaRadius, 24, BOUNDS.sauvolaRadius);
-		node.sauvolaK = clampFloat(config.sauvolaK, 0.2, BOUNDS.sauvolaK);
-		node.inkMargin = clampInt(config.inkMargin, 8, BOUNDS.inkMargin);
-		// Wide by default: on a frame that is already at golden's scale the
-		// extra rungs cost almost nothing (there is barely any margin to
-		// sweep), while a narrow default would silently fail every
-		// artwork-as-golden setup - the case the search exists for.
-		node.scaleSearchMin = clampFloat(config.scaleSearchMin, 0.6, BOUNDS.scale);
-		node.scaleSearchMax = clampFloat(config.scaleSearchMax, 2.5, BOUNDS.scale);
-		node.scaleSearchSteps = clampInt(
-			config.scaleSearchSteps,
-			19,
-			BOUNDS.scaleSteps,
-		);
-		// Presses stretch print along the media-feed axis relative to the
-		// artwork - measured at 5-6% on this project's own samples. Left
-		// unsearched it is not a small error: it puts every feature several
-		// pixels out toward the ends of the long axis and fails a good part
-		// on both blemish checks.
-		node.alignCandidates = clampInt(
-			config.alignCandidates,
-			5,
-			BOUNDS.alignCandidates,
-		);
-		// 0 = auto (one per core, capped at 16, leaving one for the event
-		// loop); 1 disables the pool and keeps every stage on this thread
-		node.workers = clampInt(config.workers, 0, BOUNDS.workers);
-		// 0 disables the "this is a different label" check entirely
-		node.mismatchScore = clampFloat(
-			config.mismatchScore,
-			0.15,
-			BOUNDS.mismatchScore,
-		);
-		node.localAlign = config.localAlign !== false;
-		node.localAlignTile = clampInt(
-			config.localAlignTile,
-			96,
-			BOUNDS.localAlignTile,
-		);
-		node.localAlignMax = clampInt(config.localAlignMax, 3, BOUNDS.localAlignMax);
-		node.maxAspect = clampFloat(config.maxAspect, 0.06, BOUNDS.aspect);
-		node.aspectSteps = clampInt(config.aspectSteps, 7, BOUNDS.aspectSteps);
-		node.maxAngleDeg = clampFloat(config.maxAngleDeg, 2, BOUNDS.angleDeg);
-		node.angleSteps = clampInt(config.angleSteps, 5, BOUNDS.angleSteps);
-		node.positionToleranceAngleDeg = clampFloat(
-			config.positionToleranceAngleDeg,
-			1,
-			BOUNDS.angleDeg,
-		);
-		// tight because localAlign is on by default: the dilation no longer
-		// has to absorb registration error, only genuine edge variation
-		node.printTolerance = clampInt(config.printTolerance, 2, BOUNDS.tolerance);
-		node.backgroundTolerance = clampInt(
-			config.backgroundTolerance,
-			1,
-			BOUNDS.tolerance,
-		);
-		node.alignSearch = clampInt(config.alignSearch, 16, BOUNDS.alignSearch);
-		node.positionToleranceXMm = clampFloat(
-			config.positionToleranceXMm,
-			2,
-			BOUNDS.positionMm,
-		);
-		node.positionToleranceYMm = clampFloat(
-			config.positionToleranceYMm,
-			2,
-			BOUNDS.positionMm,
-		);
-		node.positionToleranceXPx = clampInt(
-			config.positionToleranceXPx,
-			16,
-			BOUNDS.positionPx,
-		);
-		node.positionToleranceYPx = clampInt(
-			config.positionToleranceYPx,
-			16,
-			BOUNDS.positionPx,
-		);
-		node.blockSize = clampInt(config.blockSize, 16, BOUNDS.blockSize);
-		node.blockThreshold = clampFloat(config.blockThreshold, 0.15, UNIT_BOUNDS);
-		node.failThreshold = clampFloat(config.failThreshold, 0.3, UNIT_BOUNDS);
-		node.failRatio = clampFloat(config.failRatio, 0.002, UNIT_BOUNDS);
-		node.outputPrintHeatmap = config.outputPrintHeatmap !== false;
-		node.outputBackgroundHeatmap = config.outputBackgroundHeatmap !== false;
-		// JPEG unless asked for PNG: a heat map is a picture for a person,
-		// and PNG was ~150ms per image at working size (see encodeImage in
-		// lib/compare.js). Also applies to msg.stages.
-		node.heatmapFormat = pickMode(config.heatmapFormat, "jpg", HEATMAP_FORMATS);
-		node.heatmapQuality = clampInt(config.heatmapQuality, 85, [1, 100]);
-		node.debugStages = !!config.debugStages;
 		node.scaleFilePath = String(config.scaleFilePath || "").trim();
 		node.transformFilePath = String(config.transformFilePath || "").trim();
-		node.trainTransform = !!config.trainTransform;
 		node.nuisancePath = String(config.nuisancePath || "").trim();
-		node.trainNuisance = !!config.trainNuisance;
-		// 0 disables the gate outright. Measured window on the reference
-		// run is 0.27-0.32; see lib/nuisanceMap.js on why it is that narrow
-		// and how the training set size moves the lower edge.
-		node.noveltyThreshold = clampFloat(config.noveltyThreshold, 0.3, UNIT_BOUNDS);
 		// Accumulates across frames for the life of the node, so a training
 		// run is "send the good frames through", not a single message.
 		node.nuisanceAcc = null;
-		// PROTOTYPES, default off - see lib/nativeSeed.js
-		node.nativeAlignSeed = !!config.nativeAlignSeed;
-		node.nativeFastAlign = !!config.nativeFastAlign;
-
-		// { key, promise } - cached prepared golden, keyed by fingerprintImage()'s
-		// fingerprint plus every setting baked into the cached object
-		// (workingSize, threshold, thresholdMode, sauvolaRadius, sauvolaK,
-		// inkMargin, backgroundTolerance, debugStages, mmPerPixelNative, the
-		// calibration photo's size, and the raw geometry - the cacheKey
-		// construction below is the authoritative list), so a changed
-		// msg.golden, a re-pointed goldenPath, a fresh calibration save, or
-		// a flipped baked setting all trigger exactly one re-prepare, shared
-		// by any messages that arrive while it's in flight.
+		// { key, promise }: the prepared golden, keyed by its fingerprint plus
+		// every setting baked into it (the cacheKey list in ensureGolden is
+		// the authoritative one), so a change to either triggers exactly one
+		// re-prepare, shared by messages that arrive while it is in flight.
 		node.goldenCache = null;
 
 		node.on("input", async (msg, send, done) => {
@@ -458,162 +385,21 @@ module.exports = (RED) => {
 					}
 				}
 				const scaleOk = scale != null && !scale.error;
-				const cfg = {
-					workingSize: node.workingSize,
-					threshold: clampInt(msg.threshold, node.threshold, BOUNDS.threshold),
-					thresholdMode: pickMode(msg.thresholdMode, node.thresholdMode, THRESHOLD_MODES),
-					sauvolaRadius: clampInt(
-						msg.sauvolaRadius,
-						node.sauvolaRadius,
-						BOUNDS.sauvolaRadius,
-					),
-					sauvolaK: clampFloat(msg.sauvolaK, node.sauvolaK, BOUNDS.sauvolaK),
-					inkMargin: clampInt(msg.inkMargin, node.inkMargin, BOUNDS.inkMargin),
-					scaleSearchMin: clampFloat(
-						msg.scaleSearchMin,
-						node.scaleSearchMin,
-						BOUNDS.scale,
-					),
-					scaleSearchMax: clampFloat(
-						msg.scaleSearchMax,
-						node.scaleSearchMax,
-						BOUNDS.scale,
-					),
-					scaleSearchSteps: clampInt(
-						msg.scaleSearchSteps,
-						node.scaleSearchSteps,
-						BOUNDS.scaleSteps,
-					),
-					alignCandidates: clampInt(
-						msg.alignCandidates,
-						node.alignCandidates,
-						BOUNDS.alignCandidates,
-					),
-					workers: clampInt(msg.workers, node.workers, BOUNDS.workers),
-					mismatchScore: clampFloat(
-						msg.mismatchScore,
-						node.mismatchScore,
-						BOUNDS.mismatchScore,
-					),
-					localAlign: msg.localAlign == null ? node.localAlign : !!msg.localAlign,
-					localAlignTile: clampInt(
-						msg.localAlignTile,
-						node.localAlignTile,
-						BOUNDS.localAlignTile,
-					),
-					localAlignMax: clampInt(
-						msg.localAlignMax,
-						node.localAlignMax,
-						BOUNDS.localAlignMax,
-					),
-					maxAspect: clampFloat(msg.maxAspect, node.maxAspect, BOUNDS.aspect),
-					aspectSteps: clampInt(
-						msg.aspectSteps,
-						node.aspectSteps,
-						BOUNDS.aspectSteps,
-					),
-					maxAngleDeg: clampFloat(
-						msg.maxAngleDeg,
-						node.maxAngleDeg,
-						BOUNDS.angleDeg,
-					),
-					angleSteps: clampInt(msg.angleSteps, node.angleSteps, BOUNDS.angleSteps),
-					positionToleranceAngleDeg: clampFloat(
-						msg.positionToleranceAngleDeg,
-						node.positionToleranceAngleDeg,
-						BOUNDS.angleDeg,
-					),
-					printTolerance: clampInt(
-						msg.printTolerance,
-						node.printTolerance,
-						BOUNDS.tolerance,
-					),
-					backgroundTolerance: clampInt(
-						msg.backgroundTolerance,
-						node.backgroundTolerance,
-						BOUNDS.tolerance,
-					),
-					alignSearch: clampInt(
-						msg.alignSearch,
-						node.alignSearch,
-						BOUNDS.alignSearch,
-					),
-					positionToleranceXMm: clampFloat(
-						msg.positionToleranceXMm,
-						node.positionToleranceXMm,
-						BOUNDS.positionMm,
-					),
-					positionToleranceYMm: clampFloat(
-						msg.positionToleranceYMm,
-						node.positionToleranceYMm,
-						BOUNDS.positionMm,
-					),
-					positionToleranceXPx: clampInt(
-						msg.positionToleranceXPx,
-						node.positionToleranceXPx,
-						BOUNDS.positionPx,
-					),
-					positionToleranceYPx: clampInt(
-						msg.positionToleranceYPx,
-						node.positionToleranceYPx,
-						BOUNDS.positionPx,
-					),
-					blockSize: clampInt(msg.blockSize, node.blockSize, BOUNDS.blockSize),
-					blockThreshold: clampFloat(
-						msg.blockThreshold,
-						node.blockThreshold,
-						UNIT_BOUNDS,
-					),
-					failThreshold: clampFloat(
-						msg.failThreshold,
-						node.failThreshold,
-						UNIT_BOUNDS,
-					),
-					failRatio: clampFloat(msg.failRatio, node.failRatio, UNIT_BOUNDS),
-					outputPrintHeatmap:
-						msg.outputPrintHeatmap == null
-							? node.outputPrintHeatmap
-							: !!msg.outputPrintHeatmap,
-					outputBackgroundHeatmap:
-						msg.outputBackgroundHeatmap == null
-							? node.outputBackgroundHeatmap
-							: !!msg.outputBackgroundHeatmap,
-					debugStages:
-						msg.debugStages == null ? node.debugStages : !!msg.debugStages,
-					heatmapFormat: pickMode(msg.heatmapFormat, node.heatmapFormat, HEATMAP_FORMATS),
-					heatmapQuality: clampInt(
-						msg.heatmapQuality,
-						node.heatmapQuality,
-						[1, 100],
-					),
-					// PROTOTYPE. Seeds the pinned search from a native ORB+ECC
-					// alignment instead of the staged sweeps, when the optional
-					// @rosepetal/node-red-contrib-image-tools engine is
-					// installed. Silently inert without it, and the sweeps stay
-					// the fallback for a seed that fails its range check.
-					nativeAlignSeed:
-						msg.nativeAlignSeed == null
-							? node.nativeAlignSeed
-							: !!msg.nativeAlignSeed,
-					// Aggressive prototype: OpenCV owns affine solve + global warp.
-					// It intentionally may produce different inspection results.
-					nativeFastAlign:
-						msg.nativeFastAlign == null
-							? node.nativeFastAlign
-							: Boolean(msg.nativeFastAlign),
-					mmPerPixelNative: scaleOk ? scale.mmPerPixelNative : null,
-					// the calibration photo's own native size, so prepareGolden can
-					// convert the mm/px scale across a golden rendered at a
-					// different resolution than the calibration was taken at
-					calibrationNativeWidth: scaleOk ? scale.nativeWidth : null,
-					calibrationNativeHeight: scaleOk ? scale.nativeHeight : null,
-				};
+				const cfg = {};
+				for (const [key, spec] of Object.entries(SETTINGS)) {
+					cfg[key] = spec.fixed ? node[key] : readSetting(spec, msg[key], node[key]);
+				}
+				cfg.mmPerPixelNative = scaleOk ? scale.mmPerPixelNative : null;
+				// the calibration photo's own native size, so prepareGolden can
+				// convert the mm/px scale across a golden rendered at a
+				// different resolution than the calibration was taken at
+				cfg.calibrationNativeWidth = scaleOk ? scale.nativeWidth : null;
+				cfg.calibrationNativeHeight = scaleOk ? scale.nativeHeight : null;
 
-				// Fingerprint first, load only on a miss. The golden's bytes are
+				// Fingerprint first, load only on a miss: the golden's bytes are
 				// the most expensive thing this node can touch, and on the hot
-				// path they have not changed - re-reading the artwork file, or
-				// re-hashing a 12MB render, is time spent re-learning a constant.
-				// msg.goldenKey names the golden instead.
+				// path they have not changed. msg.goldenKey names the golden
+				// instead of hashing it.
 				const named =
 					typeof msg.goldenKey === "string" && msg.goldenKey !== ""
 						? msg.goldenKey
@@ -670,13 +456,10 @@ module.exports = (RED) => {
 							cfg.raw
 								? `${cfg.raw.width}x${cfg.raw.height}x${cfg.raw.channels}`
 								: "",
-							// A named key is the flow's assertion that the bytes did not
-							// change, and it is deliberately trusted. The length is free
-							// to check and catches the coarsest way that assertion can be
-							// wrong (a different render under a stale name); it is in the
-							// cache key only, never in `goldenKey` itself, which is
-							// persisted in trained-transform files and must keep its
-							// format.
+							// a named key is trusted, but the length is free to check and
+							// catches a different render under a stale name; it is in the
+							// cache key only, never in goldenKey, whose format is
+							// persisted in trained-transform files
 							named && fingerprint.byteLength != null
 								? `len:${fingerprint.byteLength}`
 								: "",
@@ -728,15 +511,12 @@ module.exports = (RED) => {
 				};
 				await ensureGolden();
 
-				// The golden's content identity, for tying a trained transform to
-				// the image rather than to how the image was delivered. Lazy and
-				// memoised on the node: it is needed when training, and otherwise
-				// only to settle a cheap-key mismatch that would refuse a good
-				// record on every frame. A buffer golden is already keyed by its
-				// own SHA-1, so that case costs nothing; a path golden is read and
-				// hashed once per file version, never per frame. Raw geometry
-				// rides along because the same bytes decode into a different image
-				// under a different width/height/channels.
+				// The golden's content identity, tying a trained transform to the
+				// image rather than to how it was delivered. Lazy and memoised:
+				// needed when training, and otherwise only to settle a cheap-key
+				// mismatch that would refuse a good record on every frame. Raw
+				// geometry rides along because the same bytes decode into a
+				// different image under a different width/height/channels.
 				const goldenContentKey = async () => {
 					const suffix = cfg.raw
 						? `:${cfg.raw.width}x${cfg.raw.height}x${cfg.raw.channels}`
@@ -751,10 +531,7 @@ module.exports = (RED) => {
 					const memoKey = `${goldenKey}${suffix}`;
 					if (memo && memo.key === memoKey) return memo.contentKey;
 					const { buffer } = await loadImage(goldenSource, "golden reference");
-					const contentKey = `sha1:${crypto
-						.createHash("sha1")
-						.update(buffer)
-						.digest("hex")}${suffix}`;
+					const contentKey = `sha1:${sha1(buffer)}${suffix}`;
 					node.goldenContentKey = { key: memoKey, contentKey };
 					return contentKey;
 				};
@@ -783,13 +560,11 @@ module.exports = (RED) => {
 					);
 				}
 
-				// The calibration measures mm/px on the calibration photo's own
-				// native resolution; the formula converts across a golden rendered
-				// at a different one, so the mm numbers stay right - but an
-				// operator who calibrated on a 4096-wide capture and then feeds
-				// 1844-wide artwork should hear that the two framings differ.
-				// Keyed on its own flag so it cannot crowd out the golden-too-small
-				// warning for the same golden.
+				// The mm/px scale converts across a golden rendered at a different
+				// resolution than the calibration photo, so the mm numbers stay
+				// right - but the operator should hear that the two framings
+				// differ. Keyed on its own flag so it cannot crowd out the
+				// golden-too-small warning for the same golden.
 				if (
 					cfg.mmPerPixelNative != null &&
 					cfg.calibrationNativeWidth != null &&
@@ -808,26 +583,18 @@ module.exports = (RED) => {
 				}
 
 				// No fingerprint for the frame: it is different every time, so
-				// nothing is cached against it and the key was computed and
-				// thrown away. That was a SHA-1 of the whole payload on every
-				// message - 27ms of a 23MP framebuffer, for nothing.
+				// nothing is cached against it.
 				const { buffer: targetBuf, raw: targetRawFromSource } = await loadImage(
 					msg.payload,
 					"msg.payload",
 				);
 				cfg.targetRaw = targetRawGeometry(msg, msg.payload) || targetRawFromSource;
 				assertRawFits(targetBuf, cfg.targetRaw, "msg.payload");
-				// Copied into shared memory once, here, so the inspector gets a
-				// handle rather than tens of megabytes: ~12ms for a 23MP raw
-				// framebuffer against the ~600ms of frozen event loop it buys.
-				//
-				// It also narrows - but does not close - an old hazard: sharp
-				// decodes asynchronously from whatever buffer it was given, so
-				// a flow reusing its capture buffer could corrupt a decode
-				// already in progress. After this copy the decoder never sees
-				// the caller's memory, so mutation *during* the decode is no
-				// longer possible; mutation between send() and this line still
-				// is, and always was.
+				// Copied into shared memory once, so the inspector gets a handle
+				// rather than tens of megabytes, and so the decoder never reads
+				// the caller's buffer - a flow reusing its capture buffer can no
+				// longer corrupt a decode in progress. Mutation between send()
+				// and this line still can, and always could.
 				const frame = toShared(targetBuf).buffer;
 
 				// Training measures the rig's magnification and the press's
@@ -835,8 +602,7 @@ module.exports = (RED) => {
 				// later frame reuses them instead of re-deriving a constant.
 				// Send msg.golden alongside msg.payload to train from any two
 				// images without disturbing the node's configured golden.
-				const training =
-					msg.trainTransform == null ? node.trainTransform : !!msg.trainTransform;
+				const training = cfg.trainTransform;
 				let trainedScore = null;
 				let pinRefused = null;
 				if (!training && node.transformFilePath) {
@@ -861,12 +627,7 @@ module.exports = (RED) => {
 				// The nuisance map is independent of the trained transform:
 				// one pins magnification, the other says what "clean" looks
 				// like per block. A rig can sensibly have either alone.
-				const trainingNuisance =
-					msg.trainNuisance == null
-						? node.trainNuisance
-						: !!msg.trainNuisance;
-				cfg.trainNuisance = trainingNuisance;
-				cfg.noveltyThreshold = node.noveltyThreshold;
+				const trainingNuisance = cfg.trainNuisance;
 				if (!trainingNuisance && node.nuisancePath) {
 					const map = await nuisance.readNuisanceMap(node.nuisancePath, {
 						goldenKey,
@@ -964,15 +725,11 @@ module.exports = (RED) => {
 					);
 				}
 
-				// Nuisance-map training: fold this frame's background density
-				// grid into the running accumulator and rewrite the map. Every
-				// frame rewrites it, so a run can be stopped whenever it looks
-				// settled rather than having to declare its length up front -
-				// the file is ~66KB and training is not a production path.
-				//
-				// The operator's contract is the same one the golden itself
-				// has: these frames must be known-good. A defect trained in
-				// becomes a blind spot exactly where it sat.
+				// Nuisance-map training folds this frame's background density
+				// grid into the running accumulator and rewrites the map, every
+				// frame, so a run can be stopped whenever it looks settled. The
+				// frames must be known-good: a defect trained in becomes a blind
+				// spot exactly where it sat.
 				if (trainingNuisance) {
 					const bg = result.backgroundBlemish;
 					if (!node.nuisancePath) {
@@ -1064,21 +821,9 @@ module.exports = (RED) => {
 					stagesMs: Math.round(result.timings.stagesMs),
 					totalMs: Math.round(performance.now() - totalStart),
 				};
-				if (result.printBlemish.heatmap) {
-					msg.printHeatmap = result.printBlemish.heatmap;
-				} else {
-					delete msg.printHeatmap;
-				}
-				if (result.backgroundBlemish.heatmap) {
-					msg.backgroundHeatmap = result.backgroundBlemish.heatmap;
-				} else {
-					delete msg.backgroundHeatmap;
-				}
-				if (result.stages) {
-					msg.stages = result.stages;
-				} else {
-					delete msg.stages;
-				}
+				setOrDelete(msg, "printHeatmap", result.printBlemish.heatmap);
+				setOrDelete(msg, "backgroundHeatmap", result.backgroundBlemish.heatmap);
+				setOrDelete(msg, "stages", result.stages);
 
 				send(msg);
 
@@ -1128,9 +873,8 @@ module.exports = (RED) => {
 				done();
 			} catch (err) {
 				node.status({ fill: "red", shape: "ring", text: "error" });
-				// done(err) routes the failure through node.error exactly
-				// once; an explicit node.error here reported every failure
-				// twice (double log lines, Catch nodes firing twice)
+				// done(err) is the one failure path; a node.error here as well
+				// would report every failure twice
 				done(err);
 			}
 		});

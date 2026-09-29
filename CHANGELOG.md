@@ -90,6 +90,15 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Changed
 
+- **`golden-compare` declares each setting once.** The forty settings were
+  clamped by hand twice - once off the node config, once off the message -
+  and their bounds kept in a third place; `loadImage` and
+  `fingerprintImage` each classified the source their own way with the
+  same three error strings. A `SETTINGS` table now carries every default,
+  clamp and override rule, read by two loops, and one `locateSource` feeds
+  both loaders. Behaviour, defaults, bounds and error messages are
+  unchanged; `test/editorDefaults.test.js` reads the table against the
+  editor's defaults, and the node is a quarter shorter.
 - **Every node's status ends with the time the frame took.** `golden-compare`
   and `barcode-locate` showed a time; `checkerboard-calibrate`, `label-crop`
   and `line-finder` showed none, and `perspective-rectify` showed only the
