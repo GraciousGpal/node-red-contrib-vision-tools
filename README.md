@@ -399,12 +399,18 @@ summed-area tables, the density sweeps, pixel polish, and the final global
 warp; local tile refinement and the blemish policy still run afterward.
 `result.transform.native` reports which path produced the frame.
 
-The native result is accepted only when it stays inside `maxAngleDeg`,
-remains within 3% of each trained magnification, and its full-resolution
-disagreement score is at most 0.15. Otherwise the same frame falls back to
-the trained JS alignment and `result.transform.nativeFallback` explains
-why, so OpenCV cannot explain small artwork differences as large
-scale/stretch changes.
+The native result is accepted only when it stays inside `maxAngleDeg` and,
+under a trained transform, within 3% of each trained magnification; a
+result that fails either falls back to the JS alignment and
+`result.transform.nativeFallback` explains why, so OpenCV cannot explain
+small artwork differences as large scale/stretch changes. Without a
+trained transform there is no magnification to hold it to, and a
+full-resolution disagreement score above 0.15 falls back instead. Under a
+pin that score is deliberately *not* a gate: disagreement cannot tell a
+misaligned frame from a defective one, and gating on it sent every heavily
+defective print through the full JS search (seconds on the rig, against
+~70ms) to reach the same verdict. A validated native alignment is kept and
+the disagreement is reported as the defect it is.
 
 This prototype is intentionally **not result-compatible** with the JS path.
 OpenCV fits an unrestricted affine transform (including shear), uses nearest

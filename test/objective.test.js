@@ -25,6 +25,7 @@ const sharp = require("sharp");
 const {
 	neighbourhood,
 	polish,
+	POLISH_MAX_ROUNDS,
 	reanchor,
 	findTransform,
 	buildGoldenSignature,
@@ -250,6 +251,29 @@ test("polling stops when nothing improves", async () => {
 	const start = { ...frame.truth, score: Infinity };
 	await polish(async (cands) => cands.map(score), start, OW * 4, OH * 4, 2, false);
 	assert.ok(calls <= 1 + 5 * 14, `polished ${calls} times without ever improving`);
+});
+
+test("a step size that never stops improving is cut off after POLISH_MAX_ROUNDS", async () => {
+	// an objective with no floor - every probe toward +ox is an improvement
+	// - is what a heavily defective frame presents; the polish must give up
+	// on it rather than walk until the frame runs out
+	const stepSizes = 5;
+	let batches = 0;
+	const score = (c) => -c.ox;
+	const start = { mx: 2, my: 2, theta: 0, ox: 0, oy: 0, score: Infinity };
+	const end = await polish(
+		async (cands) => {
+			batches++;
+			return cands.map(score);
+		},
+		start,
+		800,
+		600,
+		2,
+		false,
+	);
+	assert.strictEqual(batches, 1 + stepSizes * POLISH_MAX_ROUNDS);
+	assert.ok(end.ox > start.ox, "it still moved while it could");
 });
 
 test("a neighbourhood is built from one centre only", () => {

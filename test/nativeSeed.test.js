@@ -173,7 +173,45 @@ test("the fast native path bypasses JS search and warp", async () => {
 	}
 });
 
-test("a poor native score falls back to the JS alignment", async () => {
+test("without a pin, a poor native score falls back to the JS alignment", async () => {
+	nativeSeed._setEngine({
+		async imageAlign(reference) {
+			const inverted = Buffer.alloc(reference.data.length);
+			for (let i = 0; i < inverted.length; i++) {
+				inverted[i] = 255 - reference.data[i];
+			}
+			return {
+				success: true,
+				image: {
+					data: inverted,
+					width: reference.width,
+					height: reference.height,
+					channels: 1,
+				},
+				transformMatrix: { matrix2x3: [1, 0, 0, 0, 1, 0] },
+			};
+		},
+	});
+	try {
+		const goldenBuf = await sharp(svg(400, 560)).png().toBuffer();
+		const golden = await prepareGolden(goldenBuf, CFG);
+		const result = await compareFrame(goldenBuf, golden, {
+			...CFG,
+			nativeFastAlign: true,
+		});
+		assert.strictEqual(result.transform.native, false);
+		assert.match(result.transform.nativeFallback, /OpenCV score/);
+		assert.strictEqual(result.transform.score, 0);
+	} finally {
+		nativeSeed._resetEngine();
+	}
+});
+
+test("under a pin, a validated native alignment is kept however poor its score", async () => {
+	// The same inverted canvas: every pixel disagrees, so the score is as
+	// bad as it gets. But the transform matches the pin exactly, which is
+	// the misalignment check - so the disagreement is reported as the
+	// defect it would be, not spent on a second alignment.
 	nativeSeed._setEngine({
 		async imageAlign(reference) {
 			const inverted = Buffer.alloc(reference.data.length);
@@ -200,8 +238,42 @@ test("a poor native score falls back to the JS alignment", async () => {
 			pinnedScale: { mx: 1, my: 1 },
 			nativeFastAlign: true,
 		});
+		assert.strictEqual(result.transform.native, true);
+		assert.ok(!result.transform.nativeFallback, "no fallback was taken");
+		assert.ok(result.transform.score > 0.15, `score ${result.transform.score}`);
+		assert.strictEqual(result.pass, false);
+		assert.strictEqual(result.timings.tableMs, 0, "the JS search did not run");
+	} finally {
+		nativeSeed._resetEngine();
+	}
+});
+
+test("under a pin, a native transform off the trained scale still falls back", async () => {
+	nativeSeed._setEngine({
+		async imageAlign(reference) {
+			return {
+				success: true,
+				image: {
+					data: Buffer.from(reference.data),
+					width: reference.width,
+					height: reference.height,
+					channels: 1,
+				},
+				// 10% off the pin on x: outside validateAlignment's 3%
+				transformMatrix: { matrix2x3: [1.1, 0, 0, 0, 1, 0] },
+			};
+		},
+	});
+	try {
+		const goldenBuf = await sharp(svg(400, 560)).png().toBuffer();
+		const golden = await prepareGolden(goldenBuf, CFG);
+		const result = await compareFrame(goldenBuf, golden, {
+			...CFG,
+			pinnedScale: { mx: 1, my: 1 },
+			nativeFastAlign: true,
+		});
 		assert.strictEqual(result.transform.native, false);
-		assert.match(result.transform.nativeFallback, /OpenCV score/);
+		assert.match(result.transform.nativeFallback, /scale drift/);
 		assert.strictEqual(result.transform.score, 0);
 	} finally {
 		nativeSeed._resetEngine();

@@ -90,6 +90,20 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Changed
 
+- **`golden-compare` fails as fast as it passes.** With the OpenCV fast
+  path on and a trained transform, a heavily defective print took 0.4-6.6s
+  against 0.27s for a pass, all of it in alignment: the native result was
+  thrown away whenever more than 15% of pixels disagreed with the golden,
+  and the frame re-run through the full JS search. Disagreement cannot
+  tell a misaligned frame from a defective one, and under a pin it does
+  not have to - the native transform has already been held to the trained
+  scale and the angle limit - so that gate now applies only to the
+  unpinned search, and a validated native alignment is kept with its
+  disagreement reported as the defect it is. The JS polish is bounded too:
+  a step size may improve for at most `POLISH_MAX_ROUNDS` (8) rounds
+  before the next takes over. A clean frame converges in two to four; a
+  defective one has no floor to settle on and used to wander for seconds.
+  Every step size still runs.
 - **`golden-compare` declares each setting once.** The forty settings were
   clamped by hand twice - once off the node config, once off the message -
   and their bounds kept in a third place; `loadImage` and
