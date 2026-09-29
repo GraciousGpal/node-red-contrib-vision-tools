@@ -192,6 +192,18 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Fixed
 
+- **A frame with no label in it passed.** Two blank frames in the rig's
+  bad set - paper and a sliver of tray, nothing printed - went through
+  every check, and one passed: the search sat at nominal because every
+  placement scored alike, so position passed; the alignment residual was
+  the golden's own ink fraction, under the mismatch threshold; and with
+  `inkMargin` 64 the ambiguity band covered the whole canvas and voided
+  every blemish claim, so both ratios were zero. Nothing asked whether
+  the golden's ink was in the frame at all. Now `match.coverage` is that
+  fraction, measured on the aligned mask, and under `minCoverage`
+  (default 0.5, 0 disables) the part fails as `labelMissing` with the
+  reason stated and a `label missing?` status. A badly printed part
+  covers 90%+; the blank frames cover about 0.
 - **A rotated part is no longer charged an offset it does not have.**
   Position was measured at the golden's top-left corner, which a
   rotation about the label's centre moves by half the label's height

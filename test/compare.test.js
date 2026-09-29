@@ -285,6 +285,38 @@ test("a part seated slightly off square is measured as an angle", async () => {
 	);
 });
 
+test("a frame with none of the golden's ink in it fails, whatever the ambiguity band hides", async () => {
+	const goldenBuf = await png(labelSvg(900, 1200));
+	// the rig's own blank frame: paper, a strip of tray, nothing printed,
+	// and shorter than the label. With inkMargin 64 the ambiguity band
+	// voids every blemish claim and the search sits at nominal, so before
+	// coverage this passed as a clean part.
+	const blank = await sharp(
+		Buffer.from(
+			`<svg xmlns="http://www.w3.org/2000/svg" width="1000" height="400">` +
+				`<rect width="100%" height="100%" fill="#e8ece8"/>` +
+				`<rect width="30" height="100%" fill="#777"/></svg>`,
+		),
+	)
+		.png()
+		.toBuffer();
+	const golden = await prepareGolden(goldenBuf, cfg({ inkMargin: 64 }));
+	const r = await compareFrame(
+		blank,
+		golden,
+		cfg({ inkMargin: 64, pinnedScale: { mx: 1, my: 1 } }),
+	);
+	assert.ok(r.match.coverage < 0.1, `coverage ${r.match.coverage}`);
+	assert.strictEqual(r.match.labelMissing, true);
+	assert.strictEqual(r.pass, false);
+	assert.match(r.match.reason, /label missing/);
+	// and a part that is there is not "missing", however wide the band
+	const there = await compareFrame(goldenBuf, golden, cfg({ inkMargin: 64 }));
+	assert.ok(there.match.coverage > 0.9, `coverage ${there.match.coverage}`);
+	assert.strictEqual(there.match.labelMissing, false);
+	assert.strictEqual(there.pass, true);
+});
+
 test("otsu absorbs a uniform exposure shift that a fixed level would not", async () => {
 	const goldenBuf = await png(labelSvg(900, 1200));
 	// The same part photographed darker: dark enough that the substrate

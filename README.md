@@ -327,7 +327,7 @@ defective, and a flawless part can look ruined because the golden is
 wrong.
 
 ```js
-match: { score, grade, mismatchSuspected, reason }
+match: { score, grade, coverage, labelMissing, mismatchSuspected, reason }
 ```
 
 `score` is the alignment residual, `grade` is `good` (< 0.06) / `marginal`
@@ -349,6 +349,18 @@ both directions and everywhere. So the claim needs poor registration
 genuinely bad part out of it — the worst real one here registers at 0.10
 but its two ratios are 0.006 and 0.011, lopsided and an order of magnitude
 low. `mismatchScore: 0` disables it.
+
+`coverage` is the fraction of the golden's ink that is ink in the aligned
+frame, and `labelMissing` is that fraction under `minCoverage` (default
+0.5; 0 disables). It exists because every other check asks what is wrong
+with the label and assumes there is one. A blank tray answered all of them
+"nothing": the search sat at nominal because every placement scored
+alike, a wide `inkMargin` voided every blemish claim as ambiguous, and
+the frame passed. A badly printed part still covers 90%+, a blank frame
+about 0, and the wrong artwork lands between - which also catches the
+mismatch case when the ambiguity band hides the saturation the flag above
+needs. A `labelMissing` frame fails, `reason` says so, and the status
+reads `label missing?`.
 
 ### Speed
 
@@ -393,7 +405,7 @@ Per-message overrides:
 `msg.alignSearch`, `msg.scaleSearchMin`/`Max`/`Steps`, `msg.maxAspect`,
 `msg.aspectSteps`, `msg.maxAngleDeg`, `msg.angleSteps`,
 `msg.alignCandidates`, `msg.localAlign`, `msg.localAlignTile`,
-`msg.localAlignMax`, `msg.workers`, `msg.mismatchScore`,
+`msg.localAlignMax`, `msg.workers`, `msg.mismatchScore`, `msg.minCoverage`,
 `msg.trainTransform`, `msg.trainNuisance`, `msg.nativeAlignSeed`,
 `msg.nativeFastAlign`,
 `msg.positionToleranceXMm`/`YMm`/`XPx`/`YPx`/`AngleDeg`, `msg.blockSize`,
@@ -490,7 +502,7 @@ trusting it.
 
 - `msg.payload` — `true`/`false` overall pass
 - `msg.result` —
-  `{ pass, position: { dxPx, dyPx, dxMm, dyMm, angleDeg, anglePass, scale, scaleX, scaleY, stretchPercent, pass }, transform: { pinned, native, nativeFallback?, seeded, pinRefused?, scaleX, scaleY, scale, stretchPercent, angleDeg, ox, oy, score }, match: { score, grade, mismatchSuspected, reason }, thresholds: { golden, target }, localAlign: { tiles, localised, meanPx, medianPx, maxPx }, printBlemish: { pass, defectRatio, regions: [{x,y,w,h,density,avgDensity,cells}] }, backgroundBlemish: { pass, defectRatio, regions, worstExcess, noveltyPass } }`
+  `{ pass, position: { dxPx, dyPx, dxMm, dyMm, angleDeg, anglePass, scale, scaleX, scaleY, stretchPercent, pass }, transform: { pinned, native, nativeFallback?, seeded, pinRefused?, scaleX, scaleY, scale, stretchPercent, angleDeg, ox, oy, score }, match: { score, grade, coverage, labelMissing, mismatchSuspected, reason }, thresholds: { golden, target }, localAlign: { tiles, localised, meanPx, medianPx, maxPx }, printBlemish: { pass, defectRatio, regions: [{x,y,w,h,density,avgDensity,cells}] }, backgroundBlemish: { pass, defectRatio, regions, worstExcess, noveltyPass } }`
   (region coordinates in the working-resolution image, same size as the
   heat maps — not the original camera resolution). `transform` is the raw
   recovered placement in frame-canvas pixels: `pinned` reports whether a

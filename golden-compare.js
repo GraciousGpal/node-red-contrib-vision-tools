@@ -74,6 +74,10 @@ module.exports = (RED) => {
 		workers: { value: 0, int: [0, 64] },
 		// 0 disables the "this is a different label" check entirely
 		mismatchScore: { value: 0.15, float: [0, 1] },
+		// the fraction of the golden's ink that must be in the frame for
+		// there to be a label to judge; 0 disables. A blank tray passed
+		// every other check on the rig - see gradeMatch in lib/compare.js.
+		minCoverage: { value: 0.5, float: [0, 1] },
 		localAlign: { value: true },
 		localAlignTile: { value: 96, int: [16, 512] },
 		localAlignMax: { value: 3, int: [1, 16] },
@@ -846,11 +850,12 @@ module.exports = (RED) => {
 				// Said before the pass/fail line, because it changes what that
 				// line means: every number below it is a comparison against
 				// something that is not this label.
-				if (result.match.mismatchSuspected) {
+				if (result.match.mismatchSuspected || result.match.labelMissing) {
 					node.warn(`golden-compare: ${result.match.reason}`);
 				}
 
 				const failedParts = [];
+				if (result.match.labelMissing) failedParts.push("coverage");
 				if (!result.position.pass) failedParts.push("position");
 				if (!result.printBlemish.pass) failedParts.push("print");
 				if (!result.backgroundBlemish.pass) failedParts.push("background");
@@ -858,7 +863,9 @@ module.exports = (RED) => {
 					fill: result.pass ? "green" : "red",
 					shape: result.pass ? "dot" : "ring",
 					text:
-						(result.match.mismatchSuspected
+						(result.match.labelMissing
+							? `label missing? · ${Math.round(result.match.coverage * 100)}% of ink`
+							: result.match.mismatchSuspected
 							? `different label? · align ${result.match.score.toFixed(3)}`
 							: result.pass
 								? `pass · align ${result.match.score.toFixed(3)}`
@@ -873,8 +880,12 @@ module.exports = (RED) => {
 					` angle=${pos.angleDeg.toFixed(2)}deg scale=${pos.scale.toFixed(3)}` +
 					` stretch=${pos.stretchPercent.toFixed(2)}%` +
 					(result.transform.pinned ? " pinned" : "");
-				const matchStr = `align(${result.match.grade} ${result.match.score.toFixed(4)}${
-					result.match.mismatchSuspected ? " DIFFERENT-LABEL?" : ""
+				const matchStr = `align(${result.match.grade} ${result.match.score.toFixed(4)} cov=${result.match.coverage.toFixed(2)}${
+					result.match.labelMissing
+						? " LABEL-MISSING?"
+						: result.match.mismatchSuspected
+							? " DIFFERENT-LABEL?"
+							: ""
 				}) `;
 				// which way the frame was aligned, and the align time by stage,
 				// so a slow frame says where it was slow without a debug node

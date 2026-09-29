@@ -68,6 +68,7 @@ function defaultCfg() {
 		alignCandidates: 5,
 		workers: 0,
 		mismatchScore: 0.15,
+		minCoverage: 0.5,
 		localAlign: true,
 		localAlignTile: 96,
 		localAlignMax: 3,
