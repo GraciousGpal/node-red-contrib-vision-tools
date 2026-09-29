@@ -213,7 +213,10 @@ verdict by different routes.
 4. **Position check**: the recovered placement is compared against
    tolerance bands around *nominal* — centered in the available margin and
    square to the frame, which reduces to a tolerance around exactly
-   `(0,0)` when target and golden are already the same size. Offsets in
+   `(0,0)` when target and golden are already the same size. The offset
+   is measured at the label's centre, so a part rotated about its centre
+   reports the rotation and no offset; at the corner, half the label's
+   height times the sine of the angle would be charged as one. Offsets in
    mm if `scaleFilePath` points at a calibration baseline (see below),
    else in px. Rotation is gated separately, in degrees, against
    `positionToleranceAngleDeg`: a part that is offset and a part that is

@@ -274,6 +274,15 @@ test("a part seated slightly off square is measured as an angle", async () => {
 		`expected a ~1.2 degree rotation, got ${r.transform.angleDeg.toFixed(2)}`,
 	);
 	assert.strictEqual(typeof r.position.anglePass, "boolean");
+	// sharp rotates about the centre, so the part has not moved: the
+	// offset must say so. Measured at the golden's corner it read ~10px
+	// here - half the label's height times sin(1.2 degrees) - and on the
+	// synthetic benchmark that charged clean parts with offsets they did
+	// not have.
+	assert.ok(
+		Math.abs(r.position.dxPx) <= 3 && Math.abs(r.position.dyPx) <= 3,
+		`a rotation about the centre is not an offset: dx ${r.position.dxPx} dy ${r.position.dyPx}`,
+	);
 });
 
 test("otsu absorbs a uniform exposure shift that a fixed level would not", async () => {

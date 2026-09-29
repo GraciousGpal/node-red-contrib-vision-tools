@@ -109,6 +109,19 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Changed
 
+- **`golden-compare` searches scale on a 4% ladder, not 8%.**
+  `scaleSearchSteps` defaults to 37 over 0.6-2.5 instead of 19. The
+  joint refine did not always bridge an 8% rung: on the synthetic
+  benchmark's clean frames the recovered scale was 0.31% off on average
+  and the angle 0.04 degrees, enough over a 2100px label to leave a
+  residual on every stroke and fail a clean part on both blemish
+  channels. At 37 rungs the errors are 0.08% and 0.02 degrees, clean
+  false fails went from 15 to 10 of 34, and the frame is no slower - a
+  search that starts nearer finishes sooner. Recall on the set fell from
+  48% to 39%, and that is honest: 11 of the 15 detections lost were on
+  frames carrying 350-630 residue regions, one of which happened to
+  cover the defect. A trained transform pins the scale and does not use
+  the ladder; training does, and pins better for it.
 - **`golden-compare` fails as fast as it passes.** With the OpenCV fast
   path and seed on and a trained transform, a heavily defective print
   took 0.5-8s against 0.15s for a pass, all of it in alignment. The rig's
@@ -179,6 +192,13 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Fixed
 
+- **A rotated part is no longer charged an offset it does not have.**
+  Position was measured at the golden's top-left corner, which a
+  rotation about the label's centre moves by half the label's height
+  times sin(theta): 12-14px at 0.7 degrees on a 2100px label, against a
+  16px tolerance. Three of the synthetic benchmark's 34 clean frames
+  failed on position for exactly that. dx/dy are now measured at the
+  label's centre; at zero rotation the two are identical.
 - **Two-level artwork used at native working size had no ink.** Otsu's
   between-class variance is the same at every level between the modes
   of a histogram with an empty gap - pure black-on-white artwork, or a
