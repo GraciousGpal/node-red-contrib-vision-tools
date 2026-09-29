@@ -107,6 +107,8 @@ authoritative list.
 | `barcode-locate.js` | Node-RED wiring for the barcode-locate node: scans pre-defined regions, then the full image if nothing is found; one message per barcode, `msg.regions`/`msg.mode` overrides |
 | `lib/locate.js` | barcode location and decode on zxing-wasm (zxing-cpp as WASM): decodes the union bounding box of the regions via sharp's extract-on-load, whole-frame fallback; plain functions over Buffers |
 | `lib/nuisanceMap.js` | trained per-block baseline of what "clean" looks like, so a recurring registration artifact stops masking a real blemish |
+| `synthetic-defects.js` | Node-RED wiring for the synthetic-defects node: emits a frame set one message at a time with its golden and ground truth attached; a test bench for `golden-compare`, not a production node |
+| `lib/synth/` | the synthetic frame generator, shipped in the package so the node can use it: `prng.js` (one seeded stream), `label.js` (the drawn golden), `defects.js` (the defect library, ground truth measured by diffing), `capture.js` (the camera model), `cases.js` (the case plan and a lazy async generator over it). `bench/synth/generate.js` writes a set to disk over the same `cases.js`, so the CLI and the node emit identical frames |
 
 ## The geometry model
 

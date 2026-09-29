@@ -29,6 +29,8 @@ const STRUCTURAL = new Set(["id", "type", "z", "x", "y", "wires", "g", "d", "l"]
 const EDITORS = {
 	"line-finder": "line-finder.html",
 	"label-crop": "label-crop.html",
+	"golden-compare": "golden-compare.html",
+	"synthetic-defects": "synthetic-defects.html",
 };
 
 /** The keys of a node's editor `defaults`, the way editorMarkup reads them. */

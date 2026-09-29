@@ -40,7 +40,8 @@
       "perspective-rectify": "perspective-rectify.js",
       "label-crop": "label-crop.js",
       "line-finder": "line-finder.js",
-      "barcode-locate": "barcode-locate.js"
+      "barcode-locate": "barcode-locate.js",
+      "synthetic-defects": "synthetic-defects.js"
     }
   },
   "scripts": {

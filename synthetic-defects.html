@@ -1,0 +1,268 @@
+<script type="text/html" data-template-name="synthetic-defects">
+  <div class="form-row">
+    <label for="node-input-name"><i class="fa fa-tag"></i> Name</label>
+    <input type="text" id="node-input-name" placeholder="Name" />
+  </div>
+
+  <div class="form-row">
+    <label for="node-input-seed"><i class="fa fa-random"></i> Seed</label>
+    <input type="text" id="node-input-seed" style="width:100px;" />
+    <span class="node-input-hint" style="margin-left:10px; color:#999;"
+      >the same seed reproduces the same frames byte for byte</span
+    >
+  </div>
+
+  <div class="form-row">
+    <label for="node-input-perVariant"><i class="fa fa-clone"></i> Per variant</label>
+    <input type="text" id="node-input-perVariant" style="width:100px;" />
+    <span class="node-input-hint" style="margin-left:10px; color:#999;"
+      >frames per (family, variant, severity) - 1 is ~87 frames</span
+    >
+  </div>
+
+  <div class="form-row">
+    <label for="node-input-preset"><i class="fa fa-camera"></i> Capture</label>
+    <select id="node-input-preset" style="width:70%;">
+      <option value="clean-rig">clean-rig - good optics, even light, no JPEG</option>
+      <option value="typical">typical - a normal line camera</option>
+      <option value="harsh">harsh - soft, noisy, uneven, JPEG</option>
+    </select>
+  </div>
+
+  <div class="form-row">
+    <label><i class="fa fa-bug"></i> Families</label>
+    <span class="node-input-hint" style="color:#999;"
+      >clean frames are always included - they are the false-alarm measurement</span
+    >
+  </div>
+  <div class="form-row" style="margin-left:110px;">
+    <input type="checkbox" id="node-input-scratch" style="width:auto;vertical-align:middle;" />
+    <label for="node-input-scratch" style="width:auto;">scratch</label>
+    <input type="checkbox" id="node-input-mark" style="width:auto;vertical-align:middle;margin-left:12px;" />
+    <label for="node-input-mark" style="width:auto;">mark</label>
+    <input type="checkbox" id="node-input-misprint" style="width:auto;vertical-align:middle;margin-left:12px;" />
+    <label for="node-input-misprint" style="width:auto;">misprint</label>
+    <input type="checkbox" id="node-input-overprint" style="width:auto;vertical-align:middle;margin-left:12px;" />
+    <label for="node-input-overprint" style="width:auto;">overprint</label>
+    <input type="checkbox" id="node-input-random" style="width:auto;vertical-align:middle;margin-left:12px;" />
+    <label for="node-input-random" style="width:auto;">random</label>
+  </div>
+
+  <div class="form-row">
+    <label><i class="fa fa-sliders"></i> Severities</label>
+  </div>
+  <div class="form-row" style="margin-left:110px;">
+    <input type="checkbox" id="node-input-tiny" style="width:auto;vertical-align:middle;" />
+    <label for="node-input-tiny" style="width:auto;">tiny</label>
+    <input type="checkbox" id="node-input-small" style="width:auto;vertical-align:middle;margin-left:12px;" />
+    <label for="node-input-small" style="width:auto;">small</label>
+    <input type="checkbox" id="node-input-medium" style="width:auto;vertical-align:middle;margin-left:12px;" />
+    <label for="node-input-medium" style="width:auto;">medium</label>
+    <input type="checkbox" id="node-input-large" style="width:auto;vertical-align:middle;margin-left:12px;" />
+    <label for="node-input-large" style="width:auto;">large</label>
+  </div>
+
+  <div class="form-row">
+    <label for="node-input-intervalMs"><i class="fa fa-clock-o"></i> Interval</label>
+    <input type="text" id="node-input-intervalMs" style="width:100px;" />
+    <span class="node-input-hint" style="margin-left:10px; color:#999;"
+      >ms between frames, so a person can watch them go past. 0 = as fast as they generate</span
+    >
+  </div>
+
+  <div class="form-row">
+    <label><i class="fa fa-file-image-o"></i> Label size</label>
+    <span class="node-input-hint" style="color:#999;"
+      >only used when <code>msg.payload</code> is empty and the golden is drawn from scratch</span
+    >
+  </div>
+  <div class="form-row" style="margin-left:110px;">
+    <label for="node-input-width" style="width:auto;">width</label>
+    <input type="text" id="node-input-width" style="width:80px;margin-left:6px;" />
+    <label for="node-input-height" style="width:auto;margin-left:12px;">height</label>
+    <input type="text" id="node-input-height" style="width:80px;margin-left:6px;" />
+  </div>
+</script>
+
+<script type="text/html" data-help-name="synthetic-defects">
+  <p>
+    A frame source for testing <code>golden-compare</code>: it takes a
+    golden, paints known defects into it, photographs each result through a
+    camera model, and emits the frames one message at a time with the exact
+    ground truth attached. It is the same generator
+    <code>bench/synth/</code> uses offline, so what you watch here is what
+    the benchmark scores.
+  </p>
+  <p>
+    <b>This is a test-bench node, not a production one.</b> It makes
+    pictures of faults; it never inspects anything. Nothing here belongs on
+    a running line.
+  </p>
+
+  <h3>Input</h3>
+  <p>
+    <code>msg.payload</code> - the golden artwork: Buffer / Uint8Array /
+    ArrayBuffer, a file path string, an object with
+    <code>data</code>/<code>buffer</code>/<code>path</code>, or a raw
+    <code>{ data, width, height, channels }</code> descriptor - the same
+    forms <code>golden-compare</code> accepts. If it is empty or absent, a
+    synthetic label is drawn from scratch at the configured width and
+    height: glyph-shaped type down to 1-3px strokes, a barcode, a ruled
+    table, a solid logo, a hairline border.
+  </p>
+  <p>
+    Per-message overrides: <code>msg.seed</code>,
+    <code>msg.perVariant</code>, <code>msg.preset</code>,
+    <code>msg.families</code> (array of family names),
+    <code>msg.severities</code> (array), <code>msg.intervalMs</code>.
+  </p>
+  <p>
+    A new message while a run is still going stops that run and starts a
+    fresh one.
+  </p>
+
+  <h3>Output 1 - one message per frame</h3>
+  <ul>
+    <li><code>msg.payload</code> - the frame image bytes, PNG or JPEG depending on the capture</li>
+    <li><code>msg.golden</code> - the golden as a PNG Buffer</li>
+    <li><code>msg.goldenKey</code> - <code>synth:&lt;seed&gt;:&lt;sha1&gt;</code>, so the golden is prepared once for the whole run</li>
+    <li><code>msg.filename</code> - <code>&lt;id&gt;.png</code> / <code>.jpg</code></li>
+    <li>
+      <code>msg.synth</code> -
+      <code>{ id, index, total, family, variant, severity, preset, capture, defects, expected }</code>.
+      <code>variant</code> and <code>severity</code> are <code>null</code>
+      on a clean frame; <code>capture</code> records every sampled camera
+      parameter; <code>defects</code> is the measured ground truth;
+      <code>expected</code> is <code>{ pass, channels }</code>.
+    </li>
+  </ul>
+  <p>
+    Messages are built fresh - only <code>msg.topic</code> is carried over
+    from the input.
+  </p>
+
+  <h3>Output 2 - the golden, once, first</h3>
+  <ul>
+    <li><code>msg.payload</code> - the golden as a PNG Buffer</li>
+    <li><code>msg.filename</code> - <code>golden.png</code></li>
+    <li>
+      <code>msg.synth</code> -
+      <code>{ kind: "golden", width, height, source, total }</code>, where
+      <code>source</code> is <code>"synthetic"</code> or
+      <code>"input"</code> and <code>total</code> is how many frames are
+      about to follow on output 1.
+    </li>
+  </ul>
+
+  <h3>Wiring it into golden-compare</h3>
+  <p>
+    Wire output 1 straight into <code>golden-compare</code>.
+    <code>golden-compare</code> reads <code>msg.golden</code> and
+    <code>msg.goldenKey</code>, so every frame is compared against the very
+    golden it was made from - no golden path to configure, and the
+    reference is prepared once rather than per frame. Then put a debug node
+    on <code>msg.result</code> and another on
+    <code>msg.synth.expected</code> and read them side by side: a frame
+    whose <code>expected.pass</code> is <code>false</code> and whose
+    <code>result.pass</code> is <code>true</code> is a miss; the reverse is
+    a false alarm on a part that was supposed to pass. An image preview on
+    <code>msg.payload</code> shows you the defect that produced it. Raise
+    the interval if the frames go past too fast to look at.
+  </p>
+  <p>
+    For a scored run - recall per family and severity, false-fail rate,
+    timing percentiles - generate a set to disk with
+    <code>bench/synth/generate.js</code> and score it with
+    <code>bench/synth/run.js</code>. That is the measurement; this node is
+    the look.
+  </p>
+
+  <h3>What the families do</h3>
+  <p>
+    <code>golden-compare</code> runs two independent blemish checks:
+    <b>print</b> - the golden has ink the frame is missing; <b>background</b>
+    - the frame has ink the golden never has. The <code>channel</code> in
+    each ground-truth object is <i>derived from the pixels</i>, by diffing
+    the raster before and after, not from the family name. So these are the
+    usual outcomes rather than guarantees:
+  </p>
+  <table style="width:100%; border-collapse:collapse;">
+    <tr><th align="left">family / variant</th><th align="left">usually</th><th align="left">why</th></tr>
+    <tr><td><code>scratch light</code></td><td>print</td><td>removes ink, so it only shows where it crosses type</td></tr>
+    <tr><td><code>scratch dark</code></td><td>background</td><td>lays ink on blank paper</td></tr>
+    <tr><td><code>mark ink</code> / <code>smudge</code> / <code>spatter</code></td><td>background</td><td>dark blobs on paper; <code>smudge</code> is partial-opacity grey and can fall under the floor</td></tr>
+    <tr><td><code>misprint void</code> / <code>dropout</code> / <code>streak</code></td><td>print</td><td>ink erased to paper - a patch, a whole glyph, a dead thermal-head column</td></tr>
+    <tr><td><code>misprint faded</code></td><td>print or <b>none</b></td><td>partial ink loss; a faint fade is under the floor and the part is supposed to pass</td></tr>
+    <tr><td><code>overprint ghost</code> / <code>bleed</code></td><td>background or <b>none</b></td><td>a second shifted impression, and ink spreading off existing strokes - where they land on existing ink they change nothing</td></tr>
+    <tr><td><code>overprint stroke</code> / <code>fill</code></td><td>background</td><td>an extra line, an extra filled block</td></tr>
+    <tr><td><code>random dust</code></td><td>background</td><td>specks on paper</td></tr>
+    <tr><td><code>random void-spots</code></td><td>print</td><td>white pinholes inside ink</td></tr>
+    <tr><td><code>random stain</code></td><td><b>none</b></td><td>15-40 grey levels off paper, by construction under the floor - this variant exists to check the background channel does <i>not</i> fire</td></tr>
+    <tr><td><code>random fold</code></td><td>both</td><td>a crease: a highlight that lifts ink and a shadow that lays it</td></tr>
+    <tr><td><code>random combo</code></td><td>mixed</td><td>two or three of the above on one part</td></tr>
+  </table>
+  <p>
+    A defect whose <code>channel</code> is <code>"none"</code> is a part the
+    node must still <b>pass</b>. That is the point of deriving the channel
+    instead of declaring it: the ground truth says what a defect did to the
+    pixels, not what its name promised.
+  </p>
+  <p>
+    The <code>clean</code> family is always included whatever the checkboxes
+    say - at least a tenth of the set, plus a couple of frames at each of
+    the other capture presets. Without them a detector that flags
+    everything scores perfectly.
+  </p>
+
+  <h3>Notes</h3>
+  <p>
+    A full default set at <i>per variant</i> 1 is 87 frames and roughly
+    165MB of image data; at 3 it is 257 frames. Frames are generated one at
+    a time as they are sent, so memory stays flat, but the whole run still
+    takes a second or so per frame at 1500x2100.
+  </p>
+  <p>
+    Nothing here is a customer image. The golden is either drawn from
+    scratch or the artwork you hand it, and every frame is synthesised from
+    that.
+  </p>
+</script>
+
+<script type="text/javascript">
+  RED.nodes.registerType("synthetic-defects", {
+    category: "vision",
+    color: "#B7950B",
+    defaults: {
+      // number(true) = blank allowed. Node-RED does not backfill new
+      // defaults into node instances saved before a property existed, so a
+      // strict validator marks every such node "invalid properties" the
+      // moment a setting is added.
+      name: { value: "" },
+      seed: { value: 1, validate: RED.validators.number(true) },
+      perVariant: { value: 1, validate: RED.validators.number(true) },
+      preset: { value: "typical" },
+      scratch: { value: true },
+      mark: { value: true },
+      misprint: { value: true },
+      overprint: { value: true },
+      random: { value: true },
+      tiny: { value: true },
+      small: { value: true },
+      medium: { value: true },
+      large: { value: true },
+      intervalMs: { value: 500, validate: RED.validators.number(true) },
+      width: { value: 1500, validate: RED.validators.number(true) },
+      height: { value: 2100, validate: RED.validators.number(true) },
+    },
+    inputs: 1,
+    outputs: 2,
+    outputLabels: ["frames", "golden"],
+    icon: "synthetic-defects.svg",
+    label: function () {
+      return this.name || "synthetic defects";
+    },
+    paletteLabel: function () {
+      return "synthetic defects";
+    },
+  });
+</script>

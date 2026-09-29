@@ -45,6 +45,11 @@ in [CHANGELOG.md](CHANGELOG.md).
   touched.
 - **`barcode-locate`** — finds and decodes 1D and 2D barcodes, optionally
   restricted to pre-defined pixel regions with a whole-image fallback.
+- **`synthetic-defects`** — a test bench, not a production node: takes a
+  golden and emits camera-like frames of it with known defects painted in,
+  one message at a time, each carrying the golden it was made from and the
+  exact ground truth, so a flow can watch what `golden-compare` says about
+  every defect family and size.
 
 Every node ends its status line with the time the frame took, `84ms` or
 `1.23s`: wall-clock from the message arriving to the verdict, previews and
@@ -398,6 +403,35 @@ frames, and will sweep any single setting (`--sweep blockThreshold=…`) to
 show what a change costs in one and buys in the other. A frame that fails
 for the wrong reason is scored as a `wrong-place`, not a detection — see
 `bench/synth/README.md`.
+
+### How `synthetic-defects` works
+
+The same generator, in the editor. `synthetic-defects` takes a golden on
+`msg.payload` — image bytes, a path, a raw pixel descriptor, or nothing at
+all, in which case it draws the synthetic label itself — and emits the
+frame set one message at a time on output 1, with the golden announced
+once on output 2 first. Every frame message carries `msg.payload` (the
+frame), `msg.golden` (the golden as PNG), `msg.goldenKey` (so
+`golden-compare` prepares that golden once for the whole run instead of
+re-hashing it per frame), `msg.filename`, and `msg.synth` — the case id,
+its position in the run, the family/variant/severity, every sampled
+camera parameter, the measured ground truth, and `expected`.
+
+Wire output 1 straight into `golden-compare`, which reads `msg.golden` and
+`msg.goldenKey` off the message, so each frame is compared against the
+very golden it was made from. Put a debug node on `msg.result` and another
+on `msg.synth.expected`, and an image preview on `msg.payload`, and the
+gap between what a defect is and what the node called it is visible frame
+by frame. An interval setting (500ms by default) paces the run so a person
+can watch it. `examples/synthetic-defects-into-golden-compare.json` is
+that flow.
+
+It is a look, not a measurement: for scored numbers — recall per family
+and severity, false-fail rate, timing percentiles, setting sweeps —
+generate a set to disk with `bench/synth/generate.js` and run
+`bench/synth/run.js` over it, offline, where frames go through strictly
+one at a time. Both read the same `lib/synth/`, so the frames are the
+same frames.
 
 Per-message overrides:
 `msg.threshold`, `msg.thresholdMode`, `msg.sauvolaRadius`, `msg.sauvolaK`,

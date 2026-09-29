@@ -5,7 +5,7 @@ truth, so `golden-compare`'s detection quality can be measured **per defect
 type and size** instead of by eye on a handful of real parts.
 
 Nothing here is a customer image. The golden is either drawn from scratch
-(`label.js`) or taken from a file path you pass in; frames are synthesised
+(`lib/synth/label.js`) or taken from a file path you pass in; frames are synthesised
 from it. Point `--out` at a directory outside the repository.
 
 ## Generating a set
@@ -23,7 +23,7 @@ node bench/synth/generate.js --out ./set --width 3000 --height 4200
 | `--golden` | — | use this artwork instead of a synthetic label (not copied into the repo; the decoded copy is written into `--out`) |
 | `--seed` | `1` | seeds everything; the same seed reproduces the set byte for byte |
 | `--per-variant` | `3` | frames per (family, variant, severity) |
-| `--preset` | `typical` | `clean-rig`, `typical` or `harsh` — see `capture.js` |
+| `--preset` | `typical` | `clean-rig`, `typical` or `harsh` — see `lib/synth/capture.js` |
 | `--width` / `--height` | `1500` / `2100` | synthetic golden size |
 
 The set is every (family, variant, severity) `--per-variant` times, plus a
@@ -85,13 +85,18 @@ can go and look at them.
 
 ## Files
 
+The library lives in `lib/synth/`, so the npm package ships it and the
+`synthetic-defects` Node-RED node emits the same frames this CLI writes.
+Only the command-line tools are under `bench/`.
+
 | file | what it is |
 | --- | --- |
-| `prng.js` | seeded mulberry32 plus `uniform` / `int` / `pick` / `gaussian` / `shuffle`. Every random choice goes through one of these. |
-| `label.js` | `syntheticLabel(w, h, seed)` → PNG of pure #000-on-#fff artwork: glyph-shaped type at three sizes down to 1–3px strokes, a barcode, a ruled table, a solid logo, a hairline border. No SVG `<text>` — fonts differ per machine and the set would stop reproducing. |
-| `defects.js` | the defect library and `applyDefect` / `applyDefects`. Ground truth is measured by diffing the raster, not declared. |
-| `capture.js` | `capture(raster, preset, prng)` — the camera model, and `capturePresets`. |
-| `generate.js` | the CLI above, and `generate(options)` for use from a script. |
+| `lib/synth/prng.js` | seeded mulberry32 plus `uniform` / `int` / `pick` / `gaussian` / `shuffle`. Every random choice goes through one of these. |
+| `lib/synth/label.js` | `syntheticLabel(w, h, seed)` → PNG of pure #000-on-#fff artwork: glyph-shaped type at three sizes down to 1–3px strokes, a barcode, a ruled table, a solid logo, a hairline border. No SVG `<text>` — fonts differ per machine and the set would stop reproducing. |
+| `lib/synth/defects.js` | the defect library and `applyDefect` / `applyDefects`. Ground truth is measured by diffing the raster, not declared. |
+| `lib/synth/capture.js` | `capture(raster, preset, prng)` — the camera model, and `capturePresets`. |
+| `lib/synth/cases.js` | `planCases` / `expectedFrom` / `makeCases` / `goldenRaster` - the case plan and a lazy async generator that yields one finished frame at a time, from one prng consumed in plan order. Shared by the CLI and the node. |
+| `bench/synth/generate.js` | the CLI above, and `generate(options)` for use from a script. |
 
 ## Manifest contract
 
@@ -167,7 +172,7 @@ runner scores what a defect did to the pixels, not what its name promised.
 axis — magnification, stretch, rotation, ink/paper levels, illumination
 gradient, vignette, blur, noise and JPEG quality — so a sweep can separate
 "the detector cannot find this defect" from "the detector cannot see
-through this photograph". The ranges are in `capture.js`; every sampled
+through this photograph". The ranges are in `lib/synth/capture.js`; every sampled
 value is recorded in the manifest.
 
 ## Tests

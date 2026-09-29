@@ -1,0 +1,179 @@
+[
+    {
+        "id": "sdb-note",
+        "type": "comment",
+        "z": "synth-bench-tab",
+        "name": "synthetic-defects feeds golden-compare the frames it made, with the answers",
+        "info": "`synthetic-defects` draws a label, paints a known defect into it,\nphotographs the result through a camera model, and sends one message\nper frame. Each frame carries the golden it was made from\n(`msg.golden`, plus `msg.goldenKey` so `golden-compare` prepares that\ngolden once for the whole run) and the exact ground truth\n(`msg.synth`).\n\nSo `golden-compare` here needs no golden path and no configuration at\nall: it takes the reference off the message. Read the two debug nodes\nside by side - `msg.result` is what the node decided,\n`msg.synth.expected` is what the frame actually contained. A frame\nwhose `expected.pass` is false and whose `result.pass` is true is a\nmiss; the reverse is a false alarm on a part that was supposed to\npass. Wire an image-preview node onto `msg.payload` to see the defect\nthat produced it.\n\nDefaults are 87 frames at 500ms apart, roughly a second each to\ngenerate at 1500x2100 - inject once and watch. Narrow it with the\nfamily and severity checkboxes, or send `msg.families` /\n`msg.severities`. A new inject stops the run in progress.\n\nThis is a test bench, not a production flow. For scored numbers -\nrecall per family and severity, false-fail rate, sweeps - use\n`bench/synth/generate.js` and `bench/synth/run.js` offline.",
+        "x": 400,
+        "y": 60,
+        "wires": []
+    },
+    {
+        "id": "sdb-inject",
+        "type": "inject",
+        "z": "synth-bench-tab",
+        "name": "run the set",
+        "props": [
+            {
+                "p": "payload"
+            }
+        ],
+        "repeat": "",
+        "crontab": "",
+        "once": false,
+        "onceDelay": 0.1,
+        "topic": "",
+        "payload": "",
+        "payloadType": "str",
+        "x": 140,
+        "y": 160,
+        "wires": [
+            [
+                "sdb-synth"
+            ]
+        ]
+    },
+    {
+        "id": "sdb-synth",
+        "type": "synthetic-defects",
+        "z": "synth-bench-tab",
+        "name": "",
+        "seed": 1,
+        "perVariant": 1,
+        "preset": "typical",
+        "scratch": true,
+        "mark": true,
+        "misprint": true,
+        "overprint": true,
+        "random": true,
+        "tiny": true,
+        "small": true,
+        "medium": true,
+        "large": true,
+        "intervalMs": 500,
+        "width": 1500,
+        "height": 2100,
+        "x": 360,
+        "y": 160,
+        "wires": [
+            [
+                "sdb-compare"
+            ],
+            [
+                "sdb-golden"
+            ]
+        ]
+    },
+    {
+        "id": "sdb-compare",
+        "type": "golden-compare",
+        "z": "synth-bench-tab",
+        "name": "",
+        "goldenPath": "",
+        "workingSize": 1024,
+        "threshold": 128,
+        "thresholdMode": "otsu",
+        "sauvolaRadius": 24,
+        "sauvolaK": 0.2,
+        "inkMargin": 8,
+        "alignCandidates": 5,
+        "workers": 0,
+        "nativeFastAlign": false,
+        "nativeAlignSeed": false,
+        "mismatchScore": 0.15,
+        "minCoverage": 0.5,
+        "localAlign": true,
+        "localAlignTile": 96,
+        "localAlignMax": 3,
+        "transformFilePath": "",
+        "trainTransform": false,
+        "nuisancePath": "/data/golden/nuisance.json",
+        "trainNuisance": false,
+        "noveltyThreshold": 0.3,
+        "scaleSearchMin": 0.6,
+        "scaleSearchMax": 2.5,
+        "scaleSearchSteps": 37,
+        "maxAspect": 0.06,
+        "aspectSteps": 7,
+        "maxAngleDeg": 2,
+        "angleSteps": 5,
+        "positionToleranceAngleDeg": 1,
+        "printTolerance": 2,
+        "backgroundTolerance": 1,
+        "alignSearch": 16,
+        "scaleFilePath": "",
+        "positionToleranceXMm": 2,
+        "positionToleranceYMm": 2,
+        "positionToleranceXPx": 16,
+        "positionToleranceYPx": 16,
+        "blockSize": 16,
+        "blockThreshold": 0.15,
+        "failThreshold": 0.3,
+        "failRatio": 0.002,
+        "outputPrintHeatmap": true,
+        "outputBackgroundHeatmap": true,
+        "heatmapFormat": "jpg",
+        "heatmapQuality": 85,
+        "debugStages": false,
+        "x": 610,
+        "y": 140,
+        "wires": [
+            [
+                "sdb-result",
+                "sdb-expected"
+            ]
+        ]
+    },
+    {
+        "id": "sdb-result",
+        "type": "debug",
+        "z": "synth-bench-tab",
+        "name": "result",
+        "active": true,
+        "tosidebar": true,
+        "console": false,
+        "tostatus": false,
+        "complete": "result",
+        "targetType": "msg",
+        "statusVal": "",
+        "statusType": "auto",
+        "x": 850,
+        "y": 100,
+        "wires": []
+    },
+    {
+        "id": "sdb-expected",
+        "type": "debug",
+        "z": "synth-bench-tab",
+        "name": "ground truth",
+        "active": true,
+        "tosidebar": true,
+        "console": false,
+        "tostatus": false,
+        "complete": "synth",
+        "targetType": "msg",
+        "statusVal": "",
+        "statusType": "auto",
+        "x": 870,
+        "y": 160,
+        "wires": []
+    },
+    {
+        "id": "sdb-golden",
+        "type": "debug",
+        "z": "synth-bench-tab",
+        "name": "the golden",
+        "active": true,
+        "tosidebar": true,
+        "console": false,
+        "tostatus": false,
+        "complete": "synth",
+        "targetType": "msg",
+        "statusVal": "",
+        "statusType": "auto",
+        "x": 620,
+        "y": 240,
+        "wires": []
+    }
+]

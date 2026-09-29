@@ -131,6 +131,7 @@ const NODES = [
 	{ html: "label-crop.html", js: "label-crop.js" },
 	{ html: "line-finder.html", js: "line-finder.js" },
 	{ html: "barcode-locate.html", js: "barcode-locate.js" },
+	{ html: "synthetic-defects.html", js: "synthetic-defects.js" },
 ];
 
 for (const node of NODES) {

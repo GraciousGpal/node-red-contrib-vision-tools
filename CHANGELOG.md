@@ -8,6 +8,30 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Added
 
+- **A `synthetic-defects` node: the defect generator, in the editor.**
+  The frame generator was a CLI under `bench/`, which the npm package does
+  not ship, so seeing what a `misprint/streak` actually looks like - and
+  what `golden-compare` says about it - meant generating a set to disk and
+  opening files. The generator library moved to `lib/synth/` (so the
+  package ships it) and grew `lib/synth/cases.js`, an in-memory case API
+  the CLI and the node now share, frame by frame from one lazy async
+  generator: a 170-frame set is ~300MB and nothing builds it up front.
+  The node takes a golden on `msg.payload` - bytes, a path, a raw pixel
+  descriptor, or nothing, in which case it draws the synthetic label - and
+  emits the set one message at a time, each carrying the frame, the golden
+  as PNG, a `msg.goldenKey` so `golden-compare` prepares that golden once
+  for the whole run, and `msg.synth` with the case id, family, variant,
+  severity, every sampled camera parameter, the measured ground truth and
+  `expected`. Output 2 announces the golden once, first. Families,
+  severities, capture preset, seed, frames per variant and the interval
+  between frames are all configurable and all overridable per message; a
+  new message stops a run in progress. Wire output 1 into
+  `golden-compare`, a debug node on `msg.result` beside one on
+  `msg.synth.expected`, and an image preview on `msg.payload` -
+  `examples/synthetic-defects-into-golden-compare.json` is that flow. It
+  is a look, not a measurement: `bench/synth/run.js` is still where scored
+  recall and sweeps come from, over the same frames.
+
 - **A synthetic-defect benchmark for `golden-compare`: `bench/synth/`.**
   `generate.js` draws a label from scratch - glyph-shaped type down to
   1-3px strokes, a barcode, a ruled table, a logo - or takes an artwork

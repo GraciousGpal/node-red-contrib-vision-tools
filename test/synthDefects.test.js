@@ -27,11 +27,11 @@ const os = require("node:os");
 const path = require("node:path");
 const sharp = require("sharp");
 
-const { makePrng } = require("../bench/synth/prng.js");
+const { makePrng } = require("../lib/synth/prng.js");
 const {
 	syntheticLabel,
 	syntheticLabelRaster,
-} = require("../bench/synth/label.js");
+} = require("../lib/synth/label.js");
 const {
 	applyDefect,
 	applyDefects,
@@ -39,8 +39,8 @@ const {
 	SEVERITIES,
 	INK_LEVEL,
 	CHANGE_FLOOR,
-} = require("../bench/synth/defects.js");
-const { capture, capturePresets } = require("../bench/synth/capture.js");
+} = require("../lib/synth/defects.js");
+const { capture, capturePresets } = require("../lib/synth/capture.js");
 const { generate } = require("../bench/synth/generate.js");
 
 const W = 300;

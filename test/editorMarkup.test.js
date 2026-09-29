@@ -26,6 +26,7 @@ const HTML_FILES = [
 	"label-crop.html",
 	"line-finder.html",
 	"barcode-locate.html",
+	"synthetic-defects.html",
 ];
 
 /** The editor <script> and every data-template-name block, separately. */
