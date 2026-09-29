@@ -64,7 +64,7 @@ function defaultCfg() {
 		inkMargin: 8,
 		scaleSearchMin: 0.6,
 		scaleSearchMax: 2.5,
-		scaleSearchSteps: 19,
+		scaleSearchSteps: 37,
 		alignCandidates: 5,
 		workers: 0,
 		mismatchScore: 0.15,

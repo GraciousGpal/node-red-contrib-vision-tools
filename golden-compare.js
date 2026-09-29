@@ -59,7 +59,11 @@ module.exports = (RED) => {
 		// fail every artwork-as-golden setup - the case the search exists for.
 		scaleSearchMin: { value: 0.6, float: [0.1, 10] },
 		scaleSearchMax: { value: 2.5, float: [0.1, 10] },
-		scaleSearchSteps: { value: 19, int: [1, 61] },
+		// 37 rungs over 0.6-2.5 is a 4% step; 19 was 8%, which the joint
+		// refine did not always bridge. On the synthetic set 37 took the
+		// mean scale error from 0.31% to 0.08%, clean false fails from 15 to
+		// 10 of 34, and no time - a search that starts nearer finishes sooner.
+		scaleSearchSteps: { value: 37, int: [1, 61] },
 		// Presses stretch print along the media-feed axis relative to the
 		// artwork, 5-6% on this project's own samples. Left unsearched it
 		// puts every feature several pixels out toward the ends of the long
