@@ -657,6 +657,16 @@ background region on a good part. No test in the suite can see that
 distinction — both forms tie the walk on the spec fixture — so it is
 measured in `bench/`, not asserted.
 
+What the node *finds*, as opposed to how fast, is measured the same way:
+`bench/synth/` generates camera-like frames of a label with scratches,
+marks, misprints and overprints injected at known places and sizes, and
+`bench/synth/run.js` scores the verdicts and the reported regions against
+that ground truth — recall per defect family and size, the false-fail
+rate on clean frames, and a sweep over any one setting. A frame that
+fails for the wrong reason counts as a `wrong-place`, not a detection.
+The first run of it is what found the two-level-golden Otsu case in
+`lib/threshold.js`.
+
 ## perspective-rectify: the camera's keystone, measured once
 
 The alignment model above has no perspective term, and the reason is

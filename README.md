@@ -372,6 +372,18 @@ within ~10% (pinned search 236ms vs 222ms, unpinned align 2075ms vs
 `workingSize` is the one that changes *what is detectable* rather than
 just how long it takes — see Notes before lowering it.
 
+`bench/frame-bench.js` times one frame; it says nothing about whether a
+defect was *found*. For that there is `bench/synth/` — a generator that
+writes camera-like frames of a label with scratches, marks, misprints and
+overprints injected at known positions and sizes, and `bench/synth/run.js`,
+which runs the whole set through the library pipeline and scores the
+verdicts *and the reported regions* against that ground truth. It reports
+recall per defect family, variant and size, the false-fail rate on clean
+frames, and will sweep any single setting (`--sweep blockThreshold=…`) to
+show what a change costs in one and buys in the other. A frame that fails
+for the wrong reason is scored as a `wrong-place`, not a detection — see
+`bench/synth/README.md`.
+
 Per-message overrides:
 `msg.threshold`, `msg.thresholdMode`, `msg.sauvolaRadius`, `msg.sauvolaK`,
 `msg.inkMargin`, `msg.printTolerance`, `msg.backgroundTolerance`,

@@ -8,6 +8,25 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Added
 
+- **A synthetic-defect benchmark for `golden-compare`: `bench/synth/`.**
+  `generate.js` draws a label from scratch - glyph-shaped type down to
+  1-3px strokes, a barcode, a ruled table, a logo - or takes an artwork
+  file, injects defects at known places and sizes (scratches light and
+  dark; ink marks, smudges and spatter; voids, fades, dropped glyphs and
+  dead-column streaks; ghost double prints, bleed, extra strokes and
+  fills; dust, pinholes, faint stains, folds and combinations, each on a
+  tiny/small/medium/large ladder), and photographs the result: placed on
+  a grey tray at a magnification, stretch, rotation and offset, with grey
+  ink and off-white paper, an illumination gradient, vignette, blur,
+  noise and JPEG. Ground truth is measured by diffing the raster - which
+  channel a defect lands in is what it did to the pixels, not what its
+  name promised - and a fifth of every set is clean frames. `run.js`
+  runs a set through the library pipeline and scores verdicts *and
+  regions*: recall per family, variant and size, false fails on clean
+  frames, timing split by verdict, and a sweep over any one setting. A
+  frame that fails for the wrong reason is a `wrong-place`, never a
+  detection. `bench/synth/README.md` has the contract and the rules.
+
 - **`label-crop` crops the rectangle a `line-finder` found.** With a
   line-finder reporting `msg.lineFinder.rect`, cropping to it still meant
   pasting the four regions into a label-crop in calipers mode and having
@@ -159,6 +178,20 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   golden's own stages are baked in.
 
 ### Fixed
+
+- **Two-level artwork used at native working size had no ink.** Otsu's
+  between-class variance is the same at every level between the modes
+  of a histogram with an empty gap - pure black-on-white artwork, or a
+  golden binarised before it was saved - and the threshold took the
+  first of them, 0: nothing darker than black, an empty golden, and an
+  inspection that reported zero print defect, a background region the
+  size of the tray, and a position hundreds of pixels out. A resample to
+  a smaller `workingSize` put greys in the gap and hid it, which is why
+  the rig's PDF renders never showed it. The level is now the midpoint
+  of that plateau; on a photograph the plateau is one level wide and
+  nothing changes. Found by the first run of the synthetic benchmark.
+  `checkerboard-calibrate` had already worked around the same case with
+  an inclusive comparison of its own.
 
 - **`label-crop` cut into the label on the production rig.** The boundary
   refinement defined "label tone" as the frame's brightest 2% (98th
