@@ -25,9 +25,12 @@ const svg = (w, h) =>
 		`<svg xmlns="http://www.w3.org/2000/svg" width="${w}" height="${h}">` +
 			`<rect width="100%" height="100%" fill="#fff"/>` +
 			`<rect x="30" y="40" width="${(w * 0.6) | 0}" height="${(h * 0.2) | 0}" fill="#111"/>` +
-			// a mid-grey panel, so an ambiguity band actually has something to
-			// mark when inkMargin is non-zero
-			`<rect x="30" y="${(h * 0.5) | 0}" width="${(w * 0.5) | 0}" height="${(h * 0.2) | 0}" fill="#9a9a9a"/>` +
+			// a ramp from ink to paper, so whatever level Otsu settles on, an
+			// ambiguity band around it has pixels to mark when inkMargin is
+			// non-zero - a single mid-grey would only sit inside the band by
+			// luck of the tie-break between the spikes
+			`<defs><linearGradient id="g"><stop offset="0" stop-color="#111"/><stop offset="1" stop-color="#fff"/></linearGradient></defs>` +
+			`<rect x="30" y="${(h * 0.5) | 0}" width="${(w * 0.5) | 0}" height="${(h * 0.2) | 0}" fill="url(#g)"/>` +
 			`</svg>`,
 	);
 
