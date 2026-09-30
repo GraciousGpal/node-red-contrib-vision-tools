@@ -8,6 +8,28 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Added
 
+- **A stage viewer for `golden-compare`.** With the new *Preview* box on,
+  the node draws its last frame under itself on the flow canvas - the heat
+  map of the channel that failed, or the aligned frame when nothing did,
+  with the verdict - and clicking it opens a viewer that steps through the
+  whole inspection in the order it ran: golden, golden ink, golden ink
+  grown by the background tolerance, the frame and its ink, the aligned
+  frame and its ink, the ink grown by the print tolerance, both defect
+  masks, both heat maps, and the trained nuisance baseline drawn over the
+  golden when a map is loaded. Each stage comes with a sentence on what it
+  is and the numbers behind the verdict sit beside it; arrow keys step,
+  `Esc` closes, a click toggles 1:1. The runtime keeps one inspection per
+  node in memory and serves it over `GET /golden-compare/last/:id` and
+  `GET /golden-compare/last/:id/stage/:key`, one image per request as the
+  viewer reaches it. The preview renders every stage and both heat maps
+  on every frame; the message still carries only what the output boxes
+  asked for. `previewEnabled` and `previewWidth` are settings and
+  per-message overrides.
+- **`msg.stages.nuisanceBaseline`**: with *Output pipeline stages* on and
+  a nuisance map loaded, the trained per-block baseline rendered over the
+  golden the way a heat map is rendered over the frame, so a map can be
+  looked at rather than trusted.
+
 - **A `synthetic-defects` node: the defect generator, in the editor.**
   The frame generator was a CLI under `bench/`, which the npm package does
   not ship, so seeing what a `misprint/streak` actually looks like - and

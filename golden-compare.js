@@ -107,6 +107,12 @@ module.exports = (RED) => {
 		heatmapFormat: { value: "jpg", modes: ["jpg", "png", "raw"] },
 		heatmapQuality: { value: 85, int: [1, 100] },
 		debugStages: { value: false },
+		// A thumbnail under the node on the flow canvas, and the whole
+		// pipeline behind it - every stage, both heat maps - kept for the
+		// editor's stage viewer. Diagnostic: it renders every stage on every
+		// frame, which is what "Output pipeline stages" costs.
+		previewEnabled: { value: false },
+		previewWidth: { value: 260, int: [80, 600] },
 		trainTransform: { value: false },
 		trainNuisance: { value: false },
 		// 0 disables the gate outright. The measured window on the reference
@@ -347,6 +353,142 @@ module.exports = (RED) => {
 		return isBytes(source) ? rawGeometryFromImages(msg) : undefined;
 	}
 
+	/**
+	 * The last inspection each node ran with the preview on, by node id:
+	 * every rendered stage and both heat maps, plus the verdict and the
+	 * numbers behind it, so the editor's stage viewer can open on it
+	 * without the images ever having crossed the websocket. One entry per
+	 * node, replaced per frame; a redeploy keeps it, a restart does not,
+	 * and a deleted node's goes with it.
+	 */
+	const lastInspections = new Map();
+
+	/**
+	 * The pipeline, in the order it runs, as the stage viewer walks it.
+	 * Keys are the msg.stages keys plus the two heat maps; a stage that
+	 * was not rendered (a heat map with its output off, the nuisance
+	 * baseline with no map loaded) is simply absent from a given entry.
+	 */
+	const STAGES = [
+		{
+			key: "goldenGray",
+			group: "golden",
+			title: "Golden, grey",
+			description:
+				"The reference artwork at working size, as the pipeline sees it. Everything on the golden side is prepared once and cached.",
+		},
+		{
+			key: "goldenFg",
+			group: "golden",
+			title: "Golden ink",
+			description:
+				"White where the golden is darker than the threshold: what the reference says is ink. Threshold mode and ink margin shape this.",
+		},
+		{
+			key: "goldenFgDilatedBackground",
+			group: "golden",
+			title: "Golden ink, grown by the background tolerance",
+			description:
+				"The golden's ink dilated by the background tolerance. Frame ink inside this is expected; frame ink outside it is a background blemish.",
+		},
+		{
+			key: "nuisanceBaseline",
+			group: "golden",
+			title: "Nuisance baseline",
+			description:
+				"The trained nuisance map over the golden: each block as red as the background density it reached on known-good frames. Only blocks that exceed their own baseline by the novelty threshold fail.",
+		},
+		{
+			key: "targetGray",
+			group: "frame",
+			title: "Frame, grey",
+			description:
+				"The whole frame at working size, before alignment. The golden is searched for inside this.",
+		},
+		{
+			key: "targetFg",
+			group: "frame",
+			title: "Frame ink",
+			description:
+				"The frame thresholded on its own level, the same mode as the golden. The alignment search matches this against the golden's ink.",
+		},
+		{
+			key: "targetGrayAligned",
+			group: "aligned",
+			title: "Frame, aligned",
+			description:
+				"The matched region of the frame warped onto the golden's canvas with the found scale, stretch, angle and offset. From here on every image is golden-sized and the two can be compared pixel for pixel.",
+		},
+		{
+			key: "targetFgAligned",
+			group: "aligned",
+			title: "Frame ink, aligned",
+			description:
+				"The frame's ink after the same warp, and after local alignment if it is on.",
+		},
+		{
+			key: "targetFgDilatedPrint",
+			group: "aligned",
+			title: "Frame ink, grown by the print tolerance",
+			description:
+				"The aligned frame ink dilated by the print tolerance. Golden ink inside this counts as present; golden ink outside it is a print defect.",
+		},
+		{
+			key: "printDefect",
+			group: "verdict",
+			title: "Print defect",
+			description:
+				"Golden ink the frame does not have: dropouts, voids, faded or missing print. Pixels in the ambiguity band are withheld.",
+		},
+		{
+			key: "backgroundDefect",
+			group: "verdict",
+			title: "Background defect",
+			description:
+				"Frame ink the golden does not have: marks, smudges, overprint, dust. Pixels in the ambiguity band are withheld.",
+		},
+		{
+			key: "printHeatmap",
+			group: "verdict",
+			title: "Print heat map",
+			description:
+				"The print defect summarised per block over the aligned frame: a block is red once its defect density reaches the block threshold, and the channel fails when any block reaches the fail threshold or the defect ratio is exceeded.",
+		},
+		{
+			key: "backgroundHeatmap",
+			group: "verdict",
+			title: "Background heat map",
+			description:
+				"The background defect per block, the same way. With a nuisance map loaded a block also fails when it exceeds its baseline by the novelty threshold.",
+		},
+	];
+
+	/** A rendered image, whichever of the three formats it is in, as a
+	 * sharp pipeline. */
+	function imagePipeline(image) {
+		const sharp = require("sharp");
+		if (Buffer.isBuffer(image)) return sharp(image);
+		return sharp(
+			Buffer.from(image.data.buffer, image.data.byteOffset, image.data.byteLength),
+			{
+				raw: { width: image.width, height: image.height, channels: image.channels },
+			},
+		);
+	}
+
+	/** The bytes and content type to serve a stored stage as. Encoded
+	 * stages go out as they are; a raw one is encoded now, once, on demand. */
+	async function stageBytes(image) {
+		if (Buffer.isBuffer(image)) {
+			const png = image.length > 4 && image[0] === 0x89 && image[1] === 0x50;
+			return { bytes: image, contentType: png ? "image/png" : "image/jpeg" };
+		}
+		return {
+			bytes: await imagePipeline(image).png({ compressionLevel: 1 }).toBuffer(),
+			contentType: "image/png",
+		};
+	}
+
 	function GoldenCompareNode(config) {
 		RED.nodes.createNode(this, config);
 		const node = this;
@@ -366,6 +508,14 @@ module.exports = (RED) => {
 		// the authoritative one), so a change to either triggers exactly one
 		// re-prepare, shared by messages that arrive while it is in flight.
 		node.goldenCache = null;
+		// whether a thumbnail is on the canvas, so switching the preview off
+		// clears it once rather than publishing a clear per frame forever
+		node.previewShown = false;
+
+		node.on("close", (removed, done) => {
+			if (removed) lastInspections.delete(node.id);
+			done();
+		});
 
 		node.on("input", async (msg, send, done) => {
 			send =
@@ -396,6 +546,19 @@ module.exports = (RED) => {
 				const cfg = {};
 				for (const [key, spec] of Object.entries(SETTINGS)) {
 					cfg[key] = spec.fixed ? node[key] : readSetting(spec, msg[key], node[key]);
+				}
+				// The stage viewer needs every stage and both heat maps whether
+				// or not the message is to carry them: render them when the
+				// preview is on, and put on the message only what was asked
+				// for. debugStages goes into the golden cache key below, so it
+				// must be settled here.
+				const wantStages = cfg.debugStages;
+				const wantPrintHeatmap = cfg.outputPrintHeatmap;
+				const wantBackgroundHeatmap = cfg.outputBackgroundHeatmap;
+				if (cfg.previewEnabled) {
+					cfg.debugStages = true;
+					cfg.outputPrintHeatmap = true;
+					cfg.outputBackgroundHeatmap = true;
 				}
 				cfg.mmPerPixelNative = scaleOk ? scale.mmPerPixelNative : null;
 				// the calibration photo's own native size, so prepareGolden can
@@ -841,9 +1004,17 @@ module.exports = (RED) => {
 					thresholdMs: ms(t.thresholdMs),
 					nativeFallbackMs: ms(t.nativeFallbackMs),
 				};
-				setOrDelete(msg, "printHeatmap", result.printBlemish.heatmap);
-				setOrDelete(msg, "backgroundHeatmap", result.backgroundBlemish.heatmap);
-				setOrDelete(msg, "stages", result.stages);
+				setOrDelete(
+					msg,
+					"printHeatmap",
+					wantPrintHeatmap ? result.printBlemish.heatmap : null,
+				);
+				setOrDelete(
+					msg,
+					"backgroundHeatmap",
+					wantBackgroundHeatmap ? result.backgroundBlemish.heatmap : null,
+				);
+				setOrDelete(msg, "stages", wantStages ? result.stages : null);
 
 				send(msg);
 
@@ -859,19 +1030,34 @@ module.exports = (RED) => {
 				if (!result.position.pass) failedParts.push("position");
 				if (!result.printBlemish.pass) failedParts.push("print");
 				if (!result.backgroundBlemish.pass) failedParts.push("background");
-				node.status({
-					fill: result.pass ? "green" : "red",
-					shape: result.pass ? "dot" : "ring",
-					text:
-						(result.match.labelMissing
-							? `label missing? · ${Math.round(result.match.coverage * 100)}% of ink`
-							: result.match.mismatchSuspected
+				const verdictText =
+					(result.match.labelMissing
+						? `label missing? · ${Math.round(result.match.coverage * 100)}% of ink`
+						: result.match.mismatchSuspected
 							? `different label? · align ${result.match.score.toFixed(3)}`
 							: result.pass
 								? `pass · align ${result.match.score.toFixed(3)}`
 								: `fail (${failedParts.join("+")}) · align ${result.match.score.toFixed(3)}`) +
-						` · ${fmtMs(performance.now() - totalStart)}`,
+					` · ${fmtMs(performance.now() - totalStart)}`;
+				node.status({
+					fill: result.pass ? "green" : "red",
+					shape: result.pass ? "dot" : "ring",
+					text: verdictText,
 				});
+
+				if (cfg.previewEnabled) {
+					// Keep the whole pipeline for the stage viewer, and put a
+					// thumbnail under the node. A preview is a diagnostic,
+					// never a reason to fail a frame that was inspected fine.
+					try {
+						await publishPreview(node, msg, result, cfg, verdictText);
+					} catch (previewError) {
+						node.warn(`golden-compare preview: ${previewError.message}`);
+					}
+				} else if (node.previewShown && RED.comms) {
+					node.previewShown = false;
+					RED.comms.publish("golden-compare-preview", { id: node.id, clear: true });
+				}
 				const pos = result.position;
 				const posStr =
 					(pos.dxMm == null
@@ -930,5 +1116,117 @@ module.exports = (RED) => {
 		});
 	}
 
+	/**
+	 * Store this frame's stages for the viewer and draw the thumbnail. The
+	 * thumbnail is the heat map of the channel that failed - or the print
+	 * one, which is the aligned frame with no blocks on it, when nothing
+	 * did - so the picture under the node says where, not just whether.
+	 */
+	async function publishPreview(node, msg, result, cfg, verdictText) {
+		const images = {};
+		for (const key of Object.keys(result.stages || {})) {
+			if (result.stages[key]) images[key] = result.stages[key];
+		}
+		if (result.printBlemish.heatmap) images.printHeatmap = result.printBlemish.heatmap;
+		if (result.backgroundBlemish.heatmap) {
+			images.backgroundHeatmap = result.backgroundBlemish.heatmap;
+		}
+		const entry = {
+			receivedAt: Date.now(),
+			filename: typeof msg.filename === "string" ? msg.filename : null,
+			pass: result.pass,
+			text: verdictText,
+			result: msg.result,
+			timings: msg.timings,
+			width: result.width,
+			height: result.height,
+			images,
+		};
+		lastInspections.set(node.id, entry);
+		if (!RED.comms || typeof RED.comms.publish !== "function") return;
+		const source =
+			!result.backgroundBlemish.pass && images.backgroundHeatmap
+				? images.backgroundHeatmap
+				: images.printHeatmap || images.targetGrayAligned;
+		if (!source) return;
+		const thumb = await imagePipeline(source)
+			.resize({ width: cfg.previewWidth, withoutEnlargement: true })
+			.jpeg({ quality: 70 })
+			.toBuffer();
+		node.previewShown = true;
+		RED.comms.publish("golden-compare-preview", {
+			id: node.id,
+			image: thumb.toString("base64"),
+			mimeType: "jpeg",
+			previewWidth: cfg.previewWidth,
+			imageWidth: result.width,
+			imageHeight: result.height,
+			pass: result.pass,
+			labelMissing: !!result.match.labelMissing,
+			mismatchSuspected: !!result.match.mismatchSuspected,
+			text: verdictText,
+			receivedAt: entry.receivedAt,
+			stages: STAGES.filter((s) => images[s.key]).map((s) => s.key),
+		});
+	}
+
 	RED.nodes.registerType("golden-compare", GoldenCompareNode);
+
+	// The stage viewer's two routes: what the last inspection was, and each
+	// of its images by key. Images are served one at a time, as the viewer
+	// steps to them, rather than as one JSON body: a full set is ten to
+	// fifteen images at working size.
+	RED.httpAdmin.get(
+		"/golden-compare/last/:id",
+		RED.auth.needsPermission("golden-compare.read"),
+		(req, res) => {
+			const entry = lastInspections.get(req.params.id);
+			if (!entry) {
+				res.status(404).json({ ok: false, error: "no frame yet" });
+				return;
+			}
+			res.setHeader("Cache-Control", "no-store");
+			res.json({
+				ok: true,
+				receivedAt: entry.receivedAt,
+				filename: entry.filename,
+				pass: entry.pass,
+				text: entry.text,
+				result: entry.result,
+				timings: entry.timings,
+				width: entry.width,
+				height: entry.height,
+				stages: STAGES.filter((s) => entry.images[s.key]).map((s) => ({
+					key: s.key,
+					group: s.group,
+					title: s.title,
+					description: s.description,
+				})),
+			});
+		},
+	);
+
+	RED.httpAdmin.get(
+		"/golden-compare/last/:id/stage/:key",
+		RED.auth.needsPermission("golden-compare.read"),
+		async (req, res) => {
+			const entry = lastInspections.get(req.params.id);
+			const image = entry && entry.images[req.params.key];
+			if (!image) {
+				res
+					.status(404)
+					.json({ ok: false, error: entry ? "no such stage" : "no frame yet" });
+				return;
+			}
+			try {
+				const { bytes, contentType } = await stageBytes(image);
+				res.setHeader("Content-Type", contentType);
+				// the next frame replaces it, so the browser must not keep this one
+				res.setHeader("Cache-Control", "no-store");
+				res.end(bytes);
+			} catch (err) {
+				res.status(500).json({ ok: false, error: err.message });
+			}
+		},
+	);
 };

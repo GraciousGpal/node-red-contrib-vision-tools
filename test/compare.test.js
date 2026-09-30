@@ -885,3 +885,39 @@ test("the mismatch check can be turned off", async () => {
 		"0 disables the claim entirely",
 	);
 });
+
+test("a loaded nuisance map is drawn as a debug stage over the golden", async () => {
+	const g = await prepareGolden(await png(labelSvg(300, 450)), cfg({ debugStages: true }));
+	const frame = await png(labelSvg(300, 450));
+	const without = await compareFrame(frame, g, cfg({ debugStages: true }));
+	assert.strictEqual(
+		without.stages.nuisanceBaseline,
+		undefined,
+		"no map loaded, no baseline stage",
+	);
+	const { gridW, gridH } = without.backgroundBlemish;
+	const baseline = new Float32Array(gridW * gridH);
+	baseline[0] = 0.5;
+	const withMap = await compareFrame(
+		frame,
+		g,
+		cfg({ debugStages: true, nuisanceBaseline: baseline, noveltyThreshold: 0.3 }),
+	);
+	const stage = withMap.stages.nuisanceBaseline;
+	assert.ok(stage, "the baseline is rendered when a map is loaded");
+	const meta = await sharp(stage).metadata();
+	assert.strictEqual(meta.width, g.width);
+	assert.strictEqual(meta.height, g.height);
+	// the one dirty block is red over the golden, its neighbour is not
+	const rgb = await sharp(stage).raw().toBuffer();
+	const at = (x, y) => rgb.subarray((y * g.width + x) * 3, (y * g.width + x) * 3 + 3);
+	const dirty = at(4, 4);
+	const clean = at(BASE_CFG.blockSize + 4, 4);
+	assert.ok(dirty[0] > dirty[1] + 40, `block 0 should be tinted red, got ${[...dirty]}`);
+	assert.ok(Math.abs(clean[0] - clean[1]) < 8, `block 1 should be grey, got ${[...clean]}`);
+	assert.strictEqual(
+		Object.keys(without.stages).length + 1,
+		Object.keys(withMap.stages).length,
+		"the other stages are unchanged",
+	);
+});

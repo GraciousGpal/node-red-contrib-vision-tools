@@ -174,7 +174,13 @@ test("a second input while running cancels the first", async () => {
 	// enough for the second message to land
 	const t = makeNode({ intervalMs: 50 });
 	const first = t.run({});
-	await new Promise((r) => setTimeout(r, 80));
+	// wait for the first run to have drawn and announced its golden - a
+	// fixed sleep is too short when the whole suite is loading the machine
+	const started = Date.now();
+	while (t.goldens.length < 1 && Date.now() - started < 5000) {
+		await new Promise((r) => setTimeout(r, 10));
+	}
+	await new Promise((r) => setTimeout(r, 30));
 	const second = t.run({ intervalMs: 0 });
 	await Promise.all([first, second]);
 

@@ -72,7 +72,7 @@ authoritative list.
 
 | file | role |
 | --- | --- |
-| `golden-compare.js` | Node-RED wiring: config and clamping, `msg` overrides, golden cache key, transform and nuisance-map training, logging; hands frames to `lib/inspector.js` |
+| `golden-compare.js` | Node-RED wiring: config and clamping, `msg` overrides, golden cache key, transform and nuisance-map training, logging; hands frames to `lib/inspector.js`. Keeps each node's last inspection (every stage, both heat maps) for the editor's stage viewer and serves it over two admin routes |
 | `lib/nodeInput.js` | input handling shared by every node: bounded `clampInt`/`clampFloat`/`pickMode` settings and the size-capped image loader for `msg.payload` / `msg.golden` (bytes, a path, or an object carrying `data`/`buffer`/`path`) |
 | `lib/inspector.js` | main-thread client for the inspection pipeline: one unref()'d worker per process, spawned on first use; runs the core inline when worker threads or `SharedArrayBuffer` are unavailable |
 | `lib/inspectorCore.js` | the pipeline behind one request/response surface (`prepare`, `inspect`, `calibrate`, `rectify`) plus the bounded prepared-golden store; same code on the worker and inline, no file I/O |

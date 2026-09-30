@@ -116,6 +116,8 @@
         "heatmapFormat": "jpg",
         "heatmapQuality": 85,
         "debugStages": false,
+        "previewEnabled": true,
+        "previewWidth": 260,
         "x": 610,
         "y": 140,
         "wires": [

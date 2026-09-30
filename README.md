@@ -599,6 +599,32 @@ trusting it.
   magnification, which is usually the first thing worth looking at when a
   whole batch starts failing at once.
 
+### Seeing each stage
+
+`previewEnabled` draws the node's last frame under it on the flow canvas:
+the heat map of the channel that failed, or the aligned frame when
+nothing did, with the verdict and the time. Click it and a viewer opens
+on the whole inspection, in the order it ran - the golden and its ink
+mask, the frame and its ink, the aligned frame, the two grown masks, each
+defect mask, both heat maps, and the trained nuisance baseline drawn over
+the golden when a map is loaded - with a sentence on what each stage
+means and the numbers behind the verdict beside it. Arrow keys step,
+`Esc` closes, and clicking the picture toggles 1:1 so a 3px streak can be
+found. `previewWidth` (80-600 px) sizes the thumbnail; both are per-message
+overridable.
+
+The node keeps one inspection per golden-compare node in memory for
+this, every stage at working size, and serves it over
+`GET /golden-compare/last/:id` (the verdict, timings and stage list) and
+`GET /golden-compare/last/:id/stage/:key` (one image, in the format the
+pipeline rendered it; `raw` is encoded on the way out). It survives a
+redeploy, not a restart, and a deleted node's goes with it. The viewer
+fetches each image as you step to it rather than all at once, so opening
+it costs one image, not fifteen. The preview renders every stage and both
+heat maps on every frame, whatever the output boxes say - the cost of
+*Output pipeline stages* - while the message still carries only what was
+asked for, so it is for tuning rather than production.
+
 ## How `checkerboard-calibrate` works
 
 1. Decode the checkerboard photo at native resolution (no downscale — best
