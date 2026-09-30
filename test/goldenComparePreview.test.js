@@ -314,6 +314,12 @@ test("clicking the panel fetches the last inspection and opens the viewer on sta
 	assert.ok(/excess 0.350 FAIL/.test(bg.textContent), "and names the novelty gate");
 	assert.strictEqual(bg.style.color, "#ef9a9a");
 	assert.ok(v.find((e) => e.textContent === "91% of golden ink"));
+	// the verdict table is pinned at the top of the side panel; the rest scrolls under it
+	const side = v.find((e) => e.id === "golden-compare-stage-side");
+	assert.strictEqual(side.children[0].id, "golden-compare-stage-results");
+	assert.strictEqual(side.children[1].style.overflow, "auto");
+	assert.ok(side.children[1].find((e) => e.textContent === "1. Golden, grey"), "the stage list scrolls");
+	assert.ok(side.children[1].find((e) => e.textContent === "the reference"), "so does the description");
 	// the next stage is prefetched
 	assert.ok(
 		h.images.some((im) => /stage\/targetGray\?/.test(im.src)),

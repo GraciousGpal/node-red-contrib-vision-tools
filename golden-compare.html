@@ -1032,10 +1032,14 @@
       stage.appendChild(canvas);
       body.appendChild(stage);
 
+      // The verdict's numbers stay put at the top; the stage list, the
+      // overlay controls and the description scroll under them.
       const side = el("div", {
-        flex: "0 0 300px", borderLeft: "1px solid #444", overflow: "auto",
-        padding: "10px 12px", display: "flex", flexDirection: "column",
+        flex: "0 0 300px", borderLeft: "1px solid #444", overflow: "hidden",
+        display: "flex", flexDirection: "column", minHeight: "0",
       });
+      side.id = "golden-compare-stage-side";
+      const scroller = el("div", { flex: "1 1 auto", overflow: "auto", minHeight: "0", padding: "4px 12px 10px" });
       const list = el("div", { flex: "0 0 auto" });
       const buttons = [];
       let lastGroup = null;
@@ -1054,7 +1058,7 @@
         buttons.push(b);
         list.appendChild(b);
       });
-      side.appendChild(list);
+      scroller.appendChild(list);
 
       // ---- overlay: this stage composited over a golden-side image ----
       const goldenSide = stages.filter(function (s) { return s.group === "golden"; });
@@ -1100,7 +1104,7 @@
       const overlayNote = el("div", { color: "#999", lineHeight: "1.4", marginTop: "4px" });
       overlayOpts.appendChild(overlayNote);
       overlayBox.appendChild(overlayOpts);
-      if (goldenSide.length) side.appendChild(overlayBox);
+      if (goldenSide.length) scroller.appendChild(overlayBox);
 
       const MODE_NOTES = {
         redcyan: "Red: only the golden has it. Cyan: only this stage has it. White or grey: both. On the ink masks that is print defect in red and background defect in cyan; on the grey images a misregistration shows as coloured fringes.",
@@ -1228,8 +1232,12 @@
         color: "#ccc", lineHeight: "1.4", margin: "12px 0", flex: "0 0 auto",
         paddingTop: "10px", borderTop: "1px solid #444",
       });
-      side.appendChild(description);
-      const table = el("div", { fontSize: "12px", flex: "0 0 auto", paddingTop: "10px", borderTop: "1px solid #444" });
+      scroller.appendChild(description);
+      const table = el("div", {
+        fontSize: "12px", flex: "0 0 auto", padding: "10px 12px", borderBottom: "1px solid #444",
+        background: "rgba(0,0,0,0.35)",
+      });
+      table.id = "golden-compare-stage-results";
       resultRows(meta).forEach(function (row) {
         const line = el("div", { display: "flex", marginBottom: "3px" });
         line.appendChild(el("div", { flex: "0 0 80px", color: "#999" }, row[0]));
@@ -1237,6 +1245,7 @@
         table.appendChild(line);
       });
       side.appendChild(table);
+      side.appendChild(scroller);
       body.appendChild(side);
       root.appendChild(body);
 
