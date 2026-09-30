@@ -622,14 +622,16 @@ stage on the frame's own canvas, before alignment, is shown plain with a
 note, since it has nothing to lie over. `previewWidth` (80-600 px) sizes
 the thumbnail; both settings are per-message overridable.
 
-The viewer is live: it follows each frame the node inspects, keeping the
-stage, overlay and zoom you were on. **Pause** (or `p`) holds the frame
-on screen - the runtime keeps that inspection, alongside the latest,
-until you resume or close, so a line running at speed cannot pull it out
-from under you (`POST /golden-compare/last/:id/hold` with the frame's
-`receivedAt`, refused with a 409 if that frame has already gone;
-`DELETE` releases it; the two `GET` routes take `?t=` to name the held
-frame). The thumbnail under the node keeps following meanwhile.
+The viewer opens **paused** on the frame you clicked: the runtime keeps
+that inspection, alongside the latest, until you go live or close, so a
+line running at speed cannot pull it out from under you
+(`POST /golden-compare/last/:id/hold` with the frame's `receivedAt`,
+refused with a 409 if that frame has already gone, in which case the
+viewer opens on the newer one and holds that; `DELETE` releases it; the
+two `GET` routes take `?t=` to name the held frame). **Go live** (or
+`p`) follows each frame the node inspects instead, keeping the stage,
+overlay and zoom you were on, and **Pause** holds again. The thumbnail
+under the node keeps following meanwhile.
 
 The node keeps one inspection per golden-compare node in memory for
 this, every stage at working size, and serves it over

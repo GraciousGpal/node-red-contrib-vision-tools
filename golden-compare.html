@@ -769,10 +769,11 @@
     else over the grey golden, or pick one - as red/cyan (red: only the
     golden has it, cyan: only this stage has it, white: both, so a print
     defect is red and a background defect is cyan), as a difference, or as
-    a blend with a slider. The viewer follows each new frame the node
-    inspects; <i>Pause</i> (or <kbd>p</kbd>) holds the one on screen - the
-    runtime keeps it until you resume or close, so later frames cannot
-    replace it while you look.
+    a blend with a slider. The viewer opens paused on the frame you
+    clicked: the runtime holds that inspection until you go live or close,
+    so later frames cannot replace it while you look. <i>Go live</i> (or
+    <kbd>p</kbd>) follows each new frame instead; <i>Pause</i> holds
+    again.
   </p>
   <p>
     The node keeps one inspection per golden-compare node in memory for
@@ -1030,9 +1031,11 @@
       if (meta.filename) header.appendChild(el("div", { color: "#aaa", marginRight: "16px" }, meta.filename));
       header.appendChild(el("div", { color: "#aaa", flex: "1" },
         meta.receivedAt ? new Date(meta.receivedAt).toLocaleString() : ""));
-      // Live: the viewer follows every frame the node inspects. Paused:
-      // the runtime holds this one so the next frame cannot replace it.
-      let paused = !!state.paused || !!meta.held;
+      // Paused: the runtime holds this frame so the next one cannot
+      // replace it - the state a fresh open lands in, since the frame you
+      // clicked on is the one you want to look at. Live: the viewer
+      // follows every frame the node inspects.
+      let paused = state.paused === true || !!meta.held;
       const liveTag = el("div", { marginRight: "10px", fontSize: "11px" });
       header.appendChild(liveTag);
       const pauseBtn = el("div", {
@@ -1043,13 +1046,18 @@
       pauseBtn.title = "pause on this frame (p)";
       header.appendChild(pauseBtn);
       const syncPause = function () {
-        pauseBtn.textContent = paused ? "▶ Resume" : "⏸ Pause";
+        pauseBtn.textContent = paused ? "▶ Go live" : "⏸ Pause";
+        pauseBtn.title = paused ? "follow each new frame (p)" : "hold this frame (p)";
         pauseBtn.style.background = paused ? "#b26a00" : "transparent";
         liveTag.textContent = paused ? "paused on this frame" : "live · follows each frame";
         liveTag.style.color = paused ? "#ffcc80" : "#8bc34a";
         if (viewer) viewer.paused = paused;
       };
-      const setPaused = function (on) {
+      // `attempts`: a hold names the frame on screen, and is refused if a
+      // newer one has already replaced it; then open on that newer one
+      // and hold it instead, a few times over before giving up and
+      // staying live.
+      const setPaused = function (on, attempts) {
         if (on === paused) return;
         if (on) {
           const req = ajax({
@@ -1061,9 +1069,13 @@
             paused = true;
             syncPause();
           }).fail(function (xhr) {
+            attempts = (attempts || 0) + 1;
+            if (attempts < 4) {
+              refresh({ paused: "wanted", holdAttempts: attempts });
+              return;
+            }
             const err = xhr && xhr.responseJSON && xhr.responseJSON.error;
-            if (RED.notify) RED.notify("golden-compare: " + (err || "could not pause") + " - showing the latest", "warning");
-            refresh();
+            if (RED.notify) RED.notify("golden-compare: " + (err || "could not pause") + " - following live instead", "warning");
           });
         } else {
           paused = false;
@@ -1337,10 +1349,10 @@
       const snapshot = function () {
         return { current, actual, overlay: overlay, baseChosen, paused };
       };
-      const refresh = function () {
+      const refresh = function (over) {
         if (typeof $ === "undefined" || !$ || typeof $.getJSON !== "function") return;
         $.getJSON("golden-compare/last/" + nodeId).done(function (m) {
-          openViewer(nodeId, m, snapshot());
+          openViewer(nodeId, m, Object.assign(snapshot(), over || {}));
         });
       };
       const applyZoom = function () {
@@ -1407,6 +1419,11 @@
       syncOverlayUi();
       applyZoom();
       show(state.current != null ? Math.min(state.current, stages.length - 1) : 0);
+      // a fresh open holds the frame it opened on; a refresh keeps
+      // whatever the viewer was doing, and retries a hold that was refused
+      if (!paused && (state.paused === undefined || state.paused === "wanted")) {
+        setPaused(true, state.holdAttempts || 0);
+      }
     };
 
     // Fetch the last inspection and open on it. The thumbnail carries the

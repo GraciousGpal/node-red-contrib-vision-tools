@@ -33,11 +33,11 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   the stage over the golden's ink or grey - red where only the golden has
   it, cyan where only the stage has it, so a print defect is red, a
   background defect cyan and a misregistration a coloured fringe - or as
-  a difference or a slider blend. The viewer follows each frame the
-  node inspects; *Pause* (or `p`) holds the one on screen, and the
-  runtime keeps that inspection until the viewer resumes or closes, so
-  later frames cannot replace it while it is being looked at
-  (`POST`/`DELETE /golden-compare/last/:id/hold`). The runtime keeps one
+  a difference or a slider blend. The viewer opens paused on the frame
+  it was clicked on, and the runtime holds that inspection until the
+  viewer goes live or closes, so later frames cannot replace it while it
+  is being looked at (`POST`/`DELETE /golden-compare/last/:id/hold`);
+  *Go live* (or `p`) follows each frame the node inspects instead. The runtime keeps one
   inspection per node in memory, plus the held one, and serves them over
   `GET /golden-compare/last/:id` and
   `GET /golden-compare/last/:id/stage/:key`, one image per request as the
