@@ -556,7 +556,8 @@ trusting it.
   that alone failed the frame); they are 0/`true` until a map is trained
   from a *Nuisance map* path with *Train the nuisance map* — see
   ARCHITECTURE.md, "The blemish floor, and the nuisance map that lowers
-  it".
+  it". The map is a background-channel check: the print channel is never
+  gated by it.
 
   `stretchPercent` — how far the two axis magnifications differ — is
   reported but deliberately **not** gated. Some stretch is just what the
@@ -620,6 +621,15 @@ edge. Difference and blend (with a slider) are the other two modes. A
 stage on the frame's own canvas, before alignment, is shown plain with a
 note, since it has nothing to lie over. `previewWidth` (80-600 px) sizes
 the thumbnail; both settings are per-message overridable.
+
+The viewer is live: it follows each frame the node inspects, keeping the
+stage, overlay and zoom you were on. **Pause** (or `p`) holds the frame
+on screen - the runtime keeps that inspection, alongside the latest,
+until you resume or close, so a line running at speed cannot pull it out
+from under you (`POST /golden-compare/last/:id/hold` with the frame's
+`receivedAt`, refused with a 409 if that frame has already gone;
+`DELETE` releases it; the two `GET` routes take `?t=` to name the held
+frame). The thumbnail under the node keeps following meanwhile.
 
 The node keeps one inspection per golden-compare node in memory for
 this, every stage at working size, and serves it over

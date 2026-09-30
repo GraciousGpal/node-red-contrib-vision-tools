@@ -94,10 +94,14 @@ function callRoute(node, path, req) {
 		handler(req, res);
 	});
 }
-const last = (h, id = "gc-preview-test") =>
-	callRoute(h.node, "/golden-compare/last/:id", { params: { id } });
-const stage = (h, key, id = "gc-preview-test") =>
-	callRoute(h.node, "/golden-compare/last/:id/stage/:key", { params: { id, key } });
+const last = (h, id = "gc-preview-test", t) =>
+	callRoute(h.node, "/golden-compare/last/:id", { params: { id }, query: t ? { t } : {} });
+const stage = (h, key, id = "gc-preview-test", t) =>
+	callRoute(h.node, "/golden-compare/last/:id/stage/:key", { params: { id, key }, query: t ? { t } : {} });
+const hold = (h, receivedAt, id = "gc-preview-test") =>
+	callRoute(h.node, "/golden-compare/last/:id/hold", { params: { id }, body: { receivedAt } });
+const release = (h, id = "gc-preview-test") =>
+	callRoute(h.node, "DELETE /golden-compare/last/:id/hold", { params: { id } });
 
 const EXPECTED_ORDER = [
 	"goldenGray",
@@ -218,4 +222,36 @@ test("a removed node's inspection goes with it", async () => {
 	assert.strictEqual((await last(h, "gc-removed")).status, 200);
 	await new Promise((r) => h.node.listeners.close(true, r));
 	assert.strictEqual((await last(h, "gc-removed")).status, 404);
+});
+
+test("a held inspection survives the next frame, by its time, until released", async () => {
+	const h = makeNode({ previewEnabled: true }, "gc-hold");
+	assert.strictEqual((await hold(h, 1, "gc-hold")).status, 404, "nothing to hold yet");
+	await h.run({ golden, payload: golden, filename: "first.png" });
+	const first = (await last(h, "gc-hold")).body;
+	// a hold naming a frame that is not the current one is refused
+	const stale = await hold(h, first.receivedAt - 1, "gc-hold");
+	assert.strictEqual(stale.status, 409);
+	assert.strictEqual(stale.body.receivedAt, first.receivedAt);
+	const held = await hold(h, first.receivedAt, "gc-hold");
+	assert.strictEqual(held.status, 200);
+	assert.deepStrictEqual(held.body, { ok: true, receivedAt: first.receivedAt });
+	const firstGrey = (await stage(h, "targetGray", "gc-hold")).body;
+
+	await new Promise((r) => setTimeout(r, 5));
+	await h.run({ golden, payload: golden, filename: "second.png" });
+	const latest = (await last(h, "gc-hold")).body;
+	assert.strictEqual(latest.filename, "second.png", "no time asked for: the latest");
+	assert.strictEqual(latest.held, false);
+	const byTime = (await last(h, "gc-hold", first.receivedAt)).body;
+	assert.strictEqual(byTime.filename, "first.png", "the held frame, by its time");
+	assert.strictEqual(byTime.held, true);
+	const heldGrey = (await stage(h, "targetGray", "gc-hold", first.receivedAt)).body;
+	assert.ok(heldGrey.equals(firstGrey), "the held frame's own image");
+	assert.strictEqual((await stage(h, "targetGray", "gc-hold", 12345)).status, 200, "an unknown time serves the latest");
+
+	assert.deepStrictEqual((await release(h, "gc-hold")).body, { ok: true });
+	assert.strictEqual((await last(h, "gc-hold", first.receivedAt)).body.filename, "second.png", "released: the latest again");
+	// the thumbnail kept following while the hold was on
+	assert.strictEqual(h.published.length, 2);
 });

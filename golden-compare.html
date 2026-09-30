@@ -769,7 +769,10 @@
     else over the grey golden, or pick one - as red/cyan (red: only the
     golden has it, cyan: only this stage has it, white: both, so a print
     defect is red and a background defect is cyan), as a difference, or as
-    a blend with a slider.
+    a blend with a slider. The viewer follows each new frame the node
+    inspects; <i>Pause</i> (or <kbd>p</kbd>) holds the one on screen - the
+    runtime keeps it until you resume or close, so later frames cannot
+    replace it while you look.
   </p>
   <p>
     The node keeps one inspection per golden-compare node in memory for
@@ -914,11 +917,23 @@
 
     let viewer = null;
 
-    const closeViewer = function () {
+    const closeViewer = function (reopening) {
       if (!viewer) return;
       document.removeEventListener("keydown", viewer.onKey);
       viewer.root.remove();
+      if (viewer.paused && !reopening) releaseHold(viewer.nodeId);
       viewer = null;
+    };
+
+    const ajax = function (opts) {
+      if (typeof $ === "undefined" || !$ || typeof $.ajax !== "function") return null;
+      return $.ajax(opts);
+    };
+    const holdUrl = function (nodeId) {
+      return "golden-compare/last/" + nodeId + "/hold";
+    };
+    const releaseHold = function (nodeId) {
+      ajax({ url: holdUrl(nodeId), type: "DELETE" });
     };
 
     const fmt = function (v, digits) {
@@ -984,8 +999,11 @@
       return "golden-compare/last/" + nodeId + "/stage/" + key + "?t=" + receivedAt;
     };
 
-    const openViewer = function (nodeId, meta) {
-      closeViewer();
+    const openViewer = function (nodeId, meta, state) {
+      // with a state this is a refresh of the open viewer, which keeps its
+      // hold; without one it is a fresh open, which lets any hold go
+      closeViewer(!!state);
+      state = state || {};
       const stages = Array.isArray(meta.stages) ? meta.stages : [];
       if (!stages.length) return;
       const node = RED.nodes.node(nodeId) || {};
@@ -1012,6 +1030,49 @@
       if (meta.filename) header.appendChild(el("div", { color: "#aaa", marginRight: "16px" }, meta.filename));
       header.appendChild(el("div", { color: "#aaa", flex: "1" },
         meta.receivedAt ? new Date(meta.receivedAt).toLocaleString() : ""));
+      // Live: the viewer follows every frame the node inspects. Paused:
+      // the runtime holds this one so the next frame cannot replace it.
+      let paused = !!state.paused || !!meta.held;
+      const liveTag = el("div", { marginRight: "10px", fontSize: "11px" });
+      header.appendChild(liveTag);
+      const pauseBtn = el("div", {
+        cursor: "pointer", padding: "2px 10px", border: "1px solid #666",
+        borderRadius: "3px", marginRight: "14px", userSelect: "none",
+      });
+      pauseBtn.id = "golden-compare-stage-pause";
+      pauseBtn.title = "pause on this frame (p)";
+      header.appendChild(pauseBtn);
+      const syncPause = function () {
+        pauseBtn.textContent = paused ? "▶ Resume" : "⏸ Pause";
+        pauseBtn.style.background = paused ? "#b26a00" : "transparent";
+        liveTag.textContent = paused ? "paused on this frame" : "live · follows each frame";
+        liveTag.style.color = paused ? "#ffcc80" : "#8bc34a";
+        if (viewer) viewer.paused = paused;
+      };
+      const setPaused = function (on) {
+        if (on === paused) return;
+        if (on) {
+          const req = ajax({
+            url: holdUrl(nodeId), type: "POST", contentType: "application/json",
+            data: JSON.stringify({ receivedAt: meta.receivedAt }),
+          });
+          if (!req) return;
+          req.done(function () {
+            paused = true;
+            syncPause();
+          }).fail(function (xhr) {
+            const err = xhr && xhr.responseJSON && xhr.responseJSON.error;
+            if (RED.notify) RED.notify("golden-compare: " + (err || "could not pause") + " - showing the latest", "warning");
+            refresh();
+          });
+        } else {
+          paused = false;
+          syncPause();
+          releaseHold(nodeId);
+          refresh();
+        }
+      };
+      pauseBtn.onclick = function () { setPaused(!paused); };
       const close = el("div", { cursor: "pointer", fontSize: "22px", lineHeight: "1", padding: "0 4px" }, "×");
       close.title = "close (Esc)";
       close.onclick = closeViewer;
@@ -1062,7 +1123,9 @@
 
       // ---- overlay: this stage composited over a golden-side image ----
       const goldenSide = stages.filter(function (s) { return s.group === "golden"; });
-      const overlay = { on: false, mode: "redcyan", base: null, opacity: 0.5 };
+      const overlay = state.overlay
+        ? { on: !!state.overlay.on, mode: state.overlay.mode || "redcyan", base: state.overlay.base || null, opacity: state.overlay.opacity != null ? state.overlay.opacity : 0.5 }
+        : { on: false, mode: "redcyan", base: null, opacity: 0.5 };
       const overlayBox = el("div", {
         margin: "12px 0 0", paddingTop: "10px", borderTop: "1px solid #444", fontSize: "12px",
       });
@@ -1117,7 +1180,9 @@
         const pick = goldenSide.find(function (g) { return wantMask ? g.key === "goldenFg" : g.key === "goldenGray"; });
         return (pick || goldenSide[0]).key;
       };
-      let baseChosen = false;
+      let baseChosen = !!state.baseChosen;
+      if (baseChosen && overlay.base) baseSelect.value = overlay.base;
+      opacity.value = String(Math.round(overlay.opacity * 100));
       const syncOverlayUi = function () {
         overlayCheck.checked = overlay.on;
         overlayOpts.style.display = overlay.on ? "" : "none";
@@ -1263,11 +1328,21 @@
       footer.appendChild(counter);
       footer.appendChild(next);
       footer.appendChild(el("div", { color: "#777", marginLeft: "24px", fontSize: "11px" },
-        "← → step · o overlay · click picture for 1:1 · Esc closes"));
+        "← → step · o overlay · p pause · click picture for 1:1 · Esc closes"));
       root.appendChild(footer);
 
       let current = -1;
-      let actual = false;
+      let actual = !!state.actual;
+      // what a refresh carries over to the viewer it opens on the new frame
+      const snapshot = function () {
+        return { current, actual, overlay: overlay, baseChosen, paused };
+      };
+      const refresh = function () {
+        if (typeof $ === "undefined" || !$ || typeof $.getJSON !== "function") return;
+        $.getJSON("golden-compare/last/" + nodeId).done(function (m) {
+          openViewer(nodeId, m, snapshot());
+        });
+      };
       const applyZoom = function () {
         img.style.maxWidth = actual ? "none" : "100%";
         img.style.maxHeight = actual ? "none" : "100%";
@@ -1315,6 +1390,8 @@
           overlay.on = !overlay.on;
           syncOverlayUi();
           render();
+        } else if (ev.key === "p" || ev.key === "P") {
+          setPaused(!paused);
         } else {
           return;
         }
@@ -1325,8 +1402,11 @@
         if (ev.target === root) closeViewer();
       };
       document.body.appendChild(root);
-      viewer = { root, onKey, show };
-      show(0);
+      viewer = { root, onKey, show, nodeId, receivedAt: meta.receivedAt, paused, refresh };
+      syncPause();
+      syncOverlayUi();
+      applyZoom();
+      show(state.current != null ? Math.min(state.current, stages.length - 1) : 0);
     };
 
     // Fetch the last inspection and open on it. The thumbnail carries the
@@ -1350,6 +1430,13 @@
 
     RED.comms.subscribe("golden-compare-preview", function (_event, data) {
       if (!data || !data.id) return;
+      // an open viewer follows the node's frames unless it is paused
+      if (
+        viewer && viewer.nodeId === data.id && !viewer.paused &&
+        !data.clear && data.receivedAt && data.receivedAt !== viewer.receivedAt
+      ) {
+        viewer.refresh();
+      }
       if (data.clear || !data.image) {
         removePreview(data.id);
         return;

@@ -102,7 +102,7 @@ class El {
 	}
 }
 
-function boot(node, { meta, fail } = {}) {
+function boot(node, { meta, fail, holdFail } = {}) {
 	const group = new El("g");
 	group.id = node.id;
 	const bodyEl = new El("body");
@@ -150,16 +150,39 @@ function boot(node, { meta, fail } = {}) {
 			notices.push({ text, kind });
 		},
 	};
+	// the meta a fetch answers with can be swapped mid-test to stand for
+	// a newer frame having gone through the node
+	const live = { meta };
+	const ajaxCalls = [];
 	const $ = {
 		getJSON(url) {
 			requests.push(url);
 			const chain = {
 				done(fn) {
-					if (!fail) fn(meta);
+					if (!fail) fn(live.meta);
 					return chain;
 				},
 				fail(fn) {
 					if (fail) fn({ responseJSON: { error: fail } });
+					return chain;
+				},
+			};
+			return chain;
+		},
+		ajax(opts) {
+			ajaxCalls.push(opts);
+			const ok = !(opts.type === "POST" && holdFail);
+			const chain = {
+				done(fn) {
+					if (ok) fn({ ok: true });
+					return chain;
+				},
+				fail(fn) {
+					if (!ok) fn({ responseJSON: { error: holdFail } });
+					return chain;
+				},
+				always(fn) {
+					fn();
 					return chain;
 				},
 			};
@@ -187,7 +210,7 @@ function boot(node, { meta, fail } = {}) {
 			im.onload();
 		}
 	};
-	return { group, bodyEl, publish, panel, viewer, open, key, settle, images, listeners, requests, notices };
+	return { group, bodyEl, publish, panel, viewer, open, key, settle, images, listeners, requests, notices, live, ajaxCalls };
 }
 
 const NODE = { id: "gc1", x: 300, y: 200, w: 120, h: 30, name: "front label" };
@@ -460,4 +483,87 @@ test("a stage on the frame's own canvas is shown plain, with a note, rather than
 	h.settle();
 	assert.strictEqual(baseSelect.value, "goldenFg");
 	assert.deepStrictEqual(Array.from(canvas.put.data).slice(0, 3), [255, 100, 100]);
+});
+
+const NEWER = { ...META, receivedAt: 1700000005000, filename: "frame-8.jpg", pass: true, text: "pass · align 0.031 · 380ms" };
+const NEWER_EVENT = { ...EVENT, receivedAt: NEWER.receivedAt, pass: true, text: NEWER.text };
+
+test("the open viewer follows the next frame through the node, keeping its place", () => {
+	const h = boot(NODE, { meta: META });
+	h.publish(EVENT);
+	h.open();
+	h.key("ArrowRight"); // stage 2
+	h.key("o");
+	let v = h.viewer();
+	assert.ok(v.find((e) => e.textContent === "live · follows each frame"));
+	// a newer frame lands
+	h.live.meta = NEWER;
+	h.publish(NEWER_EVENT);
+	assert.deepStrictEqual(h.requests, ["golden-compare/last/gc1", "golden-compare/last/gc1"], "fetched again");
+	v = h.viewer();
+	assert.ok(v, "still open");
+	assert.ok(v.find((e) => e.textContent === "frame-8.jpg"), "on the new frame");
+	assert.ok(v.find((e) => e.textContent === NEWER.text));
+	const img = v.find((e) => e.tag === "img");
+	assert.strictEqual(img.src, "golden-compare/last/gc1/stage/targetGray?t=1700000005000", "same stage, new frame");
+	const check = v.find((e) => e.id === "golden-compare-stage-overlay");
+	assert.strictEqual(check.checked, true, "the overlay setting carried over");
+	assert.strictEqual(h.bodyEl.children.filter((c) => c.id === "golden-compare-stage-viewer").length, 1);
+	// the same frame announced again is not a refresh
+	h.publish(NEWER_EVENT);
+	assert.strictEqual(h.requests.length, 2);
+	// another node's frame is not either
+	h.publish({ ...NEWER_EVENT, id: "other", receivedAt: 1700000009000 });
+	assert.strictEqual(h.requests.length, 2);
+});
+
+test("pause holds the frame in the runtime and stops following; resume releases it and catches up", () => {
+	const h = boot(NODE, { meta: META });
+	h.publish(EVENT);
+	h.open();
+	const btn = () => h.viewer().find((e) => e.id === "golden-compare-stage-pause");
+	assert.strictEqual(btn().textContent, "⏸ Pause");
+	btn().onclick();
+	assert.strictEqual(h.ajaxCalls.length, 1);
+	assert.strictEqual(h.ajaxCalls[0].type, "POST");
+	assert.strictEqual(h.ajaxCalls[0].url, "golden-compare/last/gc1/hold");
+	assert.deepStrictEqual(JSON.parse(h.ajaxCalls[0].data), { receivedAt: 1700000000000 }, "names the frame it is looking at");
+	assert.strictEqual(btn().textContent, "▶ Resume");
+	assert.ok(h.viewer().find((e) => e.textContent === "paused on this frame"));
+	// a newer frame does not move it
+	h.live.meta = NEWER;
+	h.publish(NEWER_EVENT);
+	assert.strictEqual(h.requests.length, 1, "no refetch while paused");
+	assert.ok(h.viewer().find((e) => e.textContent === "frame-7.jpg"), "still the held frame");
+	// stepping while paused asks for the held frame's images
+	h.key("ArrowRight");
+	assert.match(h.viewer().find((e) => e.tag === "img").src, /targetGray[?]t=1700000000000$/);
+	// resume: release, then catch up
+	h.key("p");
+	assert.strictEqual(h.ajaxCalls.length, 2);
+	assert.strictEqual(h.ajaxCalls[1].type, "DELETE");
+	assert.strictEqual(h.ajaxCalls[1].url, "golden-compare/last/gc1/hold");
+	assert.strictEqual(h.requests.length, 2, "refetched on resume");
+	assert.ok(h.viewer().find((e) => e.textContent === "frame-8.jpg"));
+	assert.strictEqual(btn().textContent, "⏸ Pause");
+});
+
+test("closing a paused viewer releases the hold; a refused hold falls back to live", () => {
+	const h = boot(NODE, { meta: META });
+	h.publish(EVENT);
+	h.open();
+	h.key("p");
+	h.key("Escape");
+	assert.deepStrictEqual(h.ajaxCalls.map((c) => c.type), ["POST", "DELETE"]);
+	assert.strictEqual(h.viewer(), null);
+
+	const r = boot(NODE, { meta: META, holdFail: "that frame has already been replaced" });
+	r.publish(EVENT);
+	r.open();
+	r.key("p");
+	assert.strictEqual(r.viewer().find((e) => e.id === "golden-compare-stage-pause").textContent, "⏸ Pause", "still live");
+	assert.strictEqual(r.requests.length, 2, "refetched the latest instead");
+	assert.deepStrictEqual(r.notices, [
+		{ text: "golden-compare: that frame has already been replaced - showing the latest", kind: "warning" },
+	]);
 });

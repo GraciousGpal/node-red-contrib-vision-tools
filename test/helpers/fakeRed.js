@@ -6,7 +6,8 @@ const path = require("node:path");
  * Admin routes the file registers through RED.httpAdmin.<verb>(path,
  * ...handlers) are collected on the returned node as `node.adminRoutes`
  * - path -> the handler array as registered, needsPermission's guard
- * included as a pass-through - so a test can drive an endpoint the way
+ * included as a pass-through; a DELETE route is keyed "DELETE <path>" so
+ * it cannot collide with a GET on the same path - so a test can drive an endpoint the way
  * it drives the input listener. Attached to the node rather than returned
  * beside it because every caller takes the return value as the node.
  */
@@ -20,6 +21,9 @@ function loadNode(file, config = {}, { id, comms } = {}) {
 			},
 			post(path, ...handlers) {
 				routes[path] = handlers;
+			},
+			delete(path, ...handlers) {
+				routes["DELETE " + path] = handlers;
 			},
 		},
 		auth: {

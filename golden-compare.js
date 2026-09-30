@@ -364,6 +364,23 @@ module.exports = (RED) => {
 	const lastInspections = new Map();
 
 	/**
+	 * An inspection the stage viewer has paused on, by node id. The last
+	 * entry is replaced by every frame, so a viewer that wants to look
+	 * closer at one asks for it to be held; the routes then serve the
+	 * held entry when asked for its time, and the latest otherwise. At
+	 * most one held per node, released when the viewer resumes or closes.
+	 */
+	const heldInspections = new Map();
+
+	/** The entry a route should serve: the held one when its time is
+	 * asked for, else the latest. */
+	function entryFor(id, t) {
+		const held = heldInspections.get(id);
+		if (held && t && String(held.receivedAt) === String(t)) return held;
+		return lastInspections.get(id);
+	}
+
+	/**
 	 * The pipeline, in the order it runs, as the stage viewer walks it.
 	 * Keys are the msg.stages keys plus the two heat maps; a stage that
 	 * was not rendered (a heat map with its output off, the nuisance
@@ -513,7 +530,10 @@ module.exports = (RED) => {
 		node.previewShown = false;
 
 		node.on("close", (removed, done) => {
-			if (removed) lastInspections.delete(node.id);
+			if (removed) {
+				lastInspections.delete(node.id);
+				heldInspections.delete(node.id);
+			}
 			done();
 		});
 
@@ -1180,14 +1200,16 @@ module.exports = (RED) => {
 		"/golden-compare/last/:id",
 		RED.auth.needsPermission("golden-compare.read"),
 		(req, res) => {
-			const entry = lastInspections.get(req.params.id);
+			const entry = entryFor(req.params.id, req.query && req.query.t);
 			if (!entry) {
 				res.status(404).json({ ok: false, error: "no frame yet" });
 				return;
 			}
+			const held = heldInspections.get(req.params.id);
 			res.setHeader("Cache-Control", "no-store");
 			res.json({
 				ok: true,
+				held: !!held && held === entry,
 				receivedAt: entry.receivedAt,
 				filename: entry.filename,
 				pass: entry.pass,
@@ -1210,7 +1232,7 @@ module.exports = (RED) => {
 		"/golden-compare/last/:id/stage/:key",
 		RED.auth.needsPermission("golden-compare.read"),
 		async (req, res) => {
-			const entry = lastInspections.get(req.params.id);
+			const entry = entryFor(req.params.id, req.query && req.query.t);
 			const image = entry && entry.images[req.params.key];
 			if (!image) {
 				res
@@ -1227,6 +1249,42 @@ module.exports = (RED) => {
 			} catch (err) {
 				res.status(500).json({ ok: false, error: err.message });
 			}
+		},
+	);
+
+	// Pause: hold the inspection the viewer is looking at so the next
+	// frame does not replace it. The body names the frame by its time, so
+	// a hold that arrives after the frame is already gone is refused
+	// rather than silently pinning a different one.
+	RED.httpAdmin.post(
+		"/golden-compare/last/:id/hold",
+		RED.auth.needsPermission("golden-compare.write"),
+		(req, res) => {
+			const entry = lastInspections.get(req.params.id);
+			const t = req.body && req.body.receivedAt;
+			if (!entry) {
+				res.status(404).json({ ok: false, error: "no frame yet" });
+				return;
+			}
+			if (t != null && String(entry.receivedAt) !== String(t)) {
+				res.status(409).json({
+					ok: false,
+					error: "that frame has already been replaced",
+					receivedAt: entry.receivedAt,
+				});
+				return;
+			}
+			heldInspections.set(req.params.id, entry);
+			res.json({ ok: true, receivedAt: entry.receivedAt });
+		},
+	);
+
+	RED.httpAdmin.delete(
+		"/golden-compare/last/:id/hold",
+		RED.auth.needsPermission("golden-compare.write"),
+		(req, res) => {
+			heldInspections.delete(req.params.id);
+			res.json({ ok: true });
 		},
 	);
 };

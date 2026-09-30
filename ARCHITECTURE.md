@@ -275,7 +275,10 @@ excess[i] = max(0, density[i] - baseline[i])
 A recurring artifact scores ~0 however dark it is, because its baseline is
 just as dark. A blemish on normally-clean substrate scores its full
 density. The gate is layered on the existing density and ratio checks and
-is inert until a map exists, so an untrained rig is unchanged.
+is inert until a map exists, so an untrained rig is unchanged. It is a
+**background-channel** check: the map is trained from background density
+and says nothing about missing ink, so `compareFrame` judges the print
+channel with the baseline stripped from its config.
 
 Held out - each good frame scored against a map trained without it, since
 a map validated on its own training frames reports a gap it cannot

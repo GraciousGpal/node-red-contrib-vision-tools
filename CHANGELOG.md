@@ -6,6 +6,17 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Fixed
+
+- **The nuisance map no longer gates the print channel.** The map is
+  trained from the background channel - what extra ink looks like on a
+  good part, block by block - but the novelty gate was applied to both
+  channels, so once a map was loaded any print block at the novelty
+  threshold failed against a baseline that had never been measured for
+  print. Training a map silently tightened the print check. The print
+  channel is now judged by its own density and ratio gates only;
+  `printBlemish.worstExcess` is 0 and `noveltyPass` true.
+
 ### Added
 
 - **A stage viewer for `golden-compare`.** With the new *Preview* box on,
@@ -22,8 +33,13 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   the stage over the golden's ink or grey - red where only the golden has
   it, cyan where only the stage has it, so a print defect is red, a
   background defect cyan and a misregistration a coloured fringe - or as
-  a difference or a slider blend. The runtime keeps one inspection per
-  node in memory and serves it over `GET /golden-compare/last/:id` and
+  a difference or a slider blend. The viewer follows each frame the
+  node inspects; *Pause* (or `p`) holds the one on screen, and the
+  runtime keeps that inspection until the viewer resumes or closes, so
+  later frames cannot replace it while it is being looked at
+  (`POST`/`DELETE /golden-compare/last/:id/hold`). The runtime keeps one
+  inspection per node in memory, plus the held one, and serves them over
+  `GET /golden-compare/last/:id` and
   `GET /golden-compare/last/:id/stage/:key`, one image per request as the
   viewer reaches it. The preview renders every stage and both heat maps
   on every frame; the message still carries only what the output boxes

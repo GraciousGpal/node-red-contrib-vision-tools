@@ -921,3 +921,32 @@ test("a loaded nuisance map is drawn as a debug stage over the golden", async ()
 		"the other stages are unchanged",
 	);
 });
+
+test("the nuisance map gates the background channel only, never the print channel", async () => {
+	// the density and ratio gates are switched off, so only the novelty
+	// gate can fail a channel here
+	const loose = { failThreshold: 1, failRatio: 1, blockThreshold: 0.05, noveltyThreshold: 0.3 };
+	const g = await prepareGolden(await png(labelSvg(300, 450)), cfg(loose));
+	const probe = await compareFrame(await png(labelSvg(300, 450)), g, cfg(loose));
+	const zeros = new Float32Array(probe.backgroundBlemish.gridW * probe.backgroundBlemish.gridH);
+	// a bar dropped: missing ink, dense in its blocks
+	const missing = await compareFrame(
+		await png(labelSvg(300, 450, { missingBar: true })),
+		g,
+		cfg({ ...loose, nuisanceBaseline: zeros }),
+	);
+	assert.ok(missing.printBlemish.regions.length > 0, "the dropped bar is a print region");
+	assert.ok(missing.printBlemish.regions[0].density >= 0.3, "dense enough to trip a novelty gate");
+	assert.strictEqual(missing.printBlemish.pass, true, "but print is not judged by the map");
+	assert.strictEqual(missing.printBlemish.worstExcess, 0);
+	assert.strictEqual(missing.printBlemish.noveltyPass, true);
+	// a blob added: extra ink, which the map does judge
+	const extra = await compareFrame(
+		await png(labelSvg(300, 450, { extraBlob: { x: 150, y: 380, w: 40, h: 30 } })),
+		g,
+		cfg({ ...loose, nuisanceBaseline: zeros }),
+	);
+	assert.ok(extra.backgroundBlemish.worstExcess >= 0.3, `excess ${extra.backgroundBlemish.worstExcess}`);
+	assert.strictEqual(extra.backgroundBlemish.noveltyPass, false);
+	assert.strictEqual(extra.backgroundBlemish.pass, false, "background still fails on novelty");
+});
