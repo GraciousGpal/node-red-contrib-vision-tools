@@ -18,7 +18,11 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   masks, both heat maps, and the trained nuisance baseline drawn over the
   golden when a map is loaded. Each stage comes with a sentence on what it
   is and the numbers behind the verdict sit beside it; arrow keys step,
-  `Esc` closes, a click toggles 1:1. The runtime keeps one inspection per
+  `Esc` closes, a click toggles 1:1. *Overlay on the golden* composites
+  the stage over the golden's ink or grey - red where only the golden has
+  it, cyan where only the stage has it, so a print defect is red, a
+  background defect cyan and a misregistration a coloured fringe - or as
+  a difference or a slider blend. The runtime keeps one inspection per
   node in memory and serves it over `GET /golden-compare/last/:id` and
   `GET /golden-compare/last/:id/stage/:key`, one image per request as the
   viewer reaches it. The preview renders every stage and both heat maps

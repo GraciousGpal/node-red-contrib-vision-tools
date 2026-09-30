@@ -8,7 +8,10 @@
  * inspection from the runtime and opens a viewer that steps through the
  * stages in order; the viewer is checked here against a stub document
  * and a stub $.getJSON, so the fetch URL, the stage image URLs, the
- * keyboard stepping and the teardown are all asserted without a browser.
+ * keyboard stepping, the overlay compositing and the teardown are all
+ * asserted without a browser. The canvas stub hands back pixels by which
+ * image was drawn into it, so the red/cyan and difference arithmetic is
+ * checked on real numbers.
  */
 
 const test = require("node:test");
@@ -23,6 +26,18 @@ const SCRIPT = (() => {
 	assert.ok(m, "could not find the editor script in golden-compare.html");
 	return m[1];
 })();
+
+// Pixel values a stub canvas reports for an image, by stage key: two
+// pixels wide, one high. goldenFg has ink on the left, targetFgAligned on
+// the right, so red/cyan should come out red then cyan.
+const PIXELS = {
+	goldenFg: [255, 0],
+	targetFgAligned: [0, 255],
+	goldenGray: [200, 200],
+	backgroundHeatmap: [100, 200],
+};
+const sizeOf = (src) => (/stage\/targetGray\b/.test(src) ? [3, 1] : [2, 1]);
+const keyOf = (src) => (src.match(/stage\/([A-Za-z]+)/) || [])[1];
 
 class El {
 	constructor(tag) {
@@ -61,10 +76,31 @@ class El {
 		for (const c of this.children) c.findAll(pred, out);
 		return out;
 	}
+	getContext() {
+		const canvas = this;
+		let drawn = null;
+		return {
+			drawImage(image) {
+				drawn = image;
+			},
+			getImageData(_x, _y, w, h) {
+				const data = new Uint8ClampedArray(w * h * 4);
+				const values = PIXELS[keyOf(drawn.src)] || [0, 0];
+				for (let i = 0; i < w * h; i++) {
+					data[i * 4] = data[i * 4 + 1] = data[i * 4 + 2] = values[i % values.length];
+					data[i * 4 + 3] = 255;
+				}
+				return { data, width: w, height: h };
+			},
+			createImageData(w, h) {
+				return { data: new Uint8ClampedArray(w * h * 4), width: w, height: h };
+			},
+			putImageData(imageData) {
+				canvas.put = imageData;
+			},
+		};
+	}
 }
-
-// never fires onload; only its src matters here (the prefetch)
-class StubImage {}
 
 function boot(node, { meta, fail } = {}) {
 	const group = new El("g");
@@ -73,6 +109,14 @@ function boot(node, { meta, fail } = {}) {
 	const subscriptions = {};
 	const listeners = {};
 	const requests = [];
+	const images = [];
+	// never fires onload on its own: settle() does, so a test controls
+	// when each stage image "arrives"
+	class StubImage {
+		constructor() {
+			images.push(this);
+		}
+	}
 	const document = {
 		body: bodyEl,
 		getElementById(id) {
@@ -132,7 +176,18 @@ function boot(node, { meta, fail } = {}) {
 	const publish = (data) => subscriptions["golden-compare-preview"](null, data);
 	const panel = () => group.find((e) => e.tag === "foreignObject");
 	const viewer = () => bodyEl.find((e) => e.id === "golden-compare-stage-viewer");
-	return { group, bodyEl, publish, panel, viewer, listeners, requests, notices };
+	const open = () => panel().find((e) => e.tag === "div").onclick();
+	const key = (k) => listeners.keydown({ key: k, preventDefault() {} });
+	// every requested image that has not loaded yet loads now
+	const settle = () => {
+		for (const im of images) {
+			if (im.loaded || !im.onload) continue;
+			im.loaded = true;
+			[im.naturalWidth, im.naturalHeight] = sizeOf(im.src);
+			im.onload();
+		}
+	};
+	return { group, bodyEl, publish, panel, viewer, open, key, settle, images, listeners, requests, notices };
 }
 
 const NODE = { id: "gc1", x: 300, y: 200, w: 120, h: 30, name: "front label" };
@@ -172,6 +227,17 @@ const META = {
 		{ key: "goldenGray", group: "golden", title: "Golden, grey", description: "the reference" },
 		{ key: "targetGray", group: "frame", title: "Frame, grey", description: "the frame" },
 		{ key: "backgroundHeatmap", group: "verdict", title: "Background heat map", description: "blocks" },
+	],
+};
+// a fuller stage list, for the overlay
+const META_OVERLAY = {
+	...META,
+	stages: [
+		{ key: "goldenGray", group: "golden", title: "Golden, grey", description: "" },
+		{ key: "goldenFg", group: "golden", title: "Golden ink", description: "" },
+		{ key: "targetGray", group: "frame", title: "Frame, grey", description: "" },
+		{ key: "targetFgAligned", group: "aligned", title: "Frame ink, aligned", description: "" },
+		{ key: "backgroundHeatmap", group: "verdict", title: "Background heat map", description: "" },
 	],
 };
 
@@ -221,7 +287,7 @@ test("a clear event removes the panel, a repeat replaces it, the × hides it", (
 test("clicking the panel fetches the last inspection and opens the viewer on stage 1", () => {
 	const h = boot(NODE, { meta: META });
 	h.publish(EVENT);
-	h.panel().find((e) => e.tag === "div").onclick();
+	h.open();
 	assert.deepStrictEqual(h.requests, ["golden-compare/last/gc1"]);
 	const v = h.viewer();
 	assert.ok(v, "the viewer was appended to the body");
@@ -248,32 +314,36 @@ test("clicking the panel fetches the last inspection and opens the viewer on sta
 	assert.ok(/excess 0.350 FAIL/.test(bg.textContent), "and names the novelty gate");
 	assert.strictEqual(bg.style.color, "#ef9a9a");
 	assert.ok(v.find((e) => e.textContent === "91% of golden ink"));
+	// the next stage is prefetched
+	assert.ok(
+		h.images.some((im) => /stage\/targetGray\?/.test(im.src)),
+		"stage 2 was requested ahead of the arrow key",
+	);
 });
 
 test("arrow keys step through the stages and wrap, Esc closes and unhooks the keys", () => {
 	const h = boot(NODE, { meta: META });
 	h.publish(EVENT);
-	h.panel().find((e) => e.tag === "div").onclick();
+	h.open();
 	const v = h.viewer();
 	const img = v.find((e) => e.tag === "img");
-	const key = (k) => h.listeners.keydown({ key: k, preventDefault() {} });
-	key("ArrowRight");
+	h.key("ArrowRight");
 	assert.match(img.src, /stage\/targetGray\?/);
-	key("ArrowRight");
+	h.key("ArrowRight");
 	assert.match(img.src, /stage\/backgroundHeatmap\?/);
-	key("ArrowRight");
+	h.key("ArrowRight");
 	assert.match(img.src, /stage\/goldenGray\?/, "wraps to the first");
-	key("ArrowLeft");
+	h.key("ArrowLeft");
 	assert.match(img.src, /stage\/backgroundHeatmap\?/, "and back around");
-	key("End");
+	h.key("End");
 	assert.match(img.src, /stage\/backgroundHeatmap\?/);
-	key("Home");
+	h.key("Home");
 	assert.match(img.src, /stage\/goldenGray\?/);
 	// the list entries follow
 	const entries = v.findAll((e) => /^\d+\. /.test(e.textContent));
 	assert.strictEqual(entries[0].style.background, "#1976d2");
 	assert.strictEqual(entries[2].style.background, "transparent");
-	key("Escape");
+	h.key("Escape");
 	assert.strictEqual(h.viewer(), null, "closed");
 	assert.strictEqual(h.listeners.keydown, undefined, "the key handler is gone with it");
 });
@@ -281,9 +351,8 @@ test("arrow keys step through the stages and wrap, Esc closes and unhooks the ke
 test("opening again replaces the viewer rather than stacking one", () => {
 	const h = boot(NODE, { meta: META });
 	h.publish(EVENT);
-	const open = () => h.panel().find((e) => e.tag === "div").onclick();
-	open();
-	open();
+	h.open();
+	h.open();
 	assert.strictEqual(
 		h.bodyEl.children.filter((c) => c.id === "golden-compare-stage-viewer").length,
 		1,
@@ -293,7 +362,96 @@ test("opening again replaces the viewer rather than stacking one", () => {
 test("a runtime with no frame yet is reported, not thrown", () => {
 	const h = boot(NODE, { fail: "no frame yet" });
 	h.publish(EVENT);
-	h.panel().find((e) => e.tag === "div").onclick();
+	h.open();
 	assert.strictEqual(h.viewer(), null);
 	assert.deepStrictEqual(h.notices, [{ text: "golden-compare: no frame yet", kind: "warning" }]);
+});
+
+test("the overlay composites a mask stage over the golden's ink, red where only the golden has ink and cyan where only the frame does", () => {
+	const h = boot(NODE, { meta: META_OVERLAY });
+	h.publish(EVENT);
+	h.open();
+	const v = h.viewer();
+	const img = v.find((e) => e.tag === "img");
+	const canvas = v.find((e) => e.tag === "canvas");
+	assert.strictEqual(canvas.style.display, "none", "plain view to start with");
+	h.key("End");
+	h.key("ArrowLeft"); // targetFgAligned
+	assert.match(img.src, /stage\/targetFgAligned\?/);
+
+	const check = v.find((e) => e.id === "golden-compare-stage-overlay");
+	assert.ok(check, "the overlay checkbox is there");
+	check.checked = true;
+	check.onchange();
+	// nothing to draw until both images have arrived
+	assert.strictEqual(canvas.style.display, "none");
+	const baseSelect = v.find((e) => e.tag === "select" && e.children.some((o) => o.value === "goldenFg"));
+	assert.strictEqual(baseSelect.value, "goldenFg", "a mask stage goes over the golden's ink");
+	h.settle();
+	assert.strictEqual(canvas.style.display, "", "the composite is shown");
+	assert.strictEqual(img.style.display, "none", "in place of the plain image");
+	assert.strictEqual(canvas.width, 2);
+	assert.strictEqual(canvas.height, 1);
+	const d = Array.from(canvas.put.data);
+	assert.deepStrictEqual(d.slice(0, 4), [255, 0, 0, 255], "golden-only ink is red");
+	assert.deepStrictEqual(d.slice(4, 8), [0, 255, 255, 255], "frame-only ink is cyan");
+	assert.match(v.find((e) => /Red: only the golden/.test(e.textContent)).textContent, /print defect in red/);
+
+	// difference mode: both pixels differ fully
+	const modeSelect = v.find((e) => e.tag === "select" && e.children.some((o) => o.value === "difference"));
+	modeSelect.value = "difference";
+	modeSelect.onchange();
+	assert.deepStrictEqual(Array.from(canvas.put.data).slice(0, 4), [255, 255, 255, 255]);
+
+	// blend at 50%: halfway between the two
+	modeSelect.value = "blend";
+	modeSelect.onchange();
+	const slider = v.find((e) => e.type === "range");
+	assert.strictEqual(slider.style.display, "", "the slider appears for blend");
+	assert.deepStrictEqual(Array.from(canvas.put.data).slice(0, 3), [128, 128, 128]);
+	slider.value = "100";
+	slider.oninput();
+	assert.deepStrictEqual(Array.from(canvas.put.data).slice(0, 3), [0, 0, 0], "all the way to the stage");
+
+	// a grey stage goes over the grey golden unless a base was chosen
+	modeSelect.value = "redcyan";
+	modeSelect.onchange();
+	h.key("End"); // backgroundHeatmap
+	h.settle();
+	assert.strictEqual(baseSelect.value, "goldenGray");
+	assert.deepStrictEqual(Array.from(canvas.put.data).slice(0, 3), [200, 100, 100]);
+
+	// "o" switches it off and the plain image is back
+	h.key("o");
+	assert.strictEqual(canvas.style.display, "none");
+	assert.strictEqual(img.style.display, "");
+	assert.strictEqual(check.checked, false);
+});
+
+test("a stage on the frame's own canvas is shown plain, with a note, rather than mis-overlaid", () => {
+	const h = boot(NODE, { meta: META_OVERLAY });
+	h.publish(EVENT);
+	h.open();
+	const v = h.viewer();
+	const img = v.find((e) => e.tag === "img");
+	const canvas = v.find((e) => e.tag === "canvas");
+	h.key("o");
+	h.settle();
+	assert.strictEqual(canvas.style.display, "", "goldenGray over goldenGray still composites");
+	h.key("ArrowRight");
+	h.key("ArrowRight"); // targetGray, 3x1 against the golden's 2x1
+	h.settle();
+	assert.strictEqual(canvas.style.display, "none");
+	assert.strictEqual(img.style.display, "");
+	const note = v.find((e) => /frame's own canvas/.test(e.textContent));
+	assert.ok(note, "explains why");
+	assert.match(note.textContent, /3×1.*2×1/);
+	// choosing a base explicitly sticks across stages
+	const baseSelect = v.find((e) => e.tag === "select" && e.children.some((o) => o.value === "goldenFg"));
+	baseSelect.value = "goldenFg";
+	baseSelect.onchange();
+	h.key("End");
+	h.settle();
+	assert.strictEqual(baseSelect.value, "goldenFg");
+	assert.deepStrictEqual(Array.from(canvas.put.data).slice(0, 3), [255, 100, 100]);
 });

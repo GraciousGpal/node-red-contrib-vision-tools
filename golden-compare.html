@@ -764,6 +764,12 @@
     and the trained nuisance baseline when a map is loaded - with what each
     stage means and the numbers behind the verdict. Arrow keys step,
     <kbd>Esc</kbd> closes, and clicking the picture toggles 1:1.
+    <i>Overlay on the golden</i> (or <kbd>o</kbd>) lays the stage over a
+    golden-side image - the ink masks over the golden's ink, everything
+    else over the grey golden, or pick one - as red/cyan (red: only the
+    golden has it, cyan: only this stage has it, white: both, so a print
+    defect is red and a background defect is cyan), as a difference, or as
+    a blend with a slider.
   </p>
   <p>
     The node keeps one inspection per golden-compare node in memory for
@@ -1021,6 +1027,9 @@
       const img = el("img", { maxWidth: "100%", maxHeight: "100%", objectFit: "contain", background: "#222" });
       img.alt = "";
       stage.appendChild(img);
+      // the overlay is composited here; only one of img/canvas shows
+      const canvas = el("canvas", { maxWidth: "100%", maxHeight: "100%", objectFit: "contain", background: "#222", display: "none" });
+      stage.appendChild(canvas);
       body.appendChild(stage);
 
       const side = el("div", {
@@ -1046,6 +1055,175 @@
         list.appendChild(b);
       });
       side.appendChild(list);
+
+      // ---- overlay: this stage composited over a golden-side image ----
+      const goldenSide = stages.filter(function (s) { return s.group === "golden"; });
+      const overlay = { on: false, mode: "redcyan", base: null, opacity: 0.5 };
+      const overlayBox = el("div", {
+        margin: "12px 0 0", paddingTop: "10px", borderTop: "1px solid #444", fontSize: "12px",
+      });
+      const overlayRow = el("label", { display: "flex", alignItems: "center", cursor: "pointer" });
+      const overlayCheck = el("input");
+      overlayCheck.type = "checkbox";
+      overlayCheck.id = "golden-compare-stage-overlay";
+      overlayCheck.style.margin = "0 6px 0 0";
+      overlayRow.appendChild(overlayCheck);
+      overlayRow.appendChild(el("span", null, "Overlay on the golden (o)"));
+      overlayBox.appendChild(overlayRow);
+      const overlayOpts = el("div", { display: "none", margin: "6px 0 0 20px", lineHeight: "1.9" });
+      const baseSelect = el("select", { marginLeft: "4px", maxWidth: "200px" });
+      goldenSide.forEach(function (g) {
+        const o = el("option", null, g.title);
+        o.value = g.key;
+        baseSelect.appendChild(o);
+      });
+      const baseRow = el("div");
+      baseRow.appendChild(el("span", { color: "#999" }, "under"));
+      baseRow.appendChild(baseSelect);
+      overlayOpts.appendChild(baseRow);
+      const modeSelect = el("select", { marginLeft: "4px" });
+      [["redcyan", "red / cyan"], ["difference", "difference"], ["blend", "blend"]].forEach(function (m) {
+        const o = el("option", null, m[1]);
+        o.value = m[0];
+        modeSelect.appendChild(o);
+      });
+      const modeRow = el("div");
+      modeRow.appendChild(el("span", { color: "#999" }, "as"));
+      modeRow.appendChild(modeSelect);
+      const opacity = el("input", { verticalAlign: "middle", marginLeft: "8px", width: "90px", display: "none" });
+      opacity.type = "range";
+      opacity.min = "0";
+      opacity.max = "100";
+      opacity.value = "50";
+      modeRow.appendChild(opacity);
+      overlayOpts.appendChild(modeRow);
+      const overlayNote = el("div", { color: "#999", lineHeight: "1.4", marginTop: "4px" });
+      overlayOpts.appendChild(overlayNote);
+      overlayBox.appendChild(overlayOpts);
+      if (goldenSide.length) side.appendChild(overlayBox);
+
+      const MODE_NOTES = {
+        redcyan: "Red: only the golden has it. Cyan: only this stage has it. White or grey: both. On the ink masks that is print defect in red and background defect in cyan; on the grey images a misregistration shows as coloured fringes.",
+        difference: "Bright where the two differ, black where they agree.",
+        blend: "The two mixed; drag to fade between the golden and this stage.",
+      };
+      const baseFor = function (key) {
+        // masks over the golden's ink, greys and heat maps over the grey golden
+        const wantMask = /Fg|Defect/.test(key);
+        const pick = goldenSide.find(function (g) { return wantMask ? g.key === "goldenFg" : g.key === "goldenGray"; });
+        return (pick || goldenSide[0]).key;
+      };
+      let baseChosen = false;
+      const syncOverlayUi = function () {
+        overlayCheck.checked = overlay.on;
+        overlayOpts.style.display = overlay.on ? "" : "none";
+        modeSelect.value = overlay.mode;
+        opacity.style.display = overlay.mode === "blend" ? "" : "none";
+        overlayNote.textContent = overlay.on ? MODE_NOTES[overlay.mode] : "";
+      };
+      overlayCheck.onchange = function () {
+        overlay.on = !!overlayCheck.checked;
+        syncOverlayUi();
+        render();
+      };
+      baseSelect.onchange = function () {
+        baseChosen = true;
+        overlay.base = baseSelect.value;
+        render();
+      };
+      modeSelect.onchange = function () {
+        overlay.mode = modeSelect.value;
+        syncOverlayUi();
+        render();
+      };
+      opacity.oninput = function () {
+        overlay.opacity = Number(opacity.value) / 100;
+        render();
+      };
+      overlayCheck.onclick = function (ev) { if (ev && ev.stopPropagation) ev.stopPropagation(); };
+
+      // Loaded stage images by key, shared by the overlay and the prefetch.
+      const loaded = {};
+      const loadImage = function (key, cb) {
+        const have = loaded[key];
+        if (have && have.done) { cb(have.img); return; }
+        if (have) { have.waiting.push(cb); return; }
+        const entry = { img: new Image(), done: false, waiting: [cb] };
+        loaded[key] = entry;
+        entry.img.onload = function () {
+          entry.done = true;
+          entry.waiting.forEach(function (fn) { fn(entry.img); });
+          entry.waiting = [];
+        };
+        entry.img.src = stageUrl(nodeId, key, meta.receivedAt);
+      };
+      const grayOf = function (data, w, h) {
+        const c = document.createElementNS(XHTML, "canvas");
+        c.width = w;
+        c.height = h;
+        const ctx = c.getContext("2d");
+        ctx.drawImage(data, 0, 0);
+        return ctx.getImageData(0, 0, w, h).data;
+      };
+      let renderSerial = 0;
+      const render = function () {
+        const s = stages[current];
+        const showPlain = function (note) {
+          img.style.display = "";
+          canvas.style.display = "none";
+          if (note != null) overlayNote.textContent = note;
+        };
+        if (!overlay.on || !s || !goldenSide.length) { showPlain(); return; }
+        const baseKey = baseChosen ? overlay.base : baseFor(s.key);
+        if (!baseChosen) baseSelect.value = baseKey;
+        const serial = ++renderSerial;
+        loadImage(baseKey, function (baseImg) {
+          loadImage(s.key, function (stageImg) {
+            if (serial !== renderSerial) return;
+            const w = baseImg.naturalWidth || baseImg.width;
+            const h = baseImg.naturalHeight || baseImg.height;
+            const sw = stageImg.naturalWidth || stageImg.width;
+            const sh = stageImg.naturalHeight || stageImg.height;
+            if (w !== sw || h !== sh) {
+              showPlain("This stage is on the frame's own canvas (" + sw + "×" + sh + "), not the golden's (" + w + "×" + h + "), so there is nothing to lay it over. Step on to the aligned frame.");
+              return;
+            }
+            const a = grayOf(baseImg, w, h);
+            const b = grayOf(stageImg, w, h);
+            canvas.width = w;
+            canvas.height = h;
+            const ctx = canvas.getContext("2d");
+            const out = ctx.createImageData(w, h);
+            const d = out.data;
+            const mode = overlay.mode;
+            const alpha = overlay.opacity;
+            for (let i = 0; i < d.length; i += 4) {
+              const ga = (a[i] + a[i + 1] + a[i + 2]) / 3;
+              const gb = (b[i] + b[i + 1] + b[i + 2]) / 3;
+              if (mode === "redcyan") {
+                d[i] = ga;
+                d[i + 1] = gb;
+                d[i + 2] = gb;
+              } else if (mode === "difference") {
+                const diff = Math.abs(ga - gb);
+                d[i] = diff;
+                d[i + 1] = diff;
+                d[i + 2] = diff;
+              } else {
+                d[i] = a[i] * (1 - alpha) + b[i] * alpha;
+                d[i + 1] = a[i + 1] * (1 - alpha) + b[i + 1] * alpha;
+                d[i + 2] = a[i + 2] * (1 - alpha) + b[i + 2] * alpha;
+              }
+              d[i + 3] = 255;
+            }
+            ctx.putImageData(out, 0, 0);
+            img.style.display = "none";
+            canvas.style.display = "";
+            overlayNote.textContent = MODE_NOTES[mode];
+          });
+        });
+      };
+
       const description = el("div", {
         color: "#ccc", lineHeight: "1.4", margin: "12px 0", flex: "0 0 auto",
         paddingTop: "10px", borderTop: "1px solid #444",
@@ -1076,7 +1254,7 @@
       footer.appendChild(counter);
       footer.appendChild(next);
       footer.appendChild(el("div", { color: "#777", marginLeft: "24px", fontSize: "11px" },
-        "← → step · click picture for 1:1 · Esc closes"));
+        "← → step · o overlay · click picture for 1:1 · Esc closes"));
       root.appendChild(footer);
 
       let current = -1;
@@ -1084,6 +1262,8 @@
       const applyZoom = function () {
         img.style.maxWidth = actual ? "none" : "100%";
         img.style.maxHeight = actual ? "none" : "100%";
+        canvas.style.maxWidth = actual ? "none" : "100%";
+        canvas.style.maxHeight = actual ? "none" : "100%";
         stage.style.cursor = actual ? "zoom-out" : "zoom-in";
         stage.style.justifyContent = actual ? "flex-start" : "center";
         stage.style.alignItems = actual ? "flex-start" : "center";
@@ -1105,10 +1285,10 @@
         });
         description.textContent = s.description || "";
         counter.textContent = (i + 1) + " / " + stages.length + " · " + s.title;
+        render();
         // the next one is what an arrow key asks for; have it ready
         const n = stages[(i + 1) % stages.length];
-        const prefetch = new Image();
-        prefetch.src = stageUrl(nodeId, n.key, meta.receivedAt);
+        loadImage(n.key, function () {});
       };
       const onKey = function (ev) {
         if (ev.key === "ArrowRight" || ev.key === "ArrowDown" || ev.key === " ") {
@@ -1121,6 +1301,11 @@
           show(0);
         } else if (ev.key === "End") {
           show(stages.length - 1);
+        } else if (ev.key === "o" || ev.key === "O") {
+          if (!goldenSide.length) return;
+          overlay.on = !overlay.on;
+          syncOverlayUi();
+          render();
         } else {
           return;
         }

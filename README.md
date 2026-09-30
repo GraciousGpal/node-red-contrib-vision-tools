@@ -610,8 +610,16 @@ defect mask, both heat maps, and the trained nuisance baseline drawn over
 the golden when a map is loaded - with a sentence on what each stage
 means and the numbers behind the verdict beside it. Arrow keys step,
 `Esc` closes, and clicking the picture toggles 1:1 so a 3px streak can be
-found. `previewWidth` (80-600 px) sizes the thumbnail; both are per-message
-overridable.
+found. **Overlay on the golden** (or `o`) composites the stage over a
+golden-side image - the ink masks over the golden's ink, everything else
+over the grey golden, or pick one - as red/cyan by default: red where
+only the golden has it, cyan where only the stage has it, white where
+both do, so on the aligned ink mask a print defect is red, a background
+defect is cyan and a misregistration is a coloured fringe along every
+edge. Difference and blend (with a slider) are the other two modes. A
+stage on the frame's own canvas, before alignment, is shown plain with a
+note, since it has nothing to lie over. `previewWidth` (80-600 px) sizes
+the thumbnail; both settings are per-message overridable.
 
 The node keeps one inspection per golden-compare node in memory for
 this, every stage at working size, and serves it over
