@@ -17,7 +17,7 @@
 
 const crypto = require("crypto");
 const inspector = require("./lib/inspector.js");
-const { toShared } = require("./lib/shared.js");
+const { toShared, accountShared } = require("./lib/shared.js");
 const { readScaleFile } = require("./lib/scaleFile.js");
 const { formatMs: fmtMs } = require("./lib/formatMs.js");
 const {
@@ -222,6 +222,7 @@ module.exports = (RED) => {
 				? new Uint8Array(data)
 				: new Uint8Array(data.buffer, data.byteOffset, data.byteLength);
 		if (typeof SharedArrayBuffer === "undefined") return Buffer.from(src);
+		accountShared(src.byteLength);
 		const store = new SharedArrayBuffer(src.byteLength);
 		new Uint8Array(store).set(src);
 		return Buffer.from(store, 0, src.byteLength);

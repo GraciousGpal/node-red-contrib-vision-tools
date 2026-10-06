@@ -264,6 +264,24 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Fixed
 
+- **The worker pool no longer holds on to finished frames.** A shared
+  buffer is freed only when every thread that viewed it has let go, and
+  nothing made a pool worker's collector run: its heap is a few
+  megabytes and the frame-sized buffers it views are not charged to it.
+  Nor does V8 collect a dropped shared buffer on the allocating thread
+  for its size alone. Measured: 70 MB retained per frame, 1.8 GB of
+  shared buffers and 2.5 GB RSS after 25 frames at 3 MP, climbing. The
+  allocators in `lib/shared.js` and each pool worker now count the
+  shared bytes they handle - a worker counts each buffer once, the pool
+  knowing which it has already sent - and collect every 256 MB, a
+  worker when it has been idle for 20 ms, which on a line is between
+  frames, else in its handler; V8's `gc` is taken from inside under one
+  process-wide lock, so no flow starts Node with a flag and no later
+  sandbox finds one.
+  Shared buffers now hold at ~290 MB over 60 frames at 3 MP; frame time
+  is within noise at 3 MP and the collections land between frames on a
+  line. A host that exposes `gc` under another name warns once
+  (`VISION_TOOLS_NO_GC`) and keeps the old behaviour.
 - **The nuisance map no longer gates the print channel.** The map is
   trained from the background channel - what extra ink looks like on a
   good part, block by block - but the novelty gate was applied to both
