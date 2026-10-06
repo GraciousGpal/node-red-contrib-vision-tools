@@ -121,6 +121,9 @@ test("a tone region on the defect is a detection in either channel", () => {
 		// CTX halves golden px into working px: the box is at 30,30
 		toneBlemish: { enabled: true, pass: false, defectRatio: 0.001, regions: [region(30, 30, 8, 8)] },
 	};
+	// a tone region from a tone check that passed is not evidence
+	const passed = { ...result, position: { pass: false }, toneBlemish: { ...result.toneBlemish, pass: true } };
+	assert.strictEqual(score.classifyCase(caseDef, passed, CTX).verdict, "wrong-place");
 	const r = score.classifyCase(caseDef, result, CTX);
 	assert.strictEqual(r.verdict, "detected");
 	assert.strictEqual(r.hit.channel, "tone");

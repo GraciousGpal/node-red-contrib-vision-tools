@@ -76,6 +76,9 @@ function labelSvg(
 		hairlines = null,
 		barFill = "#111",
 		extraRects = null,
+		paperFill = "#fff",
+		borderFill = "#111",
+		panelText = false,
 	} = {},
 ) {
 	const bars = [];
@@ -97,20 +100,25 @@ function labelSvg(
 	// a large flat panel, the shape that makes a drifting Otsu level
 	// flip a whole region at once
 	const panel = panelFill
-		? `<rect x="${Math.round(width * 0.2) + shiftX}" y="${Math.round(height * 0.8) + shiftY}" width="${Math.round(width * 0.5)}" height="${Math.round(height * 0.12)}" fill="${panelFill}"/>`
+		? `<rect x="${Math.round(width * 0.2) + shiftX}" y="${Math.round(height * 0.8) + shiftY}" width="${Math.round(width * 0.5)}" height="${Math.round(height * 0.12)}" fill="${panelFill}"/>` +
+			// white type on the panel, the real-artwork case
+			(panelText
+				? `<rect x="${Math.round(width * 0.25)}" y="${Math.round(height * 0.83)}" width="${Math.round(width * 0.12)}" height="${Math.round(height * 0.05)}" fill="#fff"/>` +
+					`<rect x="${Math.round(width * 0.42)}" y="${Math.round(height * 0.83)}" width="${Math.round(width * 0.04)}" height="${Math.round(height * 0.06)}" fill="#fff"/>`
+				: "")
 		: "";
 	const blob = extraBlob
 		? `<rect x="${extraBlob.x}" y="${extraBlob.y}" width="${extraBlob.w}" height="${extraBlob.h}" fill="${extraBlob.fill || "#000"}"/>`
 		: "";
-	// a patch of "body type": 2px rules every 20px, so a block over it is
-	// about a tenth ink - too thin to reach blockThreshold by area if the
-	// whole patch goes missing
 	// any number of small rectangles: specks on paper, holes in a bar
 	const extras = extraRects
 		? extraRects
 				.map((r) => `<rect x="${r.x}" y="${r.y}" width="${r.w}" height="${r.h}" fill="${r.fill || "#000"}"/>`)
 				.join("")
 		: "";
+	// a patch of "body type": 2px rules every 20px, so a block over it is
+	// about a tenth ink - too thin to reach blockThreshold by area if the
+	// whole patch goes missing
 	const rules = hairlines
 		? Array.from({ length: Math.floor(hairlines.h / 20) }, (_, i) =>
 				`<rect x="${hairlines.x}" y="${hairlines.y + i * 20}" width="${hairlines.w}" height="2" fill="#000"/>`,
@@ -118,8 +126,8 @@ function labelSvg(
 		: "";
 	return Buffer.from(
 		`<svg xmlns="http://www.w3.org/2000/svg" width="${width}" height="${height}">` +
-			`<rect width="100%" height="100%" fill="#fff"/>` +
-			`<rect x="${Math.round(width * 0.1) + shiftX}" y="${Math.round(height * 0.05) + shiftY}" width="${Math.round(width * 0.8)}" height="${Math.round(height * 0.9)}" fill="none" stroke="#111" stroke-width="${Math.max(2, Math.round(width * 0.01))}"/>` +
+			`<rect width="100%" height="100%" fill="${paperFill}"/>` +
+			`<rect x="${Math.round(width * 0.1) + shiftX}" y="${Math.round(height * 0.05) + shiftY}" width="${Math.round(width * 0.8)}" height="${Math.round(height * 0.9)}" fill="none" stroke="${borderFill}" stroke-width="${Math.max(2, Math.round(width * 0.01))}"/>` +
 			bars.join("") +
 			panel +
 			blob +
@@ -331,6 +339,57 @@ test("faded print that still binarizes as ink fails the tone check", async () =>
 	assert.ok(on.toneBlemish.defectRatio > 0.001, `ratio ${on.toneBlemish.defectRatio}`);
 });
 
+// The two ways the tone check failed on real artwork before it was made
+// to measure against the artwork's own grey: a grey panel with white type
+// is paper to the golden's threshold and must be expected grey, and a
+// cream paper has no pixel at 255 and must still give the check its
+// levels.
+test("a grey panel with white type in the artwork is expected grey, not a tone defect", async () => {
+	const panel = { panelFill: "#888", panelText: true };
+	const goldenBuf = await png(labelSvg(1200, 1600, panel));
+	const golden = await prepareGolden(goldenBuf, cfg());
+	const same = await compareFrame(goldenBuf, golden, cfg(TONE));
+	assert.strictEqual(same.toneBlemish.enabled, true, same.toneBlemish.reason);
+	assert.deepStrictEqual(same.toneBlemish.regions, [], "the panel and its type must not read as tone");
+	assert.strictEqual(same.pass, true);
+	// and a dark mark on the panel is still seen against the panel's own grey
+	const smudged = await png(
+		labelSvg(1200, 1600, { ...panel, extraBlob: { x: 300, y: 1310, w: 120, h: 80, fill: "#333" } }),
+	);
+	const r = await compareFrame(smudged, golden, cfg(TONE));
+	assert.strictEqual(r.toneBlemish.pass, false, "a dark mark on the grey panel is a tone defect");
+});
+
+test("cream paper and soft ink still give the tone check its levels", async () => {
+	const cream = { paperFill: "#ebebeb", barFill: "#2a2a2a", borderFill: "#2a2a2a" };
+	const goldenBuf = await png(labelSvg(1200, 1600, cream));
+	const golden = await prepareGolden(goldenBuf, cfg());
+	const blob = { x: 650, y: 1250, w: 160, h: 120, fill: "#999" };
+	const r = await compareFrame(await png(labelSvg(1200, 1600, { ...cream, extraBlob: blob })), golden, cfg(TONE));
+	assert.strictEqual(r.toneBlemish.enabled, true, r.toneBlemish.reason);
+	assert.ok(r.toneBlemish.paperLevel > 200 && r.toneBlemish.inkLevel < 80, `levels ${r.toneBlemish.paperLevel}/${r.toneBlemish.inkLevel}`);
+	assert.strictEqual(r.toneBlemish.pass, false, "the smudge is still seen on cream paper");
+	const same = await compareFrame(goldenBuf, golden, cfg(TONE));
+	assert.strictEqual(same.pass, true);
+});
+
+test("a golden whose ink and paper cannot be told apart leaves the tone and speck checks off, with a reason", async () => {
+	const flat = await png(
+		Buffer.from(
+			`<svg xmlns="http://www.w3.org/2000/svg" width="600" height="800"><rect width="100%" height="100%" fill="#c8c8c8"/><rect x="60" y="60" width="480" height="680" fill="none" stroke="#a0a0a0" stroke-width="6"/></svg>`,
+		),
+	);
+	const golden = await prepareGolden(flat, cfg());
+	const r = await compareFrame(flat, golden, cfg(SPECKS));
+	assert.strictEqual(r.toneBlemish.enabled, false);
+	assert.match(r.toneBlemish.reason, /grey levels apart/);
+	assert.strictEqual(r.speckBlemish.enabled, false);
+	// a check that cannot run contributes nothing to the verdict
+	assert.strictEqual(r.toneBlemish.pass, true);
+	assert.strictEqual(r.speckBlemish.pass, true);
+	assert.strictEqual(r.pass, r.position.pass && r.printBlemish.pass && r.backgroundBlemish.pass && !r.match.labelMissing);
+});
+
 test("the tone check leaves a faint stain and an identical frame alone", async () => {
 	const goldenBuf = await png(labelSvg(1200, 1600));
 	const golden = await prepareGolden(goldenBuf, cfg());
@@ -352,6 +411,8 @@ test("the tone check leaves a faint stain and an identical frame alone", async (
 // are a few pixels each. No block ever gets dense, and the total never
 // reaches the ratio, so the block checks pass them; counted as specks
 // they are obvious.
+// speckMinArea 2 rather than the default 3: the 4x4 fixtures land as
+// 2-3 working px after the resize
 const SPECKS = { toneThreshold: 0.3, toneMargin: 3, speckThreshold: 0.3, speckMinArea: 2, speckMaxCount: 8, speckMaxArea: 48 };
 
 test("dust on the paper fails the speck check by count where every block check passes", async () => {

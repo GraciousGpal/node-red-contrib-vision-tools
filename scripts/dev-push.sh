@@ -25,18 +25,20 @@ for a in "$@"; do
 	case "$a" in
 		--no-restart) restart=0 ;;
 		--dry-run) dry=1 ;;
-		-h|--help) sed -n '2,15p' "$0"; exit 0 ;;
+		-h|--help) sed -n '2,/^set /{/^#/p}' "$0"; exit 0 ;;
 		*) files+=("$a") ;;
 	esac
 done
 
-# Default: changed files that are part of the published package (package.json
-# "files"), since the container only has those. Tests and bench stay local.
+# Default: changed files that are part of the published package, since the
+# container only has those - judged by what npm would pack, so the list
+# cannot drift from package.json "files". Tests and bench stay local.
 if [ ${#files[@]} -eq 0 ]; then
+	# npm 11 prints an object keyed by package name, older npm an array
+	published=$(npm pack --dry-run --json 2>/dev/null | node -e 'let s="";process.stdin.on("data",d=>s+=d).on("end",()=>{const j=JSON.parse(s);const pkg=Array.isArray(j)?j[0]:Object.values(j)[0];for(const f of pkg.files)console.log(f.path)})')
 	while IFS= read -r f; do
-		[ -n "$f" ] && files+=("$f")
-	done < <(git status --porcelain=v1 --untracked-files=all | cut -c4- \
-		| grep -E '^([^/]+\.(js|html)|package\.json|(lib|icons|examples)/.+)$' || true)
+		[ -n "$f" ] && grep -qxF "$f" <<<"$published" && files+=("$f")
+	done < <({ git diff --name-only HEAD; git ls-files --others --exclude-standard; } | sort -u)
 fi
 if [ ${#files[@]} -eq 0 ]; then
 	echo "nothing to push (no changed package files; pass paths explicitly to force)"; exit 0
@@ -49,6 +51,8 @@ fi
 for f in "${files[@]}"; do
 	if [ ! -f "$f" ]; then echo "skip $f (not a file)"; continue; fi
 	if [ $dry -eq 1 ]; then echo "would copy $f"; continue; fi
+	# a file in a new directory needs the directory first
+	case "$f" in */*) docker exec "$CONTAINER" mkdir -p "$PKG/$(dirname "$f")" ;; esac
 	docker cp "$f" "$CONTAINER:$PKG/$f" && echo "copied $f"
 done
 [ $dry -eq 1 ] && exit 0
@@ -78,4 +82,4 @@ let s = ""; process.stdin.on("data", d => s += d).on("end", () => {
 });'
 
 # Anything the runtime complained about while loading.
-docker logs --since 2m "$CONTAINER" 2>&1 | grep -iE '\[error\]|cannot find|exception|vision-tools' | tail -15 || true
+docker logs --since 2m "$CONTAINER" 2>&1 | grep -iE '\[error\]|cannot find module|unhandled|exception' | tail -15 || true

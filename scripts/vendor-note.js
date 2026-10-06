@@ -29,4 +29,4 @@ let start = copy;
 while (start > 0 && src[start - 1].startsWith("#")) start--;
 src.splice(start, copy - start, ...lines);
 fs.writeFileSync(dockerfile, src.join("\n"));
-console.log(`${dockerfile}: vendor note now lists ${sha}${tag ? ` with ${subjects.length} commits past ${tag}` : ""}`);
+console.log(`${dockerfile}: vendor note now lists ${sha}${tag ? ` with ${subjects.length} commit${subjects.length === 1 ? "" : "s"} past ${tag}` : ""}`);

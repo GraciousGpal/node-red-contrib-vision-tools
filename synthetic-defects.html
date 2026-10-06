@@ -245,8 +245,9 @@
     box is drawn on the frame - mapped through the same magnification,
     rotation and placement the camera model applied, so it sits on the
     painted defect as the parallelogram it became. The outline says which
-    channel the defect landed in: <span style="color:#42a5f5">blue</span>
-    print, <span style="color:#ef5350">red</span> background,
+    channel the defect landed in - the colours
+    <code>golden-compare</code>'s overlay uses: <span style="color:#ef5350">red</span>
+    print (missing ink), <span style="color:#42a5f5">blue</span> background (extra ink),
     <span style="color:#ab47bc">purple</span> both, and a dashed grey box
     for a defect under the floor (<code>channel: "none"</code>) that the
     node must still pass. The caption gives the case, its position in the
@@ -396,9 +397,10 @@
   if (!window.syntheticDefectsPreviewRendererInitialized) {
     window.syntheticDefectsPreviewRendererInitialized = true;
 
+    // the same colours golden-compare's overlay uses for the same channels
     const CHANNEL_COLOUR = {
-      print: "#42a5f5",
-      background: "#ef5350",
+      print: "#ef5350",
+      background: "#42a5f5",
       both: "#ab47bc",
       none: "#bdbdbd",
     };
@@ -445,7 +447,7 @@
       body.style.font = "11px sans-serif";
       body.style.cursor = "pointer";
       body.title =
-        "synthetic frame with its ground truth: blue print, red background, " +
+        "synthetic frame with its ground truth: red print, blue background, " +
         "purple both, dashed grey under the floor (click to hide)";
       body.onclick = function () {
         removePreview(data.id);

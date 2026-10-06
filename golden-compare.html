@@ -440,8 +440,9 @@
     />
     <span class="node-input-hint" style="margin-left:10px; color:#999;"
       >independent checks: missing ink (print) vs. unwanted ink
-      (background); edge margin is px of the golden's border neither
-      check inspects</span
+      (background); edge margin is px of the golden's border no
+      check inspects; the ink-edge band is px either side of an ink edge
+      the tone and speck checks leave out</span
     >
   </div>
   <div class="form-row">
@@ -457,7 +458,7 @@
     <label
       for="node-input-toneMargin"
       style="width:auto; margin-left:16px; margin-right:4px;"
-      >Edge band</label
+      >Ink-edge band</label
     >
     <input
       type="number"
@@ -810,9 +811,12 @@
         }, localAlign: { tiles, localised, meanPx, medianPx, maxPx },
         printBlemish: { pass, defectRatio, regions, worstMissing }, backgroundBlemish: { pass,
         defectRatio, regions, worstExcess, noveltyPass }, toneBlemish: { enabled, pass,
-        defectRatio, regions }, speckBlemish: { enabled, pass, count, area, largest,
-        regions } }</code
+        defectRatio, regions, paperLevel, inkLevel }, speckBlemish: { enabled, pass,
+        count, area, largest, regions } }</code
       >
+      - a check that could not run (a golden with no ink, or none its
+      paper and ink can be told apart in) carries <code>enabled: false</code>
+      and a <code>reason</code>
       (region coordinates in the working-resolution image, same size as the heat
       maps)
     </li>
@@ -991,8 +995,8 @@
       outputHeatmap: { value: true },
       outputPrintHeatmap: { value: true },
       outputBackgroundHeatmap: { value: true },
-      outputToneHeatmap: { value: true },
-      outputSpeckHeatmap: { value: true },
+      outputToneHeatmap: { value: false },
+      outputSpeckHeatmap: { value: false },
       heatmapFormat: { value: "jpg" },
       heatmapQuality: { value: 85, validate: RED.validators.number(true) },
       debugStages: { value: false },

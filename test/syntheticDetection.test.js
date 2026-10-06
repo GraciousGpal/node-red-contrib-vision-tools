@@ -27,7 +27,7 @@ const score = require("../bench/synth/score.js");
 const W = 600;
 const H = 840;
 
-// the example flow's settings at this golden's native size, heat maps off
+// the example flow's settings at this golden's native size, pictures off
 const CFG = {
 	workingSize: H,
 	threshold: 128,
@@ -63,8 +63,17 @@ const CFG = {
 	failThreshold: 0.1,
 	failRatio: 0.002,
 	printMissingFraction: 0.5,
+	toneThreshold: 0.3,
+	toneMargin: 3,
+	speckThreshold: 0.3,
+	speckMinArea: 3,
+	speckMaxCount: 8,
+	speckMaxArea: 48,
+	outputHeatmap: false,
 	outputPrintHeatmap: false,
 	outputBackgroundHeatmap: false,
+	outputToneHeatmap: false,
+	outputSpeckHeatmap: false,
 	debugStages: false,
 };
 
@@ -98,11 +107,9 @@ test("every fail golden-compare raises on a synthetic frame lands on the defect 
 		pinnedScale: { mx: trained.transform.scaleX, my: trained.transform.scaleY },
 	};
 
-	const verdicts = [];
 	for (const c of cases) {
 		const result = await compareFrame(c.buffer, golden, { ...cfg });
 		const record = score.classifyCase(c, result, ctx);
-		verdicts.push(record);
 		const where = JSON.stringify({
 			failed: record.failedParts,
 			regions: {
@@ -122,5 +129,4 @@ test("every fail golden-compare raises on a synthetic frame lands on the defect 
 			assert.ok(record.hit, `${c.id} has no overlapping region`);
 		}
 	}
-	assert.equal(verdicts.filter((v) => v.verdict === "wrong-place").length, 0);
 });

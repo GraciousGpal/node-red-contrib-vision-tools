@@ -25,7 +25,8 @@ const { performance } = require("node:perf_hooks");
 
 module.exports = (RED) => {
 	const { labelCrop, available, getBridge } = require("./lib/labelCrop.js");
-	const { clampInt, clampFloat, pickMode } = require("./lib/nodeInput.js");
+	const {
+	asBoolean, clampInt, clampFloat, pickMode } = require("./lib/nodeInput.js");
 	const { formatMs } = require("./lib/formatMs.js");
 
 	// Settle the engine choice and pay its start-up cost now rather than on
@@ -57,11 +58,6 @@ module.exports = (RED) => {
 		outputQuality: [1, 100],
 		previewWidth: [80, 600],
 	};
-
-	function asBoolean(value, fallback = false) {
-		if (value == null || value === "") return fallback;
-		return value === true || value === "true";
-	}
 
 	async function previewJpeg(image, width) {
 		const result = await getBridge().resize(

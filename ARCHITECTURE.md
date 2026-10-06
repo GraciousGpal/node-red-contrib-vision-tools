@@ -233,10 +233,11 @@ only, some block lost at least `printMissingFraction` of the ink the
 golden has in that block - the gate that sees a dropped word of thin
 type, which is a tenth of its blocks by area and never fills one. A third
 check, tone, runs on the aligned grey rather than on the mask: each pixel
-against the paper and ink levels of its own neighbourhood, as a fraction
-of the span between them, through the same block stage - the only check
-that can see a smudge, a ghost or faded print, none of which crosses the
-ink threshold. A fourth, specks, takes the same deviation as pixel-level
+against the grey the artwork predicts for it - the golden's own grey
+mapped between the paper and ink levels of its neighbourhood - as a
+fraction of the span between them, through the same block stage. It is
+the only check that can see a smudge, a ghost or faded print, none of
+which crosses the ink threshold. A fourth, specks, takes the same deviation as pixel-level
 connected components and counts them, because dust and pinholes are a few
 px each and never make a block dense: the part fails on their number, or
 on one speck's size.

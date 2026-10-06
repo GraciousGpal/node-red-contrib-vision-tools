@@ -90,8 +90,8 @@ module.exports = (RED) => {
 		// has to absorb registration error, only genuine edge variation
 		printTolerance: { value: 2, int: [0, 50] },
 		backgroundTolerance: { value: 1, int: [0, 50] },
-		// px of the golden's own border, every side, that neither blemish
-		// check looks at. The label's edge lands here, and so does whatever
+		// px of the golden's own border, every side, that no check looks
+		// at. The label's edge lands here, and so does whatever
 		// is just past it - substrate, a lifted edge's shadow - which is not
 		// a mark on the artwork. 0 inspects to the edge.
 		edgeMargin: { value: 0, int: [0, 1024] },
@@ -136,12 +136,14 @@ module.exports = (RED) => {
 		speckMaxArea: { value: 48, int: [0, 10000000] },
 		// every check's regions on the aligned frame in one picture, each in
 		// its own colour: what a person looks at. The four below are one
-		// check each, per block: what a person tunes with.
+		// check each, per block: what a person tunes with. The two newest
+		// default off - a full-resolution encode is ~55 ms each, and the
+		// overlay shows what they show.
 		outputHeatmap: { value: true },
 		outputPrintHeatmap: { value: true },
 		outputBackgroundHeatmap: { value: true },
-		outputToneHeatmap: { value: true },
-		outputSpeckHeatmap: { value: true },
+		outputToneHeatmap: { value: false },
+		outputSpeckHeatmap: { value: false },
 		// JPEG unless asked for PNG: a heat map is a picture for a person,
 		// and PNG was ~150ms per image at working size (see encodeImage in
 		// lib/compare.js). Also applies to msg.stages.
@@ -531,7 +533,7 @@ module.exports = (RED) => {
 			group: "verdict",
 			title: "Tone deviation",
 			description:
-				"How far each pixel's grey has moved along the paper-to-ink span measured in its own neighbourhood: white is ink where paper should be or paper where ink should be. Blank within the edge band either side of an ink edge, where blur and registration put legitimate grey.",
+				"How far each pixel's grey sits from what the artwork predicts for it - the golden's grey mapped between the paper and ink levels measured nearby - as a fraction of that span: white is ink where paper should be, or paper where ink should be. Blank within the ink-edge band and the canvas border, where blur, registration and the warp's fill put legitimate grey.",
 		},
 		{
 			key: "toneHeatmap",
@@ -547,6 +549,17 @@ module.exports = (RED) => {
 			description:
 				"Every block holding a speck - a connected run of pixels past the speck threshold, at least the minimum area - redder with more speck in it. Dust and pinholes are a few pixels each and never make a block dense; the check counts them instead.",
 		},
+	];
+
+	// The heat maps a result can carry: the message key, the setting that
+	// asks for it, and where compareFrame puts it. One table for the flags,
+	// the message and the stage viewer, so a new picture is one line.
+	const HEATMAPS = [
+		["heatmap", "outputHeatmap", (r) => r.heatmap],
+		["printHeatmap", "outputPrintHeatmap", (r) => r.printBlemish.heatmap],
+		["backgroundHeatmap", "outputBackgroundHeatmap", (r) => r.backgroundBlemish.heatmap],
+		["toneHeatmap", "outputToneHeatmap", (r) => r.toneBlemish.heatmap],
+		["speckHeatmap", "outputSpeckHeatmap", (r) => r.speckBlemish.heatmap],
 	];
 
 	/** A rendered image, whichever of the three formats it is in, as a
@@ -636,21 +649,16 @@ module.exports = (RED) => {
 				for (const [key, spec] of Object.entries(SETTINGS)) {
 					cfg[key] = spec.fixed ? node[key] : readSetting(spec, msg[key], node[key]);
 				}
-				// The stage viewer needs every stage and both heat maps whether
+				// The stage viewer needs every stage and every heat map whether
 				// or not the message is to carry them: render them when the
 				// preview is on, and put on the message only what was asked
 				// for. debugStages goes into the golden cache key below, so it
 				// must be settled here.
 				const wantStages = cfg.debugStages;
-				const wantPrintHeatmap = cfg.outputPrintHeatmap;
-				const wantBackgroundHeatmap = cfg.outputBackgroundHeatmap;
-				const wantToneHeatmap = cfg.outputToneHeatmap;
-				const wantSpeckHeatmap = cfg.outputSpeckHeatmap;
-				const wantHeatmap = cfg.outputHeatmap;
+				const wanted = Object.fromEntries(HEATMAPS.map(([key, flag]) => [key, cfg[flag]]));
 				if (cfg.previewEnabled) {
 					cfg.debugStages = true;
-					cfg.outputPrintHeatmap = true;
-					cfg.outputBackgroundHeatmap = true;
+					for (const [, flag] of HEATMAPS) cfg[flag] = true;
 				}
 				cfg.mmPerPixelNative = scaleOk ? scale.mmPerPixelNative : null;
 				// the calibration photo's own native size, so prepareGolden can
@@ -1064,6 +1072,9 @@ module.exports = (RED) => {
 						pass: result.printBlemish.pass,
 						defectRatio: result.printBlemish.defectRatio,
 						regions: result.printBlemish.regions,
+						// the most ink any block lost, as a fraction of what the
+						// golden has there - the printMissingFraction gate's number
+						worstMissing: result.printBlemish.worstMissing,
 					},
 					backgroundBlemish: {
 						pass: result.backgroundBlemish.pass,
@@ -1075,7 +1086,34 @@ module.exports = (RED) => {
 						worstExcess: result.backgroundBlemish.worstExcess,
 						noveltyPass: result.backgroundBlemish.noveltyPass,
 					},
+					toneBlemish: {
+						enabled: result.toneBlemish.enabled,
+						pass: result.toneBlemish.pass,
+						defectRatio: result.toneBlemish.defectRatio,
+						regions: result.toneBlemish.regions,
+						// the frame's paper and ink levels the check measured
+						// against, whole-frame; absent when the check did not run
+						...(result.toneBlemish.enabled
+							? { paperLevel: result.toneBlemish.paperLevel, inkLevel: result.toneBlemish.inkLevel }
+							: {}),
+						...(result.toneBlemish.reason ? { reason: result.toneBlemish.reason } : {}),
+					},
+					speckBlemish: {
+						enabled: result.speckBlemish.enabled,
+						pass: result.speckBlemish.pass,
+						count: result.speckBlemish.count,
+						area: result.speckBlemish.area,
+						largest: result.speckBlemish.largest,
+						regions: result.speckBlemish.regions,
+						...(result.speckBlemish.reason ? { reason: result.speckBlemish.reason } : {}),
+					},
 				};
+				// A check that was asked for and could not run says so once per
+				// golden, not per frame: the reason is the golden, not the part.
+				if (result.toneBlemish.reason && node.toneWarnedFor !== goldenKey) {
+					node.toneWarnedFor = goldenKey;
+					node.warn(`golden-compare: tone and speck checks skipped - ${result.toneBlemish.reason}`);
+				}
 				const t = result.timings;
 				const ms = (v) => Math.round(v || 0);
 				msg.timings = {
@@ -1083,6 +1121,9 @@ module.exports = (RED) => {
 					alignMs: ms(t.alignMs),
 					diffMs: ms(t.diffMs),
 					heatmapMs: ms(t.heatmapMs),
+					toneMs: ms(t.toneMs),
+					speckMs: ms(t.speckMs),
+					overlayMs: ms(t.overlayMs),
 					stagesMs: ms(t.stagesMs),
 					totalMs: Math.round(performance.now() - totalStart),
 					// the align bucket's own split: it is the number that moves,
@@ -1096,27 +1137,9 @@ module.exports = (RED) => {
 					thresholdMs: ms(t.thresholdMs),
 					nativeFallbackMs: ms(t.nativeFallbackMs),
 				};
-				setOrDelete(msg, "heatmap", wantHeatmap ? result.heatmap : null);
-				setOrDelete(
-					msg,
-					"printHeatmap",
-					wantPrintHeatmap ? result.printBlemish.heatmap : null,
-				);
-				setOrDelete(
-					msg,
-					"backgroundHeatmap",
-					wantBackgroundHeatmap ? result.backgroundBlemish.heatmap : null,
-				);
-				setOrDelete(
-					msg,
-					"toneHeatmap",
-					wantToneHeatmap && result.toneBlemish ? result.toneBlemish.heatmap : null,
-				);
-				setOrDelete(
-					msg,
-					"speckHeatmap",
-					wantSpeckHeatmap && result.speckBlemish ? result.speckBlemish.heatmap : null,
-				);
+				for (const [key, , pick] of HEATMAPS) {
+					setOrDelete(msg, key, wanted[key] ? pick(result) : null);
+				}
 				setOrDelete(msg, "stages", wantStages ? result.stages : null);
 
 				send(msg);
@@ -1133,8 +1156,8 @@ module.exports = (RED) => {
 				if (!result.position.pass) failedParts.push("position");
 				if (!result.printBlemish.pass) failedParts.push("print");
 				if (!result.backgroundBlemish.pass) failedParts.push("background");
-				if (result.toneBlemish && !result.toneBlemish.pass) failedParts.push("tone");
-				if (result.speckBlemish && !result.speckBlemish.pass) failedParts.push("specks");
+				if (!result.toneBlemish.pass) failedParts.push("tone");
+				if (!result.speckBlemish.pass) failedParts.push("specks");
 				const verdictText =
 					(result.match.labelMissing
 						? `label missing? · ${Math.round(result.match.coverage * 100)}% of ink`
@@ -1232,16 +1255,9 @@ module.exports = (RED) => {
 		for (const key of Object.keys(result.stages || {})) {
 			if (result.stages[key]) images[key] = result.stages[key];
 		}
-		if (result.heatmap) images.heatmap = result.heatmap;
-		if (result.printBlemish.heatmap) images.printHeatmap = result.printBlemish.heatmap;
-		if (result.backgroundBlemish.heatmap) {
-			images.backgroundHeatmap = result.backgroundBlemish.heatmap;
-		}
-		if (result.toneBlemish && result.toneBlemish.heatmap) {
-			images.toneHeatmap = result.toneBlemish.heatmap;
-		}
-		if (result.speckBlemish && result.speckBlemish.heatmap) {
-			images.speckHeatmap = result.speckBlemish.heatmap;
+		for (const [key, , pick] of HEATMAPS) {
+			const image = pick(result);
+			if (image) images[key] = image;
 		}
 		const entry = {
 			receivedAt: Date.now(),
@@ -1256,17 +1272,8 @@ module.exports = (RED) => {
 		};
 		lastInspections.set(node.id, entry);
 		if (!RED.comms || typeof RED.comms.publish !== "function") return;
-		// the thumbnail: the one picture when there is one, else the heat map
-		// of the check that failed
-		const source =
-			images.heatmap ||
-			(!result.backgroundBlemish.pass && images.backgroundHeatmap
-				? images.backgroundHeatmap
-				: result.toneBlemish && !result.toneBlemish.pass && images.toneHeatmap
-					? images.toneHeatmap
-					: result.speckBlemish && !result.speckBlemish.pass && images.speckHeatmap
-						? images.speckHeatmap
-						: images.printHeatmap || images.targetGrayAligned);
+		// the thumbnail: the one picture, which the preview always renders
+		const source = images.heatmap || images.targetGrayAligned;
 		if (!source) return;
 		const thumb = await imagePipeline(source)
 			.resize({ width: cfg.previewWidth, withoutEnlargement: true })

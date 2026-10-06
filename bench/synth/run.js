@@ -201,9 +201,11 @@ async function runSet(opts) {
 	// constant per frame, and its misses are scored as the blemish
 	// checks' false fails. On by default for a rig set, --train false to
 	// measure the unpinned search, --train true to pin a free set anyway.
+	// A sweep trains once and hands the pin to every value (opts.trained),
+	// so the swept setting is the only thing that changes between points.
 	const train = opts.train == null ? !!manifest.rig : !!opts.train;
-	let trained = null;
-	if (train) {
+	let trained = opts.trained || null;
+	if (train && !trained) {
 		const frame =
 			manifest.cases.find((c) => c.id.startsWith(`clean-${manifest.preset}-`)) ||
 			manifest.cases.find((c) => c.family === "clean") ||
@@ -213,13 +215,23 @@ async function runSet(opts) {
 			golden,
 			{ ...cfg },
 		);
-		cfg.pinnedScale = { mx: r.transform.scaleX, my: r.transform.scaleY };
+		// a solve that did not find the label is not a pin: one bad solve
+		// would misregister the whole set and read as blemish false fails
+		const refused = r.match.labelMissing
+			? "the training frame has none of the golden's ink"
+			: r.match.grade === "poor"
+				? `the training frame registered poorly (${r.transform.score.toFixed(3)})`
+				: null;
 		trained = {
 			frame: frame.id,
 			mx: r.transform.scaleX,
 			my: r.transform.scaleY,
 			score: r.transform.score,
+			refused,
 		};
+	}
+	if (trained && !trained.refused) {
+		cfg.pinnedScale = { mx: trained.mx, my: trained.my };
 	}
 
 	// The manifest states the golden's native size; prepareGolden measures
@@ -403,10 +415,12 @@ function buildMarkdown(report, sweep) {
 			(report.meta.rig
 				? ` Rig set: every frame at mx ${report.meta.rig.mx}, my ${report.meta.rig.my}.`
 				: " Free geometry: each frame drew its own magnification.") +
-			(report.meta.trained
+			(report.meta.trained && !report.meta.trained.refused
 				? ` Pinned to mx ${num(report.meta.trained.mx, 4)}, my ${num(report.meta.trained.my, 4)} ` +
 					`trained on \`${report.meta.trained.frame}\`.`
-				: " Unpinned: the search solved magnification per frame."),
+				: report.meta.trained
+					? ` Not pinned: ${report.meta.trained.refused}.`
+					: " Unpinned: the search solved magnification per frame."),
 	);
 	if (report.meta.warnings.length) {
 		out.push("");
@@ -471,7 +485,7 @@ function buildMarkdown(report, sweep) {
 	out.push(
 		s.problems.length
 			? table(
-					["id", "verdict", "family", "variant", "severity", "channel", "defect px", "failed", "regions p/b/t/specks"],
+					["id", "verdict", "family", "variant", "severity", "channel", "defect px", "failed", "regions p/b/t, specks"],
 					s.problems.map((p) => [
 						p.id,
 						p.verdict,
@@ -591,9 +605,12 @@ async function main() {
 		const key = args.flags.sweep.slice(0, eq);
 		const values = args.flags.sweep.slice(eq + 1).split(",").map(coerce);
 		const runs = [];
+		let trained = null;
 		for (const value of values) {
 			console.log(`\n=== ${key} = ${JSON.stringify(value)} ===`);
-			report = await runSet({ ...base, cfg: { ...cfgOverrides, [key]: value } });
+			report = await runSet({ ...base, trained, cfg: { ...cfgOverrides, [key]: value } });
+			// the first point trains; the rest reuse its pin
+			trained = report.meta.trained;
 			runs.push({ value, summary: report.summary });
 			printTables(report, null);
 		}

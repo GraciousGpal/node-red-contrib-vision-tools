@@ -8,106 +8,8 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Added
 
-- **`synthetic-defects` previews itself.** The golden and then every frame
-  go under the node on the canvas as they are sent, each defect's measured
-  ground-truth box drawn on the frame through the capture's own
-  magnification, rotation and placement (`frameBox` in
-  `lib/synth/capture.js`), coloured by the channel it landed in, with a
-  caption saying the case and what `golden-compare` is expected to answer.
-  On by default - the node exists to be looked at; `Preview width`,
-  `msg.previewEnabled` and `msg.previewWidth` as on the other nodes.
-- **`synthetic-defects` takes a golden path.** A `Golden` field on the
-  node (`msg.goldenPath` per message) names the artwork to paint defects
-  into when `msg.payload` is empty, so a real label is the golden with a
-  plain inject rather than a function node; `msg.synth.source` on the
-  golden message says `"file"`. The synthetic label remains the fallback.
-
-- **`printMissingFraction` on `golden-compare`: the print check judged
-  against the golden's own ink, block by block.** A block that lost at
-  least this fraction of the ink the golden has there fails, however small
-  a share of the block's area that ink was. Body type is 10-15% ink, so a
-  dropped word never reached `failThreshold` by area and never reached
-  `failRatio` - the first of the five miss mechanisms in
-  `bench/synth-findings.md`. Default 0.5; 0 is the old behaviour. Blocks
-  flagged this way join the regions and the heat map, and
-  `result.printBlemish.worstMissing` reports the worst block. On the
-  pinned synthetic set it takes recall from 36.5% to 50.8% (61.9% with
-  `failThreshold` 0.1) for 2 clean false fails in 24, both thin strokes
-  at the gate's floor; `misprint/dropout` goes 25% → 100%,
-  `misprint/streak` 0% → 75%, `overprint/bleed` 33% → 100%.
-- **A tone check on `golden-compare`: grey against the paper and ink of
-  its own neighbourhood.** The two blemish checks read the frame after
-  thresholding, so a smudge at 70% opacity, a ghosted second impression
-  and faded print never reached them - the second miss mechanism in
-  `bench/synth-findings.md`, 0% on all three variants whatever the
-  thresholds. `toneThreshold` (default 0.3; 0 = off) fails a pixel that
-  sits that fraction of the paper-to-ink span from where the artwork's
-  own grey says it should - the neighbourhood's paper and ink levels,
-  taken per 128 px cell so lighting cancels, with the golden's grey
-  mapped between them, so a grey panel in the artwork is expected grey -
-  with `toneMargin` (3) px either side of an ink edge left out. Same block stage, same regions; `result.toneBlemish`,
-  `msg.toneHeatmap` (`outputToneHeatmap`), a `toneDeviation` stage, and
-  `tone` among the status line's failed parts. On the pinned synthetic
-  set it takes recall from 50.8% to 60.3% at the package defaults and
-  from 61.9% to 74.6% at the example flow's `failThreshold` 0.1, with
-  no new clean false fails and no wrong-place verdicts; `mark/smudge`
-  25% → 100%, `misprint/faded` 0% → 100%, `overprint/ghost` 50% → 100%.
-  ~43 ms a frame at `workingSize` 2100.
-- **`msg.heatmap`: every check on one picture.** Each check's regions on
-  the aligned frame, boxed in its own colour with the defect pixels
-  filled inside - blue extra ink, red missing ink, amber tone, green
-  specks grown so a three-pixel one shows. The four per-check heat maps
-  stayed, one check each per block, for tuning; this one is for looking
-  at a part. It is the thumbnail under the node and the first verdict
-  stage in the viewer. `outputHeatmap`, default on.
-- **A speck check on `golden-compare`, for dust and pinholes.** A medium
-  dust case is 600 specks of one to three px across the label: 4000
-  changed pixels, none dense enough for a block to reach
-  `blockThreshold`, and after the camera's blur not enough at ink level
-  for `failRatio` - the third miss mechanism in `bench/synth-findings.md`.
-  `speckThreshold` (0.3; 0 = off) takes the tone deviation as pixel-level
-  connected components of at least `speckMinArea` (3) px and fails the
-  part at `speckMaxCount` (8) of them, or at one speck of `speckMaxArea`
-  (48) px. `result.speckBlemish` `{ count, area, largest, regions }`,
-  `msg.speckHeatmap` (`outputSpeckHeatmap`), a `speckHeatmap` stage,
-  `specks` among the status line's failed parts. A component the tone
-  check has already failed is tone's evidence, not a speck. On the
-  pinned synthetic set recall goes from 60.3% to 82.5% at the package
-  defaults and from 74.6% to 85.7% at the example flow's
-  `failThreshold` 0.1, with the same two clean false fails and no
-  wrong-place verdicts; `random/dust` 25% → 100%, `random/void-spots`
-  25% → 100%, `scratch/dark` 75% → 100%. ~10 ms a frame at
-  `workingSize` 2100. On the line's real artwork, at the production
-  node's settings: 86.2% recall, 0 clean false fails, no wrong-place. Lowering the dilation
-  tolerances instead was measured and rejected: `printTolerance` 0
-  reaches 82.5% by failing 23 of 24 clean frames.
-- **A fixed rig in the synthetic set.** `synthetic-defects` and
-  `bench/synth/generate.js` now shoot the whole set at one magnification
-  and one stretch by default (`Fixed rig` / `--rig`), as a camera on a
-  stand gives, and `bench/synth/run.js` pins to what the search finds on
-  one clean frame (`--train`), as `trainTransform` does on a line. The
-  earlier benchmark re-rolled magnification per frame, so the alignment
-  search's misses were booked as the blemish checks' false fails: pinned,
-  clean false fails go from 7 of 24 to 0 on the same frames. The example
-  flow trains `golden-compare` on the first frame of each run and pins
-  the rest, and runs `failThreshold` 0.1, which the pinned sweep found
-  free on the set (the package default stays 0.3).
-
-### Fixed
-
-- **The nuisance map no longer gates the print channel.** The map is
-  trained from the background channel - what extra ink looks like on a
-  good part, block by block - but the novelty gate was applied to both
-  channels, so once a map was loaded any print block at the novelty
-  threshold failed against a baseline that had never been measured for
-  print. Training a map silently tightened the print check. The print
-  channel is now judged by its own density and ratio gates only;
-  `printBlemish.worstExcess` is 0 and `noveltyPass` true.
-
-### Added
-
 - **`edgeMargin` on `golden-compare`: px of the golden's border, every side,
-  that neither blemish check inspects.** Default 0, so nothing changes until
+  that no blemish check inspects.** Default 0, so nothing changes until
   it is set. On a rig the substrate just past the label's die-cut edge
   crept into the frame as one block column at x=0, full height, growing
   frame by frame from density 0.25 to 0.875 while the alignment stayed put,
@@ -269,6 +171,107 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   literally the threshold that would have found it. `findLine`'s result
   gains a `caliperLines` entry per band and a `diagnostics` block to
   support that; every pre-existing field is unchanged.
+- **`synthetic-defects` previews itself.** The golden and then every frame
+  go under the node on the canvas as they are sent, each defect's measured
+  ground-truth box drawn on the frame through the capture's own
+  magnification, rotation and placement (`frameBox` in
+  `lib/synth/capture.js`), coloured by the channel it landed in, with a
+  caption saying the case and what `golden-compare` is expected to answer.
+  On by default - the node exists to be looked at; `Preview width`,
+  `msg.previewEnabled` and `msg.previewWidth` as on the other nodes.
+- **`synthetic-defects` takes a golden path.** A `Golden` field on the
+  node (`msg.goldenPath` per message) names the artwork to paint defects
+  into when `msg.payload` is empty, so a real label is the golden with a
+  plain inject rather than a function node; `msg.synth.source` on the
+  golden message says `"file"`. The synthetic label remains the fallback.
+- **`printMissingFraction` on `golden-compare`: the print check judged
+  against the golden's own ink, block by block.** A block that lost at
+  least this fraction of the ink the golden has there fails, however small
+  a share of the block's area that ink was. Body type is 10-15% ink, so a
+  dropped word never reached `failThreshold` by area and never reached
+  `failRatio` - the first of the five miss mechanisms in
+  `bench/synth-findings.md`. Default 0.5; 0 is the old behaviour. Blocks
+  flagged this way join the regions and the heat map, and
+  `result.printBlemish.worstMissing` reports the worst block. On the
+  pinned synthetic set it takes recall from 36.5% to 50.8% (61.9% with
+  `failThreshold` 0.1) for 2 clean false fails in 24, both thin strokes
+  at the gate's floor; `misprint/dropout` goes 25% → 100%,
+  `misprint/streak` 0% → 75%, `overprint/bleed` 33% → 100%.
+- **A tone check on `golden-compare`: grey against the paper and ink of
+  its own neighbourhood.** The two blemish checks read the frame after
+  thresholding, so a smudge at 70% opacity, a ghosted second impression
+  and faded print never reached them - the second miss mechanism in
+  `bench/synth-findings.md`, 0% on all three variants whatever the
+  thresholds. `toneThreshold` (default 0.3; 0 = off) fails a pixel that
+  sits that fraction of the paper-to-ink span from where the artwork's
+  own grey says it should - the neighbourhood's paper and ink levels,
+  taken per 128 px cell so lighting cancels, with the golden's grey
+  mapped between them, so a grey panel in the artwork is expected grey -
+  with `toneMargin` (3) px either side of an ink edge left out. Same
+  block stage, same regions; `result.toneBlemish` with the measured
+  `paperLevel` / `inkLevel`, `msg.toneHeatmap` (`outputToneHeatmap`, off
+  by default - the overlay shows it), a `toneDeviation` stage, and
+  `tone` among the status line's failed parts. A golden whose paper and
+  ink are under 64 grey levels apart, or a frame that shows too little
+  of either, leaves the check off with a `reason` and one warning per
+  golden rather than a silent pass. On the pinned synthetic set it takes
+  recall from 50.8% to 60.3% at the package defaults and from 61.9% to
+  74.6% at the example flow's `failThreshold` 0.1, with no new clean
+  false fails and no wrong-place verdicts; `mark/smudge` 25% → 100%,
+  `misprint/faded` 0% → 100%, `overprint/ghost` 50% → 100%. Those were
+  measured with the check's first model; the final one scores the same
+  set identically, the synthetic label having no mid-grey. ~30 ms a
+  frame at `workingSize` 2100.
+- **`msg.heatmap`: every check on one picture.** Each check's regions on
+  the aligned frame, boxed in its own colour with the defect pixels
+  filled inside - blue extra ink, red missing ink, amber tone, green
+  specks grown so a three-pixel one shows. The four per-check heat maps
+  stayed, one check each per block, for tuning; this one is for looking
+  at a part. It is the thumbnail under the node and a verdict stage in
+  the viewer. `outputHeatmap`, default on.
+- **A speck check on `golden-compare`, for dust and pinholes.** A medium
+  dust case is 600 specks of one to three px across the label: 4000
+  changed pixels, none dense enough for a block to reach
+  `blockThreshold`, and after the camera's blur not enough at ink level
+  for `failRatio` - the third miss mechanism in `bench/synth-findings.md`.
+  `speckThreshold` (0.3; 0 = off) takes the tone deviation as pixel-level
+  connected components of at least `speckMinArea` (3) px and fails the
+  part at `speckMaxCount` (8) of them, or at one speck of `speckMaxArea`
+  (48) px. `result.speckBlemish` `{ count, area, largest, regions }`,
+  `msg.speckHeatmap` (`outputSpeckHeatmap`, off by default), a
+  `speckHeatmap` stage, `specks` among the status line's failed parts. A component the tone
+  check has already failed is tone's evidence, not a speck. On the
+  pinned synthetic set recall goes from 60.3% to 82.5% at the package
+  defaults and from 74.6% to 85.7% at the example flow's
+  `failThreshold` 0.1, with the same two clean false fails and no
+  wrong-place verdicts; `random/dust` 25% → 100%, `random/void-spots`
+  25% → 100%, `scratch/dark` 75% → 100%. ~10 ms a frame at
+  `workingSize` 2100. On the line's real artwork, at the production
+  node's settings: 86.2% recall, 0 clean false fails, no wrong-place. Lowering the dilation
+  tolerances instead was measured and rejected: `printTolerance` 0
+  reaches 82.5% by failing 23 of 24 clean frames.
+- **A fixed rig in the synthetic set.** `synthetic-defects` and
+  `bench/synth/generate.js` now shoot the whole set at one magnification
+  and one stretch by default (`Fixed rig` / `--rig`), as a camera on a
+  stand gives, and `bench/synth/run.js` pins to what the search finds on
+  one clean frame (`--train`), as `trainTransform` does on a line. The
+  earlier benchmark re-rolled magnification per frame, so the alignment
+  search's misses were booked as the blemish checks' false fails: pinned,
+  clean false fails go from 7 of 24 to 0 on the same frames. The example
+  flow trains `golden-compare` on the first frame of each run and pins
+  the rest, and runs `failThreshold` 0.1, which the pinned sweep found
+  free on the set (the package default stays 0.3).
+
+### Fixed
+
+- **The nuisance map no longer gates the print channel.** The map is
+  trained from the background channel - what extra ink looks like on a
+  good part, block by block - but the novelty gate was applied to both
+  channels, so once a map was loaded any print block at the novelty
+  threshold failed against a baseline that had never been measured for
+  print. Training a map silently tightened the print check. The print
+  channel is now judged by its own density and ratio gates only;
+  `printBlemish.worstExcess` is 0 and `noveltyPass` true.
 
 ### Changed
 

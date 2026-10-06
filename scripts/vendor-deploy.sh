@@ -21,7 +21,7 @@ for a in "$@"; do
 	case "$a" in
 		--build) build=1 ;;
 		--dry-run) dry=1 ;;
-		-h|--help) sed -n '2,12p' "$0"; exit 0 ;;
+		-h|--help) sed -n '2,/^set /{/^#/p}' "$0"; exit 0 ;;
 		*) echo "unknown flag $a" >&2; exit 2 ;;
 	esac
 done
@@ -33,9 +33,9 @@ fi
 VER=$(node -p 'require("./package.json").version')
 SHA=$(git rev-parse --short HEAD)
 NAME="vision-tools-$VER-$SHA.tgz"
-echo "packing $NAME -> $T/vendor"
 # --loglevel notice: under `npm run -s` the inherited silent level would hide these lines.
-[ $dry -eq 1 ] && { npm pack --dry-run --loglevel notice 2>&1 | grep -E 'package size|total files' || true; echo "(dry run, nothing written)"; exit 0; }
+[ $dry -eq 1 ] && { echo "would pack $NAME -> $T/vendor"; npm pack --dry-run --loglevel notice 2>&1 | grep -E 'package size|total files' || true; exit 0; }
+echo "packing $NAME -> $T/vendor"
 
 mkdir -p "$T/vendor"
 for old in "$T"/vendor/vision-tools-*.tgz; do

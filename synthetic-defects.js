@@ -53,11 +53,10 @@
 
 const crypto = require("node:crypto");
 const sharp = require("sharp");
-const { resolveImage, isBytes, clampInt, pickMode } = require("./lib/nodeInput.js");
+const { resolveImage, isBytes, clampInt, pickMode, asBoolean } = require("./lib/nodeInput.js");
 const { FAMILIES, SEVERITIES } = require("./lib/synth/defects.js");
-const { capturePresets } = require("./lib/synth/capture.js");
+const { capturePresets, frameBox } = require("./lib/synth/capture.js");
 const { planCases, makeCases, goldenRaster } = require("./lib/synth/cases.js");
-const { frameBox } = require("./lib/synth/capture.js");
 
 const PREVIEW_WIDTH = [80, 600];
 const PREVIEW_TOPIC = "synthetic-defects-preview";
@@ -86,11 +85,6 @@ module.exports = (RED) => {
 		if (!Array.isArray(value)) return fallback;
 		const kept = value.map(String).filter((n) => all.includes(n));
 		return kept.length ? kept : fallback;
-	}
-
-	function asBoolean(value, fallback) {
-		if (value == null || value === "") return fallback;
-		return value === true || value === "true";
 	}
 
 	const canPublish = () => RED.comms && typeof RED.comms.publish === "function";

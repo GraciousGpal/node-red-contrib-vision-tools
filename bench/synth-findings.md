@@ -206,6 +206,10 @@ default is 0.5; the example flow runs the sweep's `failThreshold` 0.1.
 
 ## Update, 2026-10-06, later: the tone check
 
+(The model described here was replaced the same day; the final one, and
+why, is in the "last" section below. The numbers stand - the synthetic
+label has no mid-grey, so both models score it the same.)
+
 The second mechanism - both channels binary at the ink level - got its
 fix: `toneThreshold`, a third check on the aligned grey. Each pixel is
 measured against the paper and ink levels of its own 128 px cell (the
@@ -348,6 +352,15 @@ A `msg.heatmap` was added alongside: every check's regions on the
 aligned frame in one picture, each in its own colour, with the defect
 pixels filled inside. On a real-artwork smudge frame it draws the smudge
 and nothing else.
+
+A review the same evening tightened the scorer: a region now counts as a
+detection only when its check *failed* - a passing speck or a tone block
+under the gate on the defect no longer does. Every table above was
+re-scored under that rule and under the final tone model and did not
+move. The review also found the tone check silently off on any golden
+without a pixel at 255 (cream paper, a photographed golden); its levels
+now come from the golden's own ink and paper medians, and a golden it
+cannot measure leaves the check off with a reason rather than a pass.
 
 ## How to repeat
 

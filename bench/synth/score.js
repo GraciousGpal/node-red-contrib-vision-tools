@@ -129,6 +129,13 @@ function classifyCase(caseDef, result, ctx) {
 	const expectPass = expectsPass(caseDef);
 	const regionsOf = (channel) =>
 		((result[`${channel}Blemish`] || {}).regions) || [];
+	// a region is evidence only when its check failed: specks and tone
+	// regions are listed well under their gates, and a print region at
+	// blockThreshold is not a print fail
+	const failedRegionsOf = (channel) => {
+		const check = result[`${channel}Blemish`];
+		return check && check.pass === false ? check.regions || [] : [];
+	};
 
 	// Every scoring defect, with its box already in working px so the
 	// report can point a person at it without redoing the arithmetic.
@@ -175,7 +182,6 @@ function classifyCase(caseDef, result, ctx) {
 		printRegions: regionsOf("print").length,
 		backgroundRegions: regionsOf("background").length,
 		toneRegions: regionsOf("tone").length,
-		toneRatio: result.toneBlemish ? result.toneBlemish.defectRatio : null,
 		speckCount: result.speckBlemish ? result.speckBlemish.count : null,
 		defectPixels: located.reduce(
 			(n, d) => n + d.printPixels + d.backgroundPixels,
@@ -197,32 +203,20 @@ function classifyCase(caseDef, result, ctx) {
 		return record;
 	}
 
-	// Failed, as it should have. Did it fail *there*, in a channel the
-	// defect could plausibly show up in? The tone check is grey evidence
-	// of either kind - a smudge is extra ink, faded print is missing ink -
-	// so a tone region on the defect counts whichever channel it was in.
+	// Failed, as it should have. Did it fail *there*, by a check that
+	// failed, in a channel the defect could plausibly show up in? Tone and
+	// specks are grey evidence of either kind - a smudge is extra ink,
+	// faded print is missing ink, dust is extra, pinholes missing - so
+	// theirs count whichever channel the defect was in.
 	for (const d of located) {
 		if (!d.box) continue;
-		for (const channel of defectChannels(d)) {
-			const hit = findOverlap(regionsOf(channel), d.box);
+		for (const channel of [...defectChannels(d), "tone", "speck"]) {
+			const hit = findOverlap(failedRegionsOf(channel), d.box);
 			if (hit) {
 				record.hit = { channel, defect: d.type, ...hit };
 				record.verdict = "detected";
 				return record;
 			}
-		}
-		const toneHit = findOverlap(regionsOf("tone"), d.box);
-		if (toneHit) {
-			record.hit = { channel: "tone", defect: d.type, ...toneHit };
-			record.verdict = "detected";
-			return record;
-		}
-		// specks likewise: dust is extra ink, pinholes are missing ink
-		const speckHit = findOverlap(regionsOf("speck"), d.box);
-		if (speckHit) {
-			record.hit = { channel: "speck", defect: d.type, ...speckHit };
-			record.verdict = "detected";
-			return record;
 		}
 	}
 	record.verdict = "wrong-place";
