@@ -232,24 +232,27 @@ verdict by different routes.
    - *background* — target has ink the golden never has, even after
      dilating the golden's ink by `backgroundTolerance` px
    - *tone* — on grey rather than on the ink mask: each pixel's grey
-     against what paper and ink photograph as in its own neighbourhood
-     (the 80th percentile of paper and the 20th of ink per 128 px cell,
-     so lighting cancels), as a fraction of the paper-to-ink span. A
-     paper pixel that has moved `toneThreshold` (0.3) of the way to ink,
-     or an ink pixel that far toward paper, is a tone defect: a smudge at
-     70% opacity reads 0.56, a ghosted second impression 0.46, a stain a
-     few levels off paper 0.1 - none of which the two binary checks can
-     see, because none crosses the ink threshold. The `toneMargin` px
-     either side of an ink edge are left out, where blur and registration
-     put legitimate grey; 0 switches the check off.
+     against what the artwork's own grey at that pixel should photograph
+     as - the paper and ink levels of its neighbourhood (the 80th
+     percentile of paper and the 20th of ink per 128 px cell, so lighting
+     cancels) with the golden's grey mapped linearly between them, so a
+     grey panel in the artwork is expected grey - as a fraction of the
+     paper-to-ink span. A pixel `toneThreshold` (0.3) of the span from
+     where it should be is a tone defect: a smudge at 70% opacity reads
+     0.56, a ghosted second impression 0.46, a stain a few levels off
+     paper 0.1 - none of which the two binary checks can see, because
+     none crosses the ink threshold. The `toneMargin` px either side of
+     an ink edge are left out, where blur and registration put legitimate
+     grey; 0 switches the check off.
    - *specks* — the same tone deviation at `speckThreshold` (0.3), as
-     connected components of at least `speckMinArea` (2) px, counted.
+     connected components of at least `speckMinArea` (3) px, counted.
      Dust and pinholes are one to three px each and never make a block
      dense, and after the camera's blur not enough of them are at ink
-     level for `failRatio`; what they have is number. The part fails at
-     `speckMaxCount` (8) specks, or at one speck of `speckMaxArea` (48)
-     px - a single spatter no block gate sees. 0 switches the check off,
-     and 0 on either gate removes that gate.
+     level for `failRatio`; what they have is number. A component the
+     tone check has already failed is tone's evidence, not a speck. The
+     part fails at `speckMaxCount` (8) specks, or at one speck of
+     `speckMaxArea` (48) px - a single spatter no block gate sees. 0
+     switches the check off, and 0 on either gate removes that gate.
 
    The two are disjoint per pixel, so they never double-count the same
    defect. Each diff is block-summed into a density grid (`blockSize` px),
@@ -507,7 +510,7 @@ Per-message overrides:
 `msg.printMissingFraction`, `msg.toneThreshold`, `msg.toneMargin`,
 `msg.outputToneHeatmap`, `msg.speckThreshold`, `msg.speckMinArea`,
 `msg.speckMaxCount`, `msg.speckMaxArea`, `msg.outputSpeckHeatmap`,
-`msg.outputPrintHeatmap`, `msg.outputBackgroundHeatmap`,
+`msg.outputHeatmap`, `msg.outputPrintHeatmap`, `msg.outputBackgroundHeatmap`,
 `msg.heatmapFormat`, `msg.heatmapQuality`, `msg.debugStages`.
 
 Raw geometry rides alongside the image rather than as a setting:
@@ -627,6 +630,12 @@ trusting it.
   press does, and its normal value depends on media and machine, so any
   default threshold would be a guess that fails good parts. It is worth
   trending, though: a stretch that moves is a press drifting.
+- `msg.heatmap` — every check's regions on the aligned frame in one
+  picture, each boxed in its own colour with the defect pixels filled
+  inside: blue extra ink (background), red missing ink (print), amber
+  tone, green specks. What failed, where, and which check said so; only
+  if `outputHeatmap` is on. The four below are one check each, per
+  block - for tuning that check.
 - `msg.printHeatmap` / `msg.backgroundHeatmap` / `msg.toneHeatmap` /
   `msg.speckHeatmap` — overlays, only if the matching
   `outputPrintHeatmap` / `outputBackgroundHeatmap` / `outputToneHeatmap`
@@ -1382,7 +1391,7 @@ nothing is found at all, one message with `msg.text = null` and
 
 ## Tests
 
-`npm test` (Node 18+, no test framework needed — `node --test`), 554
+`npm test` (Node 18+, no test framework needed — `node --test`), 555
 tests. Fixtures are generated with `sharp` rather than read from
 `data/sample_images`, so the suite runs anywhere; the real QC photos are
 gitignored. Coverage spans the lib pipeline (`compare`, `align`, `warp`,

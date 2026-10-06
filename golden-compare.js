@@ -110,12 +110,15 @@ module.exports = (RED) => {
 		// failThreshold by area and never reaches failRatio; against its own
 		// ink it reads 1.0. Print only - extra ink has no "should be". 0 = off.
 		printMissingFraction: { value: 0.5, float: [0, 1] },
-		// The tone check: grey against what paper and ink photograph as in
-		// the same neighbourhood, as a fraction of the paper-to-ink span. A
-		// smudge, a ghosted impression or faded print never crosses the ink
-		// threshold and so never reaches the two binary checks; at 0.3 this
-		// sees a 70% smudge (0.56) and a 46% ghost (0.46) and leaves a stain
-		// a few levels off paper (0.1-0.2) alone. 0 = off.
+		// The tone check: each pixel's grey against what the artwork's own
+		// grey there should photograph as - the neighbourhood's paper and
+		// ink levels with the golden's grey mapped between them - as a
+		// fraction of the paper-to-ink span. A smudge, a ghosted impression
+		// or faded print never crosses the ink threshold and so never
+		// reaches the two binary checks; at 0.3 this sees a 70% smudge
+		// (0.56) and a 46% ghost (0.46) and leaves a stain a few levels off
+		// paper (0.1-0.2) alone, and a grey panel in the artwork is expected
+		// grey. 0 = off.
 		toneThreshold: { value: 0.3, float: [0, 1] },
 		// px either side of an ink edge the tone check leaves out: where
 		// blur and sub-pixel registration put legitimate grey
@@ -124,10 +127,17 @@ module.exports = (RED) => {
 		// at this level, counted. Dust and pinholes are one to three px each
 		// and never make a block dense; what they have is number. 0 = off.
 		speckThreshold: { value: 0.3, float: [0, 1] },
-		speckMinArea: { value: 2, int: [1, 100000] },
+		// 3 px, not 2: on a real label's harsh-preset frame, two-pixel
+		// components of JPEG and sensor noise reached the count gate once;
+		// three never did, and dust and pinholes lost nothing
+		speckMinArea: { value: 3, int: [1, 100000] },
 		// fail on this many specks, or on one speck this big (px); 0 = no gate
 		speckMaxCount: { value: 8, int: [0, 1000000] },
 		speckMaxArea: { value: 48, int: [0, 10000000] },
+		// every check's regions on the aligned frame in one picture, each in
+		// its own colour: what a person looks at. The four below are one
+		// check each, per block: what a person tunes with.
+		outputHeatmap: { value: true },
 		outputPrintHeatmap: { value: true },
 		outputBackgroundHeatmap: { value: true },
 		outputToneHeatmap: { value: true },
@@ -496,6 +506,13 @@ module.exports = (RED) => {
 				"Frame ink the golden does not have: marks, smudges, overprint, dust. Pixels in the ambiguity band are withheld.",
 		},
 		{
+			key: "heatmap",
+			group: "verdict",
+			title: "Every check, one picture",
+			description:
+				"Each check's regions on the aligned frame, boxed in its own colour with the defect pixels filled inside: blue is extra ink (background), red is missing ink (print), amber is tone, green is specks. What failed, where, and which check said so.",
+		},
+		{
 			key: "printHeatmap",
 			group: "verdict",
 			title: "Print heat map",
@@ -629,6 +646,7 @@ module.exports = (RED) => {
 				const wantBackgroundHeatmap = cfg.outputBackgroundHeatmap;
 				const wantToneHeatmap = cfg.outputToneHeatmap;
 				const wantSpeckHeatmap = cfg.outputSpeckHeatmap;
+				const wantHeatmap = cfg.outputHeatmap;
 				if (cfg.previewEnabled) {
 					cfg.debugStages = true;
 					cfg.outputPrintHeatmap = true;
@@ -1078,6 +1096,7 @@ module.exports = (RED) => {
 					thresholdMs: ms(t.thresholdMs),
 					nativeFallbackMs: ms(t.nativeFallbackMs),
 				};
+				setOrDelete(msg, "heatmap", wantHeatmap ? result.heatmap : null);
 				setOrDelete(
 					msg,
 					"printHeatmap",
@@ -1213,6 +1232,7 @@ module.exports = (RED) => {
 		for (const key of Object.keys(result.stages || {})) {
 			if (result.stages[key]) images[key] = result.stages[key];
 		}
+		if (result.heatmap) images.heatmap = result.heatmap;
 		if (result.printBlemish.heatmap) images.printHeatmap = result.printBlemish.heatmap;
 		if (result.backgroundBlemish.heatmap) {
 			images.backgroundHeatmap = result.backgroundBlemish.heatmap;
@@ -1236,14 +1256,17 @@ module.exports = (RED) => {
 		};
 		lastInspections.set(node.id, entry);
 		if (!RED.comms || typeof RED.comms.publish !== "function") return;
+		// the thumbnail: the one picture when there is one, else the heat map
+		// of the check that failed
 		const source =
-			!result.backgroundBlemish.pass && images.backgroundHeatmap
+			images.heatmap ||
+			(!result.backgroundBlemish.pass && images.backgroundHeatmap
 				? images.backgroundHeatmap
 				: result.toneBlemish && !result.toneBlemish.pass && images.toneHeatmap
 					? images.toneHeatmap
 					: result.speckBlemish && !result.speckBlemish.pass && images.speckHeatmap
 						? images.speckHeatmap
-						: images.printHeatmap || images.targetGrayAligned;
+						: images.printHeatmap || images.targetGrayAligned);
 		if (!source) return;
 		const thumb = await imagePipeline(source)
 			.resize({ width: cfg.previewWidth, withoutEnlargement: true })

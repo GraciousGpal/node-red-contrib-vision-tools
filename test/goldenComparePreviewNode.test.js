@@ -114,6 +114,7 @@ const EXPECTED_ORDER = [
 	"targetFgDilatedPrint",
 	"printDefect",
 	"backgroundDefect",
+	"heatmap",
 	"printHeatmap",
 	"backgroundHeatmap",
 	"toneDeviation",

@@ -40,11 +40,12 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   thresholding, so a smudge at 70% opacity, a ghosted second impression
   and faded print never reached them - the second miss mechanism in
   `bench/synth-findings.md`, 0% on all three variants whatever the
-  thresholds. `toneThreshold` (default 0.3; 0 = off) fails a paper pixel
-  that has moved that fraction of the paper-to-ink span toward ink, or an
-  ink pixel that far toward paper, with the levels taken per 128 px cell
-  so lighting cancels and `toneMargin` (3) px either side of an ink edge
-  left out. Same block stage, same regions; `result.toneBlemish`,
+  thresholds. `toneThreshold` (default 0.3; 0 = off) fails a pixel that
+  sits that fraction of the paper-to-ink span from where the artwork's
+  own grey says it should - the neighbourhood's paper and ink levels,
+  taken per 128 px cell so lighting cancels, with the golden's grey
+  mapped between them, so a grey panel in the artwork is expected grey -
+  with `toneMargin` (3) px either side of an ink edge left out. Same block stage, same regions; `result.toneBlemish`,
   `msg.toneHeatmap` (`outputToneHeatmap`), a `toneDeviation` stage, and
   `tone` among the status line's failed parts. On the pinned synthetic
   set it takes recall from 50.8% to 60.3% at the package defaults and
@@ -52,22 +53,32 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   no new clean false fails and no wrong-place verdicts; `mark/smudge`
   25% → 100%, `misprint/faded` 0% → 100%, `overprint/ghost` 50% → 100%.
   ~43 ms a frame at `workingSize` 2100.
+- **`msg.heatmap`: every check on one picture.** Each check's regions on
+  the aligned frame, boxed in its own colour with the defect pixels
+  filled inside - blue extra ink, red missing ink, amber tone, green
+  specks grown so a three-pixel one shows. The four per-check heat maps
+  stayed, one check each per block, for tuning; this one is for looking
+  at a part. It is the thumbnail under the node and the first verdict
+  stage in the viewer. `outputHeatmap`, default on.
 - **A speck check on `golden-compare`, for dust and pinholes.** A medium
   dust case is 600 specks of one to three px across the label: 4000
   changed pixels, none dense enough for a block to reach
   `blockThreshold`, and after the camera's blur not enough at ink level
   for `failRatio` - the third miss mechanism in `bench/synth-findings.md`.
   `speckThreshold` (0.3; 0 = off) takes the tone deviation as pixel-level
-  connected components of at least `speckMinArea` (2) px and fails the
+  connected components of at least `speckMinArea` (3) px and fails the
   part at `speckMaxCount` (8) of them, or at one speck of `speckMaxArea`
   (48) px. `result.speckBlemish` `{ count, area, largest, regions }`,
   `msg.speckHeatmap` (`outputSpeckHeatmap`), a `speckHeatmap` stage,
-  `specks` among the status line's failed parts. On the pinned synthetic
-  set recall goes from 60.3% to 82.5% at the package defaults and from
-  74.6% to 85.7% at the example flow's `failThreshold` 0.1, with the
-  same two clean false fails and no wrong-place verdicts; `random/dust`
-  25% → 100%, `random/void-spots` 25% → 100%, `scratch/dark` 75% →
-  100%. ~10 ms a frame at `workingSize` 2100. Lowering the dilation
+  `specks` among the status line's failed parts. A component the tone
+  check has already failed is tone's evidence, not a speck. On the
+  pinned synthetic set recall goes from 60.3% to 82.5% at the package
+  defaults and from 74.6% to 85.7% at the example flow's
+  `failThreshold` 0.1, with the same two clean false fails and no
+  wrong-place verdicts; `random/dust` 25% → 100%, `random/void-spots`
+  25% → 100%, `scratch/dark` 75% → 100%. ~10 ms a frame at
+  `workingSize` 2100. On the line's real artwork, at the production
+  node's settings: 86.2% recall, 0 clean false fails, no wrong-place. Lowering the dilation
   tolerances instead was measured and rejected: `printTolerance` 0
   reaches 82.5% by failing 23 of 24 clean frames.
 - **A fixed rig in the synthetic set.** `synthetic-defects` and

@@ -315,9 +315,10 @@ test("a grey smudge the ink threshold never sees fails the tone check, on the sm
 
 test("faded print that still binarizes as ink fails the tone check", async () => {
 	const goldenBuf = await png(labelSvg(1200, 1600));
-	// #666 is well under the Otsu level, so every bar is still ink to the
-	// print check; against #111 it is 0.36 of the way to paper
-	const targetBuf = await png(labelSvg(1200, 1600, { barFill: "#666" }));
+	// #707070 is well under the Otsu level, so every bar is still ink to
+	// the print check; against the artwork's own #111 it is a third of the
+	// way to paper
+	const targetBuf = await png(labelSvg(1200, 1600, { barFill: "#707070" }));
 	const golden = await prepareGolden(goldenBuf, cfg());
 	const off = await compareFrame(targetBuf, golden, cfg({ toneThreshold: 0 }));
 	assert.strictEqual(off.printBlemish.pass, true, "faded bars are still ink to the binary check");
@@ -381,6 +382,37 @@ test("dust on the paper fails the speck check by count where every block check p
 	assert.ok(on.timings.speckMs >= 0);
 });
 
+test("the one-picture overlay carries every check's regions in colour", async () => {
+	const goldenBuf = await png(labelSvg(1200, 1600));
+	const dust = Array.from({ length: 12 }, (_, i) => ({ x: 960 + (i % 3) * 40, y: 220 + i * 90, w: 4, h: 4, fill: "#333" }));
+	const targetBuf = await png(
+		labelSvg(1200, 1600, { extraRects: dust, extraBlob: { x: 650, y: 1250, w: 160, h: 120, fill: "#999" }, missingBar: true }),
+	);
+	const golden = await prepareGolden(goldenBuf, cfg());
+	const r = await compareFrame(targetBuf, golden, cfg({ ...SPECKS, outputHeatmap: true }));
+	assert.strictEqual(r.pass, false);
+	assert.ok(Buffer.isBuffer(r.heatmap), "the overlay is an encoded image");
+	const meta = await sharp(r.heatmap).metadata();
+	assert.strictEqual(meta.width, golden.width);
+	assert.strictEqual(meta.height, golden.height);
+	// coloured where something was found: red (missing bar), amber (smudge), green (dust)
+	const { data } = await sharp(r.heatmap).raw().toBuffer({ resolveWithObject: true });
+	let red = 0, amber = 0, green = 0;
+	for (let i = 0; i < data.length; i += 3) {
+		const [R, G, B] = [data[i], data[i + 1], data[i + 2]];
+		// blended over paper, so red reads as pink: strong R, weaker G and B
+		if (R > 200 && G < 170 && B < 170 && R - G > 60) red++;
+		else if (R > 180 && G > 120 && G < 200 && B < 90) amber++;
+		else if (G > 150 && R < 110 && B < 150) green++;
+	}
+	assert.ok(red > 200, `red pixels ${red}`);
+	assert.ok(amber > 200, `amber pixels ${amber}`);
+	assert.ok(green > 50, `green pixels ${green}`);
+	assert.ok(r.timings.overlayMs >= 0);
+	const off = await compareFrame(targetBuf, golden, cfg({ ...SPECKS, outputHeatmap: false }));
+	assert.strictEqual(off.heatmap, null);
+});
+
 test("pinholes inside a bar fail the speck check by count", async () => {
 	const goldenBuf = await png(labelSvg(1200, 1600));
 	const barTop = Math.round(1600 * BAR_Y[3]);
@@ -397,8 +429,11 @@ test("pinholes inside a bar fail the speck check by count", async () => {
 test("one spatter fails the speck check on its size, and a clean frame has no specks", async () => {
 	const goldenBuf = await png(labelSvg(1200, 1600));
 	const golden = await prepareGolden(goldenBuf, cfg());
-	const spatter = await png(labelSvg(1200, 1600, { extraRects: [{ x: 980, y: 700, w: 14, h: 14, fill: "#222" }] }));
+	// 13 px square: ~70 working px, over the size gate but too thin a block
+	// for the tone check to fail it itself (which would make it tone's)
+	const spatter = await png(labelSvg(1200, 1600, { extraRects: [{ x: 980, y: 700, w: 13, h: 13, fill: "#222" }] }));
 	const r = await compareFrame(spatter, golden, cfg(SPECKS));
+	assert.strictEqual(r.toneBlemish.pass, true, "a lone spatter is under the tone check's block gate");
 	assert.strictEqual(r.speckBlemish.count, 1, JSON.stringify(r.speckBlemish.regions));
 	assert.ok(r.speckBlemish.largest >= 48, `largest ${r.speckBlemish.largest}`);
 	assert.strictEqual(r.speckBlemish.pass, false);

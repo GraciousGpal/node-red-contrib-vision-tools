@@ -640,13 +640,19 @@
     >
   </div>
   <div class="form-row">
-    <label for="node-input-outputPrintHeatmap"
+    <label for="node-input-outputHeatmap"
       ><i class="fa fa-picture-o"></i> Output heat maps</label
     >
     <input
       type="checkbox"
-      id="node-input-outputPrintHeatmap"
+      id="node-input-outputHeatmap"
       style="display:inline-block; width:auto; vertical-align:middle;"
+    />
+    <span style="margin-left:4px;"><b>every check</b></span>
+    <input
+      type="checkbox"
+      id="node-input-outputPrintHeatmap"
+      style="display:inline-block; width:auto; vertical-align:middle; margin-left:16px;"
     />
     <span style="margin-left:4px;">print</span>
     <input
@@ -667,6 +673,11 @@
       style="display:inline-block; width:auto; vertical-align:middle; margin-left:16px;"
     />
     <span style="margin-left:4px;">specks</span>
+    <span class="node-input-hint" style="margin-left:10px; color:#999;"
+      ><code>msg.heatmap</code> is every check's regions on the aligned
+      frame in one picture (blue extra ink, red missing ink, amber tone,
+      green specks); the others are one check each, per block</span
+    >
   </div>
   <div class="form-row">
     <label for="node-input-heatmapFormat"
@@ -804,6 +815,9 @@
       >
       (region coordinates in the working-resolution image, same size as the heat
       maps)
+    </li>
+    <li>
+      <code>msg.heatmap</code> — every check's regions on the aligned frame in one picture: blue extra ink, red missing ink, amber tone, green specks (only if <i>every check</i> is on)
     </li>
     <li>
       <code>msg.printHeatmap</code> / <code>msg.backgroundHeatmap</code> / <code>msg.toneHeatmap</code> / <code>msg.speckHeatmap</code> — JPEG (or PNG / raw, per <i>Image format</i>)
@@ -971,9 +985,10 @@
       toneThreshold: { value: 0.3, validate: RED.validators.number(true) },
       toneMargin: { value: 3, validate: RED.validators.number(true) },
       speckThreshold: { value: 0.3, validate: RED.validators.number(true) },
-      speckMinArea: { value: 2, validate: RED.validators.number(true) },
+      speckMinArea: { value: 3, validate: RED.validators.number(true) },
       speckMaxCount: { value: 8, validate: RED.validators.number(true) },
       speckMaxArea: { value: 48, validate: RED.validators.number(true) },
+      outputHeatmap: { value: true },
       outputPrintHeatmap: { value: true },
       outputBackgroundHeatmap: { value: true },
       outputToneHeatmap: { value: true },

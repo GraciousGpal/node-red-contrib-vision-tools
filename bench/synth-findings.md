@@ -299,6 +299,56 @@ that is not a resolution question: it needs a line detector across the
 strokes, which nothing here is yet. On small-and-up alone the set is
 at 43 of 46, 93.5%.
 
+## Update, 2026-10-06, last: the real artwork
+
+Everything above was measured on the synthetic label, which is pure
+black on white. The same set generated from the line's real artwork
+(`--golden`, a 2173x1498 PDF render; the file stays out of the repo)
+found two things the synthetic label cannot show, both in the tone
+check, both on every clean frame:
+
+- The artwork has mid-grey panels with white type. The golden's Otsu
+  level calls them paper; the frame's threshold calls them ink. The
+  binary checks are shielded from that on the line by `inkMargin` 64,
+  which withholds pixels near the level from both channels - the
+  bench's default 8 fails every clean frame on background, so a real
+  artwork is benched with the production node's settings
+  (`inkMargin` 64, `blockSize` 8, `failThreshold` 0.5).
+- The tone check's first model measured every pixel against a single
+  paper level per cell, so a grey panel read as 0.5 of the span from
+  paper and failed whole. It now measures against the artwork's own
+  grey at that pixel, mapped between the cell's paper and ink levels -
+  and those levels are sampled only where the golden is pure paper or
+  pure ink, because sampling the panel as paper made it its own cell's
+  paper level and the panel's white type then measured wrong against
+  it. Second lesson: a new check is not finished until the real
+  artwork has been through it.
+
+Real artwork, 87 frames (65 expected to fail), pinned, native size:
+
+| configuration | recall | clean false fails |
+| --- | ---: | ---: |
+| production settings, `speckMinArea` 2 | 86.2% | 1 / 22 |
+| production settings, `speckMinArea` 3 | 86.2% | 0 / 22 |
+| `failThreshold` 0.1 (the test flow), `speckMinArea` 2 | 89.2% | 1 / 22 |
+| `failThreshold` 0.1, `speckMinArea` 3 | 89.2% | 0 / 22 |
+
+The one false fail was a `harsh` clean frame reaching the speck count
+on two-pixel components of JPEG and sensor noise; a three-pixel floor
+clears it and costs nothing on either set, so 3 is the default. No
+wrong-place verdicts. What is left on the real artwork at the test
+flow's settings, 7 of 65: two `tiny`, and `misprint/void` small and
+large, `misprint/faded` small, `overprint/ghost` medium and
+`overprint/bleed` small - on small-and-up, 43 of 48. These are the
+grey-artwork cases: a void or a bleed on a grey panel, a ghost over
+one, where the span between that grey and its neighbours is a fraction
+of the paper-to-ink span the checks measure in.
+
+A `msg.heatmap` was added alongside: every check's regions on the
+aligned frame in one picture, each in its own colour, with the defect
+pixels filled inside. On a real-artwork smudge frame it draws the smudge
+and nothing else.
+
 ## How to repeat
 
 ```
