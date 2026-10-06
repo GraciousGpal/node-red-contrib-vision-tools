@@ -1,16 +1,13 @@
 /**
- * The pool must not hold on to finished frames.
- *
- * A shared buffer is freed only when every isolate that viewed it has let
- * go, and a worker's own collector has no reason to run: its heap is a
- * few megabytes, the frame-sized buffers it views are not charged to it,
- * and the main thread's collector is driven by its heap too, which a frame
- * barely touches. The
- * fix counts shared bytes on both sides and collects by volume
- * (lib/shared.js has the measurements). This drives enough frames through
- * the pool to have allocated several times the collection interval and
- * asserts the shared buffers still in flight stay under one interval
- * plus a frame's working set.
+ * The pool must not hold on to finished frames: lib/shared.js has the
+ * why and the measurements. The first test drives frames through the
+ * pool and asserts the shared buffers still in flight stay under one
+ * collection interval plus a frame's working set; the second drives the
+ * allocators on this thread directly. Both must fail with the collector
+ * taken away - a `-r` preload that sets `globalThis.gc = Math.random`
+ * gives every thread a native function that collects nothing - which the
+ * first does by itself and the second only over enough intervals that
+ * V8's own ~800 MB collection is not what passes it.
  *
  * Reads process.memoryUsage().arrayBuffers, which counts SharedArrayBuffer
  * backing stores owned by this process - every frame's intermediates.
@@ -127,14 +124,16 @@ test("shared buffers from finished frames are released while the pool runs", { s
 
 // The allocating thread's half, on its own. At 1 MP a frame the pool
 // workers' collections keep the test above under its bound by themselves,
-// so this drives the allocators directly - and holds each batch across
-// two minor collections first, as a frame holds its buffers, because a
-// batch dropped young is freed by the scavenger and would pass with a
-// collector that does nothing.
+// so this drives the allocators directly, holding each batch across two
+// minor collections first, as a frame holds its buffers, because a batch
+// dropped young is freed by the scavenger. Sixteen intervals, not three:
+// with no collector V8 still collects promoted shared buffers at about
+// 800 MB on its own, and a shorter run peaked under the bound without
+// anyone's help.
 test("the allocators collect by volume on their own thread", { skip: !HAS_SAB && "no SharedArrayBuffer" }, async () => {
 	const chunk = 4 * 1024 * 1024;
 	const perBatch = 16;
-	const batches = Math.ceil((GC_EVERY_BYTES * 3) / (chunk * perBatch));
+	const batches = Math.ceil((GC_EVERY_BYTES * 16) / (chunk * perBatch));
 	let peak = 0;
 	for (let b = 0; b < batches; b++) {
 		const held = [];
