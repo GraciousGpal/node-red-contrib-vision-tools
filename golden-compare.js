@@ -110,8 +110,19 @@ module.exports = (RED) => {
 		// failThreshold by area and never reaches failRatio; against its own
 		// ink it reads 1.0. Print only - extra ink has no "should be". 0 = off.
 		printMissingFraction: { value: 0.5, float: [0, 1] },
+		// The tone check: grey against what paper and ink photograph as in
+		// the same neighbourhood, as a fraction of the paper-to-ink span. A
+		// smudge, a ghosted impression or faded print never crosses the ink
+		// threshold and so never reaches the two binary checks; at 0.3 this
+		// sees a 70% smudge (0.56) and a 46% ghost (0.46) and leaves a stain
+		// a few levels off paper (0.1-0.2) alone. 0 = off.
+		toneThreshold: { value: 0.3, float: [0, 1] },
+		// px either side of an ink edge the tone check leaves out: where
+		// blur and sub-pixel registration put legitimate grey
+		toneMargin: { value: 3, int: [0, 50] },
 		outputPrintHeatmap: { value: true },
 		outputBackgroundHeatmap: { value: true },
+		outputToneHeatmap: { value: true },
 		// JPEG unless asked for PNG: a heat map is a picture for a person,
 		// and PNG was ~150ms per image at working size (see encodeImage in
 		// lib/compare.js). Also applies to msg.stages.
@@ -489,6 +500,20 @@ module.exports = (RED) => {
 			description:
 				"The background defect per block, the same way. With a nuisance map loaded a block also fails when it exceeds its baseline by the novelty threshold.",
 		},
+		{
+			key: "toneDeviation",
+			group: "verdict",
+			title: "Tone deviation",
+			description:
+				"How far each pixel's grey has moved along the paper-to-ink span measured in its own neighbourhood: white is ink where paper should be or paper where ink should be. Blank within the edge band either side of an ink edge, where blur and registration put legitimate grey.",
+		},
+		{
+			key: "toneHeatmap",
+			group: "verdict",
+			title: "Tone heat map",
+			description:
+				"Pixels past the tone threshold, per block, the same way as the other two: a smudge, a ghosted impression or faded print that the ink threshold never sees.",
+		},
 	];
 
 	/** A rendered image, whichever of the three formats it is in, as a
@@ -586,6 +611,7 @@ module.exports = (RED) => {
 				const wantStages = cfg.debugStages;
 				const wantPrintHeatmap = cfg.outputPrintHeatmap;
 				const wantBackgroundHeatmap = cfg.outputBackgroundHeatmap;
+				const wantToneHeatmap = cfg.outputToneHeatmap;
 				if (cfg.previewEnabled) {
 					cfg.debugStages = true;
 					cfg.outputPrintHeatmap = true;
@@ -1045,6 +1071,11 @@ module.exports = (RED) => {
 					"backgroundHeatmap",
 					wantBackgroundHeatmap ? result.backgroundBlemish.heatmap : null,
 				);
+				setOrDelete(
+					msg,
+					"toneHeatmap",
+					wantToneHeatmap && result.toneBlemish ? result.toneBlemish.heatmap : null,
+				);
 				setOrDelete(msg, "stages", wantStages ? result.stages : null);
 
 				send(msg);
@@ -1061,6 +1092,7 @@ module.exports = (RED) => {
 				if (!result.position.pass) failedParts.push("position");
 				if (!result.printBlemish.pass) failedParts.push("print");
 				if (!result.backgroundBlemish.pass) failedParts.push("background");
+				if (result.toneBlemish && !result.toneBlemish.pass) failedParts.push("tone");
 				const verdictText =
 					(result.match.labelMissing
 						? `label missing? · ${Math.round(result.match.coverage * 100)}% of ink`
@@ -1162,6 +1194,9 @@ module.exports = (RED) => {
 		if (result.backgroundBlemish.heatmap) {
 			images.backgroundHeatmap = result.backgroundBlemish.heatmap;
 		}
+		if (result.toneBlemish && result.toneBlemish.heatmap) {
+			images.toneHeatmap = result.toneBlemish.heatmap;
+		}
 		const entry = {
 			receivedAt: Date.now(),
 			filename: typeof msg.filename === "string" ? msg.filename : null,
@@ -1178,7 +1213,9 @@ module.exports = (RED) => {
 		const source =
 			!result.backgroundBlemish.pass && images.backgroundHeatmap
 				? images.backgroundHeatmap
-				: images.printHeatmap || images.targetGrayAligned;
+				: result.toneBlemish && !result.toneBlemish.pass && images.toneHeatmap
+					? images.toneHeatmap
+					: images.printHeatmap || images.targetGrayAligned;
 		if (!source) return;
 		const thumb = await imagePipeline(source)
 			.resize({ width: cfg.previewWidth, withoutEnlargement: true })

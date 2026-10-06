@@ -116,6 +116,8 @@ const EXPECTED_ORDER = [
 	"backgroundDefect",
 	"printHeatmap",
 	"backgroundHeatmap",
+	"toneDeviation",
+	"toneHeatmap",
 ];
 
 test("with the preview off nothing is kept, published or served", async () => {
@@ -153,7 +155,7 @@ test("with the preview on: a thumbnail under the node, every stage served, the m
 	const thumb = await sharp(Buffer.from(data.image, "base64")).metadata();
 	assert.strictEqual(thumb.format, "jpeg");
 	assert.strictEqual(thumb.width, 120);
-	assert.deepStrictEqual(data.stages, EXPECTED_ORDER, "in pipeline order, both heat maps included");
+	assert.deepStrictEqual(data.stages, EXPECTED_ORDER, "in pipeline order, every heat map included");
 
 	// the index route
 	const meta = await last(h);

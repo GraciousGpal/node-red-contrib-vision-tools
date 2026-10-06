@@ -204,6 +204,50 @@ at the gate's 6% ink floor. 0.7 clears the second at a cost of two
 points of recall; 0.3 clears nothing more and gains eleven. The package
 default is 0.5; the example flow runs the sweep's `failThreshold` 0.1.
 
+## Update, 2026-10-06, later: the tone check
+
+The second mechanism - both channels binary at the ink level - got its
+fix: `toneThreshold`, a third check on the aligned grey. Each pixel is
+measured against the paper and ink levels of its own 128 px cell (the
+80th and 20th percentiles, so lighting cancels and a defect has to cover
+most of a cell to move the level it is judged by), as a fraction of the
+span between them; a paper pixel that far toward ink, or an ink pixel
+that far toward paper, is a tone defect, through the same block stage.
+The `toneMargin` px either side of an ink edge and the outer 8 px of the
+canvas are left out - blur, sub-pixel registration and the warp's fill
+put legitimate grey there, and the first version booked a 4 px strip of
+tray along the bottom row as a tone region.
+
+Same rig set, pinned, `printMissingFraction` 0.5:
+
+| configuration | recall | clean false fails |
+| --- | ---: | ---: |
+| `failThreshold` 0.3, tone off | 50.8% | 2 / 24 |
+| `failThreshold` 0.3, tone 0.25 | 61.9% | 2 / 24 |
+| `failThreshold` 0.3, tone 0.3 | 60.3% | 2 / 24 |
+| `failThreshold` 0.3, tone 0.4 | 55.6% | 2 / 24 |
+| `failThreshold` 0.1, tone off | 61.9% | 2 / 24 |
+| `failThreshold` 0.1, tone 0.3 (the example flow) | 74.6% | 2 / 24 |
+
+No wrong-place verdicts at either setting with tone 0.3. The two false
+fails are the same two print-channel frames as before; the tone check
+adds none. The three variants it was built for go `mark/smudge` 25% →
+100%, `misprint/faded` 0% → 100%, `overprint/ghost` 50% → 100%;
+`random/fold` 50% → 100%. 0.25 scores a point higher at the package
+default but sits closer to the synthetic set's own "none" floor (a
+change under 64 of 255 levels, 0.25 of the span), so the default is
+0.3. The check costs ~43 ms a frame at `workingSize` 2100 against 26 ms
+for the two binary diffs.
+
+What is left at the example flow's settings, 16 of 63: nine `tiny`
+defects (25-60 changed pixels on a 1500x2100 label, a few pixels across
+under up to 1.5 px of blur - a resolution question, not an algorithm
+one), and seven small-and-up - `scratch/light` at every size, `dust`
+small and medium, `void-spots` small and medium. All three are
+sub-4px structure that the tolerance dilation closes; the next
+mechanism to address. On small-and-up alone the set is at 39 of 46,
+84.8%.
+
 ## How to repeat
 
 ```

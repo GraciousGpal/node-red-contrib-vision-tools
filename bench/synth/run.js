@@ -89,8 +89,11 @@ function defaultCfg() {
 		failThreshold: 0.3,
 		failRatio: 0.002,
 		printMissingFraction: 0.5,
+		toneThreshold: 0.3,
+		toneMargin: 3,
 		outputPrintHeatmap: false,
 		outputBackgroundHeatmap: false,
+		outputToneHeatmap: false,
 		debugStages: false,
 		mmPerPixelNative: null,
 		calibrationNativeWidth: null,
@@ -462,7 +465,7 @@ function buildMarkdown(report, sweep) {
 	out.push(
 		s.problems.length
 			? table(
-					["id", "verdict", "family", "variant", "severity", "channel", "defect px", "failed", "regions p/b"],
+					["id", "verdict", "family", "variant", "severity", "channel", "defect px", "failed", "regions p/b/t"],
 					s.problems.map((p) => [
 						p.id,
 						p.verdict,
@@ -472,7 +475,7 @@ function buildMarkdown(report, sweep) {
 						String(p.channel),
 						String(p.defectPixels),
 						p.failedParts.join("+") || "-",
-						`${p.printRegions}/${p.backgroundRegions}`,
+						`${p.printRegions}/${p.backgroundRegions}/${p.toneRegions == null ? "-" : p.toneRegions}`,
 					]),
 				)
 			: "_none - every defect case was detected in the right place_",

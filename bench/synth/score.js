@@ -92,7 +92,7 @@ function findOverlap(regions, box) {
 
 function largestRegion(result) {
 	let best = null;
-	for (const channel of ["print", "background"]) {
+	for (const channel of ["print", "background", "tone"]) {
 		for (const r of (result[`${channel}Blemish`] || {}).regions || []) {
 			if (!best || regionArea(r) > regionArea(best)) best = { channel, ...r };
 		}
@@ -107,6 +107,7 @@ function failedParts(result) {
 	if (result.backgroundBlemish && result.backgroundBlemish.pass === false) {
 		parts.push("background");
 	}
+	if (result.toneBlemish && result.toneBlemish.pass === false) parts.push("tone");
 	return parts;
 }
 
@@ -172,6 +173,8 @@ function classifyCase(caseDef, result, ctx) {
 			: null,
 		printRegions: regionsOf("print").length,
 		backgroundRegions: regionsOf("background").length,
+		toneRegions: regionsOf("tone").length,
+		toneRatio: result.toneBlemish ? result.toneBlemish.defectRatio : null,
 		defectPixels: located.reduce(
 			(n, d) => n + d.printPixels + d.backgroundPixels,
 			0,
@@ -193,7 +196,9 @@ function classifyCase(caseDef, result, ctx) {
 	}
 
 	// Failed, as it should have. Did it fail *there*, in a channel the
-	// defect could plausibly show up in?
+	// defect could plausibly show up in? The tone check is grey evidence
+	// of either kind - a smudge is extra ink, faded print is missing ink -
+	// so a tone region on the defect counts whichever channel it was in.
 	for (const d of located) {
 		if (!d.box) continue;
 		for (const channel of defectChannels(d)) {
@@ -203,6 +208,12 @@ function classifyCase(caseDef, result, ctx) {
 				record.verdict = "detected";
 				return record;
 			}
+		}
+		const toneHit = findOverlap(regionsOf("tone"), d.box);
+		if (toneHit) {
+			record.hit = { channel: "tone", defect: d.type, ...toneHit };
+			record.verdict = "detected";
+			return record;
 		}
 	}
 	record.verdict = "wrong-place";
@@ -320,6 +331,7 @@ function aggregate(records) {
 				failedParts: r.failedParts,
 				printRegions: r.printRegions,
 				backgroundRegions: r.backgroundRegions,
+				toneRegions: r.toneRegions,
 				largestRegion: r.largestRegion,
 			})),
 		timings: {

@@ -35,6 +35,23 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   `failThreshold` 0.1) for 2 clean false fails in 24, both thin strokes
   at the gate's floor; `misprint/dropout` goes 25% → 100%,
   `misprint/streak` 0% → 75%, `overprint/bleed` 33% → 100%.
+- **A tone check on `golden-compare`: grey against the paper and ink of
+  its own neighbourhood.** The two blemish checks read the frame after
+  thresholding, so a smudge at 70% opacity, a ghosted second impression
+  and faded print never reached them - the second miss mechanism in
+  `bench/synth-findings.md`, 0% on all three variants whatever the
+  thresholds. `toneThreshold` (default 0.3; 0 = off) fails a paper pixel
+  that has moved that fraction of the paper-to-ink span toward ink, or an
+  ink pixel that far toward paper, with the levels taken per 128 px cell
+  so lighting cancels and `toneMargin` (3) px either side of an ink edge
+  left out. Same block stage, same regions; `result.toneBlemish`,
+  `msg.toneHeatmap` (`outputToneHeatmap`), a `toneDeviation` stage, and
+  `tone` among the status line's failed parts. On the pinned synthetic
+  set it takes recall from 50.8% to 60.3% at the package defaults and
+  from 61.9% to 74.6% at the example flow's `failThreshold` 0.1, with
+  no new clean false fails and no wrong-place verdicts; `mark/smudge`
+  25% → 100%, `misprint/faded` 0% → 100%, `overprint/ghost` 50% → 100%.
+  ~43 ms a frame at `workingSize` 2100.
 - **A fixed rig in the synthetic set.** `synthetic-defects` and
   `bench/synth/generate.js` now shoot the whole set at one magnification
   and one stretch by default (`Fixed rig` / `--rig`), as a camera on a

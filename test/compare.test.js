@@ -74,6 +74,7 @@ function labelSvg(
 		panelFill = null,
 		localShift = null,
 		hairlines = null,
+		barFill = "#111",
 	} = {},
 ) {
 	const bars = [];
@@ -89,7 +90,7 @@ function labelSvg(
 		const local =
 			localShift && i >= localShift.from && i < localShift.to ? localShift.px : 0;
 		bars.push(
-			`<rect x="${Math.round(width * 0.14) + shiftX + local}" y="${y}" width="${w}" height="${Math.round(height * 0.022)}" fill="#111"/>`,
+			`<rect x="${Math.round(width * 0.14) + shiftX + local}" y="${y}" width="${w}" height="${Math.round(height * 0.022)}" fill="${barFill}"/>`,
 		);
 	}
 	// a large flat panel, the shape that makes a drifting Otsu level
@@ -268,6 +269,74 @@ test("a patch of thin type that went missing fails print on the missing fraction
 	const same = await compareFrame(goldenBuf, golden, cfg({ printMissingFraction: 0.5 }));
 	assert.strictEqual(same.printBlemish.pass, true);
 	assert.strictEqual(same.printBlemish.worstMissing, 0);
+});
+
+// The second miss mechanism in bench/synth-findings.md: both binary checks
+// read the frame after thresholding, so grey that stays on the paper side
+// of the level - a smudge, a ghost - or ink that is lighter but still ink
+// is invisible to them. The tone check measures the grey itself.
+const TONE = { toneThreshold: 0.3, toneMargin: 3 };
+
+test("a grey smudge the ink threshold never sees fails the tone check, on the smudge", async () => {
+	const goldenBuf = await png(labelSvg(1200, 1600));
+	const blob = { x: 650, y: 1250, w: 160, h: 120, fill: "#999" };
+	const targetBuf = await png(labelSvg(1200, 1600, { extraBlob: blob }));
+	const golden = await prepareGolden(goldenBuf, cfg());
+
+	// the gap, documented: grey above the level is paper to both binary checks
+	const off = await compareFrame(targetBuf, golden, cfg({ toneThreshold: 0 }));
+	assert.strictEqual(off.pass, true, `binary checks alone pass a #999 smudge: ${JSON.stringify(off.backgroundBlemish.regions)}`);
+	assert.strictEqual(off.toneBlemish.enabled, false);
+
+	const on = await compareFrame(targetBuf, golden, cfg(TONE));
+	assert.strictEqual(on.toneBlemish.enabled, true);
+	assert.strictEqual(on.toneBlemish.pass, false, "the tone check must see it");
+	assert.strictEqual(on.pass, false);
+	assert.strictEqual(on.printBlemish.pass, true);
+	assert.strictEqual(on.backgroundBlemish.pass, true);
+	const sx = golden.width / 1200;
+	const sy = golden.height / 1600;
+	const hit = on.toneBlemish.regions.find(
+		(r) =>
+			r.x < (blob.x + blob.w) * sx && r.x + r.w > blob.x * sx &&
+			r.y < (blob.y + blob.h) * sy && r.y + r.h > blob.y * sy,
+	);
+	assert.ok(hit, `no tone region on the smudge: ${JSON.stringify(on.toneBlemish.regions)}`);
+	assert.ok(on.timings.toneMs >= 0);
+});
+
+test("faded print that still binarizes as ink fails the tone check", async () => {
+	const goldenBuf = await png(labelSvg(1200, 1600));
+	// #666 is well under the Otsu level, so every bar is still ink to the
+	// print check; against #111 it is 0.36 of the way to paper
+	const targetBuf = await png(labelSvg(1200, 1600, { barFill: "#666" }));
+	const golden = await prepareGolden(goldenBuf, cfg());
+	const off = await compareFrame(targetBuf, golden, cfg({ toneThreshold: 0 }));
+	assert.strictEqual(off.printBlemish.pass, true, "faded bars are still ink to the binary check");
+	const on = await compareFrame(targetBuf, golden, cfg(TONE));
+	assert.strictEqual(on.toneBlemish.pass, false);
+	assert.ok(on.toneBlemish.regions.length > 0);
+	// every bar faded, so the deviation is on ink across the whole label,
+	// not in one place
+	assert.ok(on.toneBlemish.regions.length >= 3, `${on.toneBlemish.regions.length} regions`);
+	assert.ok(on.toneBlemish.defectRatio > 0.001, `ratio ${on.toneBlemish.defectRatio}`);
+});
+
+test("the tone check leaves a faint stain and an identical frame alone", async () => {
+	const goldenBuf = await png(labelSvg(1200, 1600));
+	const golden = await prepareGolden(goldenBuf, cfg());
+	const same = await compareFrame(goldenBuf, golden, cfg(TONE));
+	assert.strictEqual(same.toneBlemish.pass, true);
+	assert.deepStrictEqual(same.toneBlemish.regions, []);
+	assert.strictEqual(same.pass, true);
+	// 25 levels off paper is a tenth of the span: under the floor, as the
+	// synthetic set's stain variant is by construction
+	const faint = await png(
+		labelSvg(1200, 1600, { extraBlob: { x: 650, y: 1250, w: 160, h: 120, fill: "#e6e6e6" } }),
+	);
+	const stain = await compareFrame(faint, golden, cfg(TONE));
+	assert.strictEqual(stain.toneBlemish.pass, true, JSON.stringify(stain.toneBlemish.regions));
+	assert.strictEqual(stain.pass, true);
 });
 
 // The whole point of searching magnification: a golden that is rendered

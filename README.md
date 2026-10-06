@@ -231,6 +231,17 @@ verdict by different routes.
      the target's ink by `printTolerance` px
    - *background* — target has ink the golden never has, even after
      dilating the golden's ink by `backgroundTolerance` px
+   - *tone* — on grey rather than on the ink mask: each pixel's grey
+     against what paper and ink photograph as in its own neighbourhood
+     (the 80th percentile of paper and the 20th of ink per 128 px cell,
+     so lighting cancels), as a fraction of the paper-to-ink span. A
+     paper pixel that has moved `toneThreshold` (0.3) of the way to ink,
+     or an ink pixel that far toward paper, is a tone defect: a smudge at
+     70% opacity reads 0.56, a ghosted second impression 0.46, a stain a
+     few levels off paper 0.1 - none of which the two binary checks can
+     see, because none crosses the ink threshold. The `toneMargin` px
+     either side of an ink edge are left out, where blur and registration
+     put legitimate grey; 0 switches the check off.
 
    The two are disjoint per pixel, so they never double-count the same
    defect. Each diff is block-summed into a density grid (`blockSize` px),
@@ -249,7 +260,7 @@ verdict by different routes.
    against its own ink it reads 1.0. Blocks with under 6% golden ink are
    left out of it, so a stroke clipping a block's corner cannot read as
    "lost everything". 0 switches it off.
-6. Overall `pass = position.pass && printBlemish.pass && backgroundBlemish.pass`.
+6. Overall `pass = position.pass && printBlemish.pass && backgroundBlemish.pass && toneBlemish.pass`.
 
 Decode/resize uses [`sharp`](https://sharp.pixelplumbing.com) (native,
 libvips) — the images here run 20+ MP, and a pure-JS decoder was too slow.
@@ -485,7 +496,8 @@ Per-message overrides:
 `msg.nativeFastAlign`,
 `msg.positionToleranceXMm`/`YMm`/`XPx`/`YPx`/`AngleDeg`, `msg.blockSize`,
 `msg.blockThreshold`, `msg.failThreshold`, `msg.failRatio`,
-`msg.printMissingFraction`,
+`msg.printMissingFraction`, `msg.toneThreshold`, `msg.toneMargin`,
+`msg.outputToneHeatmap`,
 `msg.outputPrintHeatmap`, `msg.outputBackgroundHeatmap`,
 `msg.heatmapFormat`, `msg.heatmapQuality`, `msg.debugStages`.
 
@@ -578,7 +590,7 @@ trusting it.
 
 - `msg.payload` — `true`/`false` overall pass
 - `msg.result` —
-  `{ pass, position: { dxPx, dyPx, dxMm, dyMm, angleDeg, anglePass, scale, scaleX, scaleY, stretchPercent, pass }, transform: { pinned, native, nativeFallback?, seeded, pinRefused?, scaleX, scaleY, scale, stretchPercent, angleDeg, ox, oy, score }, match: { score, grade, coverage, labelMissing, mismatchSuspected, reason }, thresholds: { golden, target }, localAlign: { tiles, localised, meanPx, medianPx, maxPx }, printBlemish: { pass, defectRatio, regions: [{x,y,w,h,density,avgDensity,cells}] }, backgroundBlemish: { pass, defectRatio, regions, worstExcess, noveltyPass } }`
+  `{ pass, position: { dxPx, dyPx, dxMm, dyMm, angleDeg, anglePass, scale, scaleX, scaleY, stretchPercent, pass }, transform: { pinned, native, nativeFallback?, seeded, pinRefused?, scaleX, scaleY, scale, stretchPercent, angleDeg, ox, oy, score }, match: { score, grade, coverage, labelMissing, mismatchSuspected, reason }, thresholds: { golden, target }, localAlign: { tiles, localised, meanPx, medianPx, maxPx }, printBlemish: { pass, defectRatio, regions: [{x,y,w,h,density,avgDensity,missing,cells}], worstMissing }, backgroundBlemish: { pass, defectRatio, regions, worstExcess, noveltyPass }, toneBlemish: { enabled, pass, defectRatio, regions } }`
   (region coordinates in the working-resolution image, same size as the
   heat maps — not the original camera resolution). `transform` is the raw
   recovered placement in frame-canvas pixels: `pinned` reports whether a
@@ -606,8 +618,9 @@ trusting it.
   press does, and its normal value depends on media and machine, so any
   default threshold would be a guess that fails good parts. It is worth
   trending, though: a stretch that moves is a press drifting.
-- `msg.printHeatmap` / `msg.backgroundHeatmap` — overlays, only if the
-  matching `outputPrintHeatmap`/`outputBackgroundHeatmap` is on.
+- `msg.printHeatmap` / `msg.backgroundHeatmap` / `msg.toneHeatmap` —
+  overlays, only if the matching `outputPrintHeatmap` /
+  `outputBackgroundHeatmap` / `outputToneHeatmap` is on.
   `heatmapFormat` picks the encoding, measured at working size on real
   content: `jpg` ~22ms/350KB (default, quality `heatmapQuality`, 85),
   `png` ~25ms/3.7MB (lossless, zlib level 1), `raw` 0ms/9.4MB — no codec,
@@ -1359,7 +1372,7 @@ nothing is found at all, one message with `msg.text = null` and
 
 ## Tests
 
-`npm test` (Node 18+, no test framework needed — `node --test`), 546
+`npm test` (Node 18+, no test framework needed — `node --test`), 550
 tests. Fixtures are generated with `sharp` rather than read from
 `data/sample_images`, so the suite runs anywhere; the real QC photos are
 gitignored. Coverage spans the lib pipeline (`compare`, `align`, `warp`,

@@ -445,6 +445,35 @@
     >
   </div>
   <div class="form-row">
+    <label for="node-input-toneThreshold"><i class="fa fa-adjust"></i> Tone</label>
+    <input
+      type="number"
+      id="node-input-toneThreshold"
+      min="0"
+      max="1"
+      step="0.05"
+      style="width:70px;"
+    />
+    <label
+      for="node-input-toneMargin"
+      style="width:auto; margin-left:16px; margin-right:4px;"
+      >Edge band</label
+    >
+    <input
+      type="number"
+      id="node-input-toneMargin"
+      min="0"
+      max="50"
+      style="width:60px;"
+    />
+    <span class="node-input-hint" style="margin-left:10px; color:#999;"
+      >a third check on grey: how far a pixel has moved along the
+      paper-to-ink span measured nearby - a smudge, a ghost, faded print
+      the ink threshold never sees. 0 = off. The band is px either side of
+      an ink edge left out</span
+    >
+  </div>
+  <div class="form-row">
     <label for="node-input-scaleFilePath"
       ><i class="fa fa-crosshairs"></i> Scale file path</label
     >
@@ -597,6 +626,12 @@
       style="display:inline-block; width:auto; vertical-align:middle; margin-left:16px;"
     />
     <span style="margin-left:4px;">background</span>
+    <input
+      type="checkbox"
+      id="node-input-outputToneHeatmap"
+      style="display:inline-block; width:auto; vertical-align:middle; margin-left:16px;"
+    />
+    <span style="margin-left:4px;">tone</span>
   </div>
   <div class="form-row">
     <label for="node-input-heatmapFormat"
@@ -727,14 +762,15 @@
         scaleY, scale, stretchPercent, angleDeg, ox, oy, score }, match: {
         score, grade, coverage, labelMissing, mismatchSuspected, reason }, thresholds: { golden, target
         }, localAlign: { tiles, localised, meanPx, medianPx, maxPx },
-        printBlemish: { pass, defectRatio, regions }, backgroundBlemish: { pass,
-        defectRatio, regions, worstExcess, noveltyPass } }</code
+        printBlemish: { pass, defectRatio, regions, worstMissing }, backgroundBlemish: { pass,
+        defectRatio, regions, worstExcess, noveltyPass }, toneBlemish: { enabled, pass,
+        defectRatio, regions } }</code
       >
       (region coordinates in the working-resolution image, same size as the heat
       maps)
     </li>
     <li>
-      <code>msg.printHeatmap</code> / <code>msg.backgroundHeatmap</code> — JPEG (or PNG / raw, per <i>Image format</i>)
+      <code>msg.printHeatmap</code> / <code>msg.backgroundHeatmap</code> / <code>msg.toneHeatmap</code> — JPEG (or PNG / raw, per <i>Image format</i>)
       <code>Buffer</code> overlays (only if the matching
       <i>Output heat maps</i> checkbox is on)
     </li>
@@ -896,8 +932,11 @@
       failThreshold: { value: 0.3, validate: RED.validators.number(true) },
       failRatio: { value: 0.002, validate: RED.validators.number(true) },
       printMissingFraction: { value: 0.5, validate: RED.validators.number(true) },
+      toneThreshold: { value: 0.3, validate: RED.validators.number(true) },
+      toneMargin: { value: 3, validate: RED.validators.number(true) },
       outputPrintHeatmap: { value: true },
       outputBackgroundHeatmap: { value: true },
+      outputToneHeatmap: { value: true },
       heatmapFormat: { value: "jpg" },
       heatmapQuality: { value: 85, validate: RED.validators.number(true) },
       debugStages: { value: false },

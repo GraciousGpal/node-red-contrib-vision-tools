@@ -106,6 +106,31 @@ test("a region inside the padded box is a detection, one outside it is not", () 
 	assert.strictEqual(outside.hit, null);
 });
 
+test("a tone region on the defect is a detection in either channel", () => {
+	const caseDef = {
+		id: "mark-smudge-medium-0001",
+		family: "mark",
+		defects: [{ type: "mark", variant: "smudge", severity: "medium", channel: "background", bbox: { x: 60, y: 60, w: 20, h: 20 } }],
+		expected: { pass: false, channels: ["background"] },
+	};
+	const result = {
+		pass: false,
+		position: { pass: true },
+		printBlemish: { pass: true, defectRatio: 0, regions: [] },
+		backgroundBlemish: { pass: true, defectRatio: 0, regions: [] },
+		// CTX halves golden px into working px: the box is at 30,30
+		toneBlemish: { enabled: true, pass: false, defectRatio: 0.001, regions: [region(30, 30, 8, 8)] },
+	};
+	const r = score.classifyCase(caseDef, result, CTX);
+	assert.strictEqual(r.verdict, "detected");
+	assert.strictEqual(r.hit.channel, "tone");
+	assert.deepStrictEqual(r.failedParts, ["tone"]);
+	assert.strictEqual(r.toneRegions, 1);
+	// and a tone region elsewhere is still the wrong place
+	const elsewhere = { ...result, toneBlemish: { ...result.toneBlemish, regions: [region(200, 200, 8, 8)] } };
+	assert.strictEqual(score.classifyCase(caseDef, elsewhere, CTX).verdict, "wrong-place");
+});
+
 test("a fail with the region in the wrong channel is wrong-place, not detected", () => {
 	const r = score.classifyCase(
 		defectCase("mark-wrongchan"),

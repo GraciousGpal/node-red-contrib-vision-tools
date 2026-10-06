@@ -231,7 +231,12 @@ part fails if the worst block density reaches `failThreshold` **or** the
 overall defect ratio reaches `failRatio` **or**, on the print channel
 only, some block lost at least `printMissingFraction` of the ink the
 golden has in that block - the gate that sees a dropped word of thin
-type, which is a tenth of its blocks by area and never fills one.
+type, which is a tenth of its blocks by area and never fills one. A third
+check, tone, runs on the aligned grey rather than on the mask: each pixel
+against the paper and ink levels of its own neighbourhood, as a fraction
+of the span between them, through the same block stage - the only check
+that can see a smudge, a ghost or faded print, none of which crosses the
+ink threshold.
 
 This block stage sets a **floor on detectable defect size**, and it is
 easy to mistake for a diff problem: a stroke one working-pixel wide
