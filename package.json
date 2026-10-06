@@ -45,7 +45,10 @@
     }
   },
   "scripts": {
-    "test": "node --test"
+    "test": "node --test",
+    "test:count": "bash scripts/readme-test-count.sh",
+    "dev:push": "bash scripts/dev-push.sh",
+    "deploy:vendor": "bash scripts/vendor-deploy.sh"
   },
   "engines": {
     "node": ">=18"

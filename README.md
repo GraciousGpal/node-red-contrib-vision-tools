@@ -1317,7 +1317,7 @@ nothing is found at all, one message with `msg.text = null` and
 
 ## Tests
 
-`npm test` (Node 18+, no test framework needed — `node --test`), 467
+`npm test` (Node 18+, no test framework needed — `node --test`), 532
 tests. Fixtures are generated with `sharp` rather than read from
 `data/sample_images`, so the suite runs anywhere; the real QC photos are
 gitignored. Coverage spans the lib pipeline (`compare`, `align`, `warp`,
@@ -1362,6 +1362,27 @@ Several suites assert something other than a value:
 up by `node --test`. Pass `--pin mx,my` when comparing two versions:
 without it each version pins to the magnification it recovered itself, and
 the two are then not solving the same problem.
+
+## Development scripts
+
+`scripts/` is not published (`package.json` `files` is a whitelist) and
+holds the three chores that otherwise get retyped:
+
+- `npm run dev:push [-- files...]` copies changed package files into the
+  local Node-RED container built from `../NodeRed-Test`
+  (`nodered-test-node-red-1`), restarts it, waits for the admin API, and
+  prints the module's load status and any runtime errors. With no
+  arguments it pushes every modified or untracked file that npm would
+  publish; `--no-restart` and `--dry-run` do what they say.
+- `npm run deploy:vendor [-- --build]` packs this checkout into
+  `../NodeRed-Test/vendor/vision-tools-<version>-<sha>.tgz`, repoints that
+  project's `package.json` at it, refreshes its lockfile, rewrites the
+  Dockerfile comment above its `COPY vendor/` line to name the commit and
+  list what it carries past the last tag, and with `--build` rebuilds and
+  restarts the image. That vendored install is a
+  stop-gap until the version is on npm.
+- `npm run test:count` runs the suite and rewrites the test count quoted
+  under [Tests](#tests); it exits non-zero when anything fails.
 
 ## Licence
 
