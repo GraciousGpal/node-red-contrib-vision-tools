@@ -474,6 +474,35 @@
     >
   </div>
   <div class="form-row">
+    <label for="node-input-speckThreshold"><i class="fa fa-braille"></i> Specks</label>
+    <input
+      type="number"
+      id="node-input-speckThreshold"
+      min="0"
+      max="1"
+      step="0.05"
+      style="width:70px;"
+    />
+    <label for="node-input-speckMinArea" style="width:auto; margin-left:16px; margin-right:4px;"
+      >min px</label
+    >
+    <input type="number" id="node-input-speckMinArea" min="1" max="100000" style="width:60px;" />
+    <label for="node-input-speckMaxCount" style="width:auto; margin-left:16px; margin-right:4px;"
+      >fail at</label
+    >
+    <input type="number" id="node-input-speckMaxCount" min="0" max="1000000" style="width:70px;" />
+    <label for="node-input-speckMaxArea" style="width:auto; margin-left:16px; margin-right:4px;"
+      >or one of</label
+    >
+    <input type="number" id="node-input-speckMaxArea" min="0" max="10000000" style="width:70px;" />
+    <span class="node-input-hint" style="margin-left:10px; color:#999;"
+      >a fourth check for dust and pinholes: specks are connected runs of
+      pixels past this tone level, at least min px each; the part fails
+      at that many specks, or at one speck of that many px. 0 = off / no
+      gate</span
+    >
+  </div>
+  <div class="form-row">
     <label for="node-input-scaleFilePath"
       ><i class="fa fa-crosshairs"></i> Scale file path</label
     >
@@ -632,6 +661,12 @@
       style="display:inline-block; width:auto; vertical-align:middle; margin-left:16px;"
     />
     <span style="margin-left:4px;">tone</span>
+    <input
+      type="checkbox"
+      id="node-input-outputSpeckHeatmap"
+      style="display:inline-block; width:auto; vertical-align:middle; margin-left:16px;"
+    />
+    <span style="margin-left:4px;">specks</span>
   </div>
   <div class="form-row">
     <label for="node-input-heatmapFormat"
@@ -764,13 +799,14 @@
         }, localAlign: { tiles, localised, meanPx, medianPx, maxPx },
         printBlemish: { pass, defectRatio, regions, worstMissing }, backgroundBlemish: { pass,
         defectRatio, regions, worstExcess, noveltyPass }, toneBlemish: { enabled, pass,
-        defectRatio, regions } }</code
+        defectRatio, regions }, speckBlemish: { enabled, pass, count, area, largest,
+        regions } }</code
       >
       (region coordinates in the working-resolution image, same size as the heat
       maps)
     </li>
     <li>
-      <code>msg.printHeatmap</code> / <code>msg.backgroundHeatmap</code> / <code>msg.toneHeatmap</code> — JPEG (or PNG / raw, per <i>Image format</i>)
+      <code>msg.printHeatmap</code> / <code>msg.backgroundHeatmap</code> / <code>msg.toneHeatmap</code> / <code>msg.speckHeatmap</code> — JPEG (or PNG / raw, per <i>Image format</i>)
       <code>Buffer</code> overlays (only if the matching
       <i>Output heat maps</i> checkbox is on)
     </li>
@@ -934,9 +970,14 @@
       printMissingFraction: { value: 0.5, validate: RED.validators.number(true) },
       toneThreshold: { value: 0.3, validate: RED.validators.number(true) },
       toneMargin: { value: 3, validate: RED.validators.number(true) },
+      speckThreshold: { value: 0.3, validate: RED.validators.number(true) },
+      speckMinArea: { value: 2, validate: RED.validators.number(true) },
+      speckMaxCount: { value: 8, validate: RED.validators.number(true) },
+      speckMaxArea: { value: 48, validate: RED.validators.number(true) },
       outputPrintHeatmap: { value: true },
       outputBackgroundHeatmap: { value: true },
       outputToneHeatmap: { value: true },
+      outputSpeckHeatmap: { value: true },
       heatmapFormat: { value: "jpg" },
       heatmapQuality: { value: 85, validate: RED.validators.number(true) },
       debugStages: { value: false },

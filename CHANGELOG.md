@@ -52,6 +52,24 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   no new clean false fails and no wrong-place verdicts; `mark/smudge`
   25% → 100%, `misprint/faded` 0% → 100%, `overprint/ghost` 50% → 100%.
   ~43 ms a frame at `workingSize` 2100.
+- **A speck check on `golden-compare`, for dust and pinholes.** A medium
+  dust case is 600 specks of one to three px across the label: 4000
+  changed pixels, none dense enough for a block to reach
+  `blockThreshold`, and after the camera's blur not enough at ink level
+  for `failRatio` - the third miss mechanism in `bench/synth-findings.md`.
+  `speckThreshold` (0.3; 0 = off) takes the tone deviation as pixel-level
+  connected components of at least `speckMinArea` (2) px and fails the
+  part at `speckMaxCount` (8) of them, or at one speck of `speckMaxArea`
+  (48) px. `result.speckBlemish` `{ count, area, largest, regions }`,
+  `msg.speckHeatmap` (`outputSpeckHeatmap`), a `speckHeatmap` stage,
+  `specks` among the status line's failed parts. On the pinned synthetic
+  set recall goes from 60.3% to 82.5% at the package defaults and from
+  74.6% to 85.7% at the example flow's `failThreshold` 0.1, with the
+  same two clean false fails and no wrong-place verdicts; `random/dust`
+  25% → 100%, `random/void-spots` 25% → 100%, `scratch/dark` 75% →
+  100%. ~10 ms a frame at `workingSize` 2100. Lowering the dilation
+  tolerances instead was measured and rejected: `printTolerance` 0
+  reaches 82.5% by failing 23 of 24 clean frames.
 - **A fixed rig in the synthetic set.** `synthetic-defects` and
   `bench/synth/generate.js` now shoot the whole set at one magnification
   and one stretch by default (`Fixed rig` / `--rig`), as a camera on a

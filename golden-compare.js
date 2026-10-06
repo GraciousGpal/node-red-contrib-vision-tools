@@ -120,9 +120,18 @@ module.exports = (RED) => {
 		// px either side of an ink edge the tone check leaves out: where
 		// blur and sub-pixel registration put legitimate grey
 		toneMargin: { value: 3, int: [0, 50] },
+		// The speck check: connected components of the same tone deviation,
+		// at this level, counted. Dust and pinholes are one to three px each
+		// and never make a block dense; what they have is number. 0 = off.
+		speckThreshold: { value: 0.3, float: [0, 1] },
+		speckMinArea: { value: 2, int: [1, 100000] },
+		// fail on this many specks, or on one speck this big (px); 0 = no gate
+		speckMaxCount: { value: 8, int: [0, 1000000] },
+		speckMaxArea: { value: 48, int: [0, 10000000] },
 		outputPrintHeatmap: { value: true },
 		outputBackgroundHeatmap: { value: true },
 		outputToneHeatmap: { value: true },
+		outputSpeckHeatmap: { value: true },
 		// JPEG unless asked for PNG: a heat map is a picture for a person,
 		// and PNG was ~150ms per image at working size (see encodeImage in
 		// lib/compare.js). Also applies to msg.stages.
@@ -514,6 +523,13 @@ module.exports = (RED) => {
 			description:
 				"Pixels past the tone threshold, per block, the same way as the other two: a smudge, a ghosted impression or faded print that the ink threshold never sees.",
 		},
+		{
+			key: "speckHeatmap",
+			group: "verdict",
+			title: "Specks",
+			description:
+				"Every block holding a speck - a connected run of pixels past the speck threshold, at least the minimum area - redder with more speck in it. Dust and pinholes are a few pixels each and never make a block dense; the check counts them instead.",
+		},
 	];
 
 	/** A rendered image, whichever of the three formats it is in, as a
@@ -612,6 +628,7 @@ module.exports = (RED) => {
 				const wantPrintHeatmap = cfg.outputPrintHeatmap;
 				const wantBackgroundHeatmap = cfg.outputBackgroundHeatmap;
 				const wantToneHeatmap = cfg.outputToneHeatmap;
+				const wantSpeckHeatmap = cfg.outputSpeckHeatmap;
 				if (cfg.previewEnabled) {
 					cfg.debugStages = true;
 					cfg.outputPrintHeatmap = true;
@@ -1076,6 +1093,11 @@ module.exports = (RED) => {
 					"toneHeatmap",
 					wantToneHeatmap && result.toneBlemish ? result.toneBlemish.heatmap : null,
 				);
+				setOrDelete(
+					msg,
+					"speckHeatmap",
+					wantSpeckHeatmap && result.speckBlemish ? result.speckBlemish.heatmap : null,
+				);
 				setOrDelete(msg, "stages", wantStages ? result.stages : null);
 
 				send(msg);
@@ -1093,6 +1115,7 @@ module.exports = (RED) => {
 				if (!result.printBlemish.pass) failedParts.push("print");
 				if (!result.backgroundBlemish.pass) failedParts.push("background");
 				if (result.toneBlemish && !result.toneBlemish.pass) failedParts.push("tone");
+				if (result.speckBlemish && !result.speckBlemish.pass) failedParts.push("specks");
 				const verdictText =
 					(result.match.labelMissing
 						? `label missing? · ${Math.round(result.match.coverage * 100)}% of ink`
@@ -1197,6 +1220,9 @@ module.exports = (RED) => {
 		if (result.toneBlemish && result.toneBlemish.heatmap) {
 			images.toneHeatmap = result.toneBlemish.heatmap;
 		}
+		if (result.speckBlemish && result.speckBlemish.heatmap) {
+			images.speckHeatmap = result.speckBlemish.heatmap;
+		}
 		const entry = {
 			receivedAt: Date.now(),
 			filename: typeof msg.filename === "string" ? msg.filename : null,
@@ -1215,7 +1241,9 @@ module.exports = (RED) => {
 				? images.backgroundHeatmap
 				: result.toneBlemish && !result.toneBlemish.pass && images.toneHeatmap
 					? images.toneHeatmap
-					: images.printHeatmap || images.targetGrayAligned;
+					: result.speckBlemish && !result.speckBlemish.pass && images.speckHeatmap
+						? images.speckHeatmap
+						: images.printHeatmap || images.targetGrayAligned;
 		if (!source) return;
 		const thumb = await imagePipeline(source)
 			.resize({ width: cfg.previewWidth, withoutEnlargement: true })

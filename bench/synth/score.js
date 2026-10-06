@@ -92,7 +92,7 @@ function findOverlap(regions, box) {
 
 function largestRegion(result) {
 	let best = null;
-	for (const channel of ["print", "background", "tone"]) {
+	for (const channel of ["print", "background", "tone", "speck"]) {
 		for (const r of (result[`${channel}Blemish`] || {}).regions || []) {
 			if (!best || regionArea(r) > regionArea(best)) best = { channel, ...r };
 		}
@@ -108,6 +108,7 @@ function failedParts(result) {
 		parts.push("background");
 	}
 	if (result.toneBlemish && result.toneBlemish.pass === false) parts.push("tone");
+	if (result.speckBlemish && result.speckBlemish.pass === false) parts.push("specks");
 	return parts;
 }
 
@@ -175,6 +176,7 @@ function classifyCase(caseDef, result, ctx) {
 		backgroundRegions: regionsOf("background").length,
 		toneRegions: regionsOf("tone").length,
 		toneRatio: result.toneBlemish ? result.toneBlemish.defectRatio : null,
+		speckCount: result.speckBlemish ? result.speckBlemish.count : null,
 		defectPixels: located.reduce(
 			(n, d) => n + d.printPixels + d.backgroundPixels,
 			0,
@@ -212,6 +214,13 @@ function classifyCase(caseDef, result, ctx) {
 		const toneHit = findOverlap(regionsOf("tone"), d.box);
 		if (toneHit) {
 			record.hit = { channel: "tone", defect: d.type, ...toneHit };
+			record.verdict = "detected";
+			return record;
+		}
+		// specks likewise: dust is extra ink, pinholes are missing ink
+		const speckHit = findOverlap(regionsOf("speck"), d.box);
+		if (speckHit) {
+			record.hit = { channel: "speck", defect: d.type, ...speckHit };
 			record.verdict = "detected";
 			return record;
 		}
@@ -332,6 +341,7 @@ function aggregate(records) {
 				printRegions: r.printRegions,
 				backgroundRegions: r.backgroundRegions,
 				toneRegions: r.toneRegions,
+				speckCount: r.speckCount,
 				largestRegion: r.largestRegion,
 			})),
 		timings: {

@@ -236,7 +236,10 @@ check, tone, runs on the aligned grey rather than on the mask: each pixel
 against the paper and ink levels of its own neighbourhood, as a fraction
 of the span between them, through the same block stage - the only check
 that can see a smudge, a ghost or faded print, none of which crosses the
-ink threshold.
+ink threshold. A fourth, specks, takes the same deviation as pixel-level
+connected components and counts them, because dust and pinholes are a few
+px each and never make a block dense: the part fails on their number, or
+on one speck's size.
 
 This block stage sets a **floor on detectable defect size**, and it is
 easy to mistake for a diff problem: a stroke one working-pixel wide

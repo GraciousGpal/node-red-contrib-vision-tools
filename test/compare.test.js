@@ -75,6 +75,7 @@ function labelSvg(
 		localShift = null,
 		hairlines = null,
 		barFill = "#111",
+		extraRects = null,
 	} = {},
 ) {
 	const bars = [];
@@ -104,6 +105,12 @@ function labelSvg(
 	// a patch of "body type": 2px rules every 20px, so a block over it is
 	// about a tenth ink - too thin to reach blockThreshold by area if the
 	// whole patch goes missing
+	// any number of small rectangles: specks on paper, holes in a bar
+	const extras = extraRects
+		? extraRects
+				.map((r) => `<rect x="${r.x}" y="${r.y}" width="${r.w}" height="${r.h}" fill="${r.fill || "#000"}"/>`)
+				.join("")
+		: "";
 	const rules = hairlines
 		? Array.from({ length: Math.floor(hairlines.h / 20) }, (_, i) =>
 				`<rect x="${hairlines.x}" y="${hairlines.y + i * 20}" width="${hairlines.w}" height="2" fill="#000"/>`,
@@ -117,6 +124,7 @@ function labelSvg(
 			panel +
 			blob +
 			rules +
+			extras +
 			`</svg>`,
 	);
 }
@@ -337,6 +345,69 @@ test("the tone check leaves a faint stain and an identical frame alone", async (
 	const stain = await compareFrame(faint, golden, cfg(TONE));
 	assert.strictEqual(stain.toneBlemish.pass, true, JSON.stringify(stain.toneBlemish.regions));
 	assert.strictEqual(stain.pass, true);
+});
+
+// The third miss mechanism in bench/synth-findings.md: dust and pinholes
+// are a few pixels each. No block ever gets dense, and the total never
+// reaches the ratio, so the block checks pass them; counted as specks
+// they are obvious.
+const SPECKS = { toneThreshold: 0.3, toneMargin: 3, speckThreshold: 0.3, speckMinArea: 2, speckMaxCount: 8, speckMaxArea: 48 };
+
+test("dust on the paper fails the speck check by count where every block check passes", async () => {
+	const goldenBuf = await png(labelSvg(1200, 1600));
+	// 15 dark 4x4 specks down the clear strip right of the bars
+	const dust = Array.from({ length: 15 }, (_, i) => ({ x: 960 + (i % 3) * 40, y: 220 + i * 80, w: 4, h: 4, fill: "#333" }));
+	const targetBuf = await png(labelSvg(1200, 1600, { extraRects: dust }));
+	const golden = await prepareGolden(goldenBuf, cfg());
+
+	const off = await compareFrame(targetBuf, golden, cfg({ ...SPECKS, speckThreshold: 0 }));
+	assert.strictEqual(off.pass, true, `the block checks alone pass 15 specks: ${JSON.stringify(off.backgroundBlemish.regions)}`);
+	assert.strictEqual(off.speckBlemish.enabled, false);
+
+	const on = await compareFrame(targetBuf, golden, cfg(SPECKS));
+	assert.strictEqual(on.speckBlemish.enabled, true);
+	assert.ok(on.speckBlemish.count >= 12 && on.speckBlemish.count <= 15, `counted ${on.speckBlemish.count} specks`);
+	assert.strictEqual(on.speckBlemish.pass, false);
+	assert.strictEqual(on.pass, false);
+	assert.strictEqual(on.printBlemish.pass, true);
+	assert.strictEqual(on.backgroundBlemish.pass, true);
+	assert.strictEqual(on.toneBlemish.pass, true);
+	// each region is one speck, in working px, on the strip they were drawn on
+	const sx = golden.width / 1200;
+	for (const r of on.speckBlemish.regions) {
+		assert.ok(r.x >= 950 * sx && r.x <= 1050 * sx, `speck at x ${r.x}`);
+		assert.ok(r.area >= 2);
+	}
+	assert.ok(on.timings.speckMs >= 0);
+});
+
+test("pinholes inside a bar fail the speck check by count", async () => {
+	const goldenBuf = await png(labelSvg(1200, 1600));
+	const barTop = Math.round(1600 * BAR_Y[3]);
+	const holes = Array.from({ length: 10 }, (_, i) => ({ x: 300 + i * 50, y: barTop + 15, w: 4, h: 4, fill: "#fff" }));
+	const targetBuf = await png(labelSvg(1200, 1600, { extraRects: holes }));
+	const golden = await prepareGolden(goldenBuf, cfg());
+	const off = await compareFrame(targetBuf, golden, cfg({ ...SPECKS, speckThreshold: 0 }));
+	assert.strictEqual(off.printBlemish.pass, true, "4px holes are closed by the print tolerance");
+	const on = await compareFrame(targetBuf, golden, cfg(SPECKS));
+	assert.ok(on.speckBlemish.count >= 8, `counted ${on.speckBlemish.count} pinholes`);
+	assert.strictEqual(on.speckBlemish.pass, false);
+});
+
+test("one spatter fails the speck check on its size, and a clean frame has no specks", async () => {
+	const goldenBuf = await png(labelSvg(1200, 1600));
+	const golden = await prepareGolden(goldenBuf, cfg());
+	const spatter = await png(labelSvg(1200, 1600, { extraRects: [{ x: 980, y: 700, w: 14, h: 14, fill: "#222" }] }));
+	const r = await compareFrame(spatter, golden, cfg(SPECKS));
+	assert.strictEqual(r.speckBlemish.count, 1, JSON.stringify(r.speckBlemish.regions));
+	assert.ok(r.speckBlemish.largest >= 48, `largest ${r.speckBlemish.largest}`);
+	assert.strictEqual(r.speckBlemish.pass, false);
+	// with no size gate the same spatter is one speck under the count
+	const noArea = await compareFrame(spatter, golden, cfg({ ...SPECKS, speckMaxArea: 0 }));
+	assert.strictEqual(noArea.speckBlemish.pass, true);
+	const same = await compareFrame(goldenBuf, golden, cfg(SPECKS));
+	assert.strictEqual(same.speckBlemish.count, 0);
+	assert.strictEqual(same.pass, true);
 });
 
 // The whole point of searching magnification: a golden that is rendered

@@ -131,6 +131,28 @@ test("a tone region on the defect is a detection in either channel", () => {
 	assert.strictEqual(score.classifyCase(caseDef, elsewhere, CTX).verdict, "wrong-place");
 });
 
+test("a speck region on the defect is a detection too", () => {
+	const caseDef = {
+		id: "random-dust-small-0001",
+		family: "random",
+		defects: [{ type: "random", variant: "dust", severity: "small", channel: "background", bbox: { x: 0, y: 0, w: 400, h: 400 } }],
+		expected: { pass: false, channels: ["background"] },
+	};
+	const result = {
+		pass: false,
+		position: { pass: true },
+		printBlemish: { pass: true, defectRatio: 0, regions: [] },
+		backgroundBlemish: { pass: true, defectRatio: 0, regions: [] },
+		toneBlemish: { enabled: true, pass: true, defectRatio: 0, regions: [] },
+		speckBlemish: { enabled: true, pass: false, count: 12, area: 60, largest: 9, regions: [region(100, 100, 3, 3)] },
+	};
+	const r = score.classifyCase(caseDef, result, CTX);
+	assert.strictEqual(r.verdict, "detected");
+	assert.strictEqual(r.hit.channel, "speck");
+	assert.deepStrictEqual(r.failedParts, ["specks"]);
+	assert.strictEqual(r.speckCount, 12);
+});
+
 test("a fail with the region in the wrong channel is wrong-place, not detected", () => {
 	const r = score.classifyCase(
 		defectCase("mark-wrongchan"),

@@ -118,6 +118,7 @@ const EXPECTED_ORDER = [
 	"backgroundHeatmap",
 	"toneDeviation",
 	"toneHeatmap",
+	"speckHeatmap",
 ];
 
 test("with the preview off nothing is kept, published or served", async () => {

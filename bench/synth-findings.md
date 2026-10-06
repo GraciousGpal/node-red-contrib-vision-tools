@@ -248,6 +248,57 @@ sub-4px structure that the tolerance dilation closes; the next
 mechanism to address. On small-and-up alone the set is at 39 of 46,
 84.8%.
 
+## Update, 2026-10-06, later still: specks, and the tolerances ruled out
+
+First the obvious route, measured: could the dilation tolerances just
+come down? Same rig set, pinned, tone 0.3, `failThreshold` 0.1:
+
+| setting | recall | clean false fails |
+| --- | ---: | ---: |
+| `printTolerance` 2 (default) | 74.6% | 2 / 24 |
+| `printTolerance` 1 | 77.8% | 3 / 24 |
+| `printTolerance` 0 | 82.5% | 23 / 24 |
+| `backgroundTolerance` 0 | 76.2% | 24 / 24 |
+
+No. Below a pixel of tolerance the registration residue along every
+stroke fails every clean frame, which is what the tolerance was for.
+
+So the third mechanism - anything under ~4 px closed by the dilation -
+got its own check. Dust and pinholes are one to three px each, 40 to
+2400 of them; no block ever gets dense and, after the blur, not enough
+of them are at ink level for the ratio. What they have is number.
+`speckThreshold` takes the tone deviation (so the same edge band and
+border are out) as pixel-level connected components of at least
+`speckMinArea` px and fails the part at `speckMaxCount` of them, or on
+one speck of `speckMaxArea` px - a single spatter no block gate sees.
+
+| configuration | recall | clean false fails |
+| --- | ---: | ---: |
+| `failThreshold` 0.1, specks off | 74.6% | 2 / 24 |
+| `failThreshold` 0.1, specks 0.3, count 8, area 48 (the example flow) | 85.7% | 2 / 24 |
+| …count 4 | 87.3% | 2 / 24 |
+| …count 16 | 84.1% | 2 / 24 |
+| …threshold 0.25 | 85.7% | 3 / 24 |
+| …threshold 0.4 | 85.7% | 2 / 24 |
+| package defaults (`failThreshold` 0.3), specks on | 82.5% | 2 / 24 |
+
+No wrong-place verdicts anywhere; the two false fails are the same two
+print-channel frames as every run before. `random/dust` 25% → 100%,
+`random/void-spots` 25% → 100%, `scratch/dark` 75% → 100%. Count 4
+scores higher here but is a bet on how clean a real line's paper is;
+the default is 8. The check costs ~10 ms a frame at `workingSize`
+2100.
+
+What is left at the example flow's settings, 9 of 63: six `tiny`
+defects, and `scratch/light` at every size. A light scratch removes ink
+only where it crosses type - 10 to 220 changed pixels in total, as 2-4
+px gaps in 1-3 px strokes - and every gap sits inside the edge band
+both grey checks leave out and inside the dilation the print check
+applies. It is the last of the five mechanisms, and the only one left
+that is not a resolution question: it needs a line detector across the
+strokes, which nothing here is yet. On small-and-up alone the set is
+at 43 of 46, 93.5%.
+
 ## How to repeat
 
 ```
