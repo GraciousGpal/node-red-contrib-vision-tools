@@ -6,6 +6,47 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Added
+
+- **`synthetic-defects` previews itself.** The golden and then every frame
+  go under the node on the canvas as they are sent, each defect's measured
+  ground-truth box drawn on the frame through the capture's own
+  magnification, rotation and placement (`frameBox` in
+  `lib/synth/capture.js`), coloured by the channel it landed in, with a
+  caption saying the case and what `golden-compare` is expected to answer.
+  On by default - the node exists to be looked at; `Preview width`,
+  `msg.previewEnabled` and `msg.previewWidth` as on the other nodes.
+- **`synthetic-defects` takes a golden path.** A `Golden` field on the
+  node (`msg.goldenPath` per message) names the artwork to paint defects
+  into when `msg.payload` is empty, so a real label is the golden with a
+  plain inject rather than a function node; `msg.synth.source` on the
+  golden message says `"file"`. The synthetic label remains the fallback.
+
+- **`printMissingFraction` on `golden-compare`: the print check judged
+  against the golden's own ink, block by block.** A block that lost at
+  least this fraction of the ink the golden has there fails, however small
+  a share of the block's area that ink was. Body type is 10-15% ink, so a
+  dropped word never reached `failThreshold` by area and never reached
+  `failRatio` - the first of the five miss mechanisms in
+  `bench/synth-findings.md`. Default 0.5; 0 is the old behaviour. Blocks
+  flagged this way join the regions and the heat map, and
+  `result.printBlemish.worstMissing` reports the worst block. On the
+  pinned synthetic set it takes recall from 36.5% to 50.8% (61.9% with
+  `failThreshold` 0.1) for 2 clean false fails in 24, both thin strokes
+  at the gate's floor; `misprint/dropout` goes 25% → 100%,
+  `misprint/streak` 0% → 75%, `overprint/bleed` 33% → 100%.
+- **A fixed rig in the synthetic set.** `synthetic-defects` and
+  `bench/synth/generate.js` now shoot the whole set at one magnification
+  and one stretch by default (`Fixed rig` / `--rig`), as a camera on a
+  stand gives, and `bench/synth/run.js` pins to what the search finds on
+  one clean frame (`--train`), as `trainTransform` does on a line. The
+  earlier benchmark re-rolled magnification per frame, so the alignment
+  search's misses were booked as the blemish checks' false fails: pinned,
+  clean false fails go from 7 of 24 to 0 on the same frames. The example
+  flow trains `golden-compare` on the first frame of each run and pins
+  the rest, and runs `failThreshold` 0.1, which the pinned sweep found
+  free on the set (the package default stays 0.3).
+
 ### Fixed
 
 - **The nuisance map no longer gates the print channel.** The map is

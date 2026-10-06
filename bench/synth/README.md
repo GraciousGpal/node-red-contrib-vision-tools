@@ -25,6 +25,7 @@ node bench/synth/generate.js --out ./set --width 3000 --height 4200
 | `--per-variant` | `3` | frames per (family, variant, severity) |
 | `--preset` | `typical` | `clean-rig`, `typical` or `harsh` — see `lib/synth/capture.js` |
 | `--width` / `--height` | `1500` / `2100` | synthetic golden size |
+| `--rig` | `true` | one magnification and stretch for the whole set, drawn once, as a camera on a stand gives; angle and placement still vary per frame. `--rig false` draws them per frame, which measures the alignment search rather than the inspection. The manifest records the rig's `mx`/`my` |
 
 The set is every (family, variant, severity) `--per-variant` times, plus a
 `clean` family — no defect at all under the same capture variation, at no
@@ -61,6 +62,7 @@ with it.
 | `--json path` / `--md path` | report paths, default inside the set |
 | `--sweep key=v1,v2,...` | run the whole set once per value of one setting and add a table of recall and false-fail rate per value; the report body is the last value's run |
 | `--verbose` | one line per case as it runs |
+| `--train` | pin magnification and stretch to what the full search finds on one clean frame of the run preset, as `golden-compare`'s `trainTransform` does on a line. Default: on for a rig set, off for a free one; `--train false` / `--train true` override. The report says what it pinned to |
 
 The rules, from `score.js`, which is pure and tested without images:
 

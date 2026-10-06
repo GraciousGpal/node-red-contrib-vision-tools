@@ -88,6 +88,7 @@ function defaultCfg() {
 		blockThreshold: 0.15,
 		failThreshold: 0.3,
 		failRatio: 0.002,
+		printMissingFraction: 0.5,
 		outputPrintHeatmap: false,
 		outputBackgroundHeatmap: false,
 		debugStages: false,
@@ -183,6 +184,35 @@ async function runSet(opts) {
 	const goldenPath = path.resolve(setDir, manifest.golden.path);
 	const golden = await prepareGolden(fs.readFileSync(goldenPath), cfg);
 
+	// A rig set (manifest.rig) was shot at one magnification and stretch,
+	// as a camera on a stand is; the node measures those once with
+	// trainTransform and pins every later frame to them. Do the same
+	// here: solve one clean frame of the run preset with the full search
+	// and pin the set to what it found. Otherwise the search re-derives a
+	// constant per frame, and its misses are scored as the blemish
+	// checks' false fails. On by default for a rig set, --train false to
+	// measure the unpinned search, --train true to pin a free set anyway.
+	const train = opts.train == null ? !!manifest.rig : !!opts.train;
+	let trained = null;
+	if (train) {
+		const frame =
+			manifest.cases.find((c) => c.id.startsWith(`clean-${manifest.preset}-`)) ||
+			manifest.cases.find((c) => c.family === "clean") ||
+			manifest.cases[0];
+		const r = await compareFrame(
+			fs.readFileSync(path.resolve(setDir, frame.frame)),
+			golden,
+			{ ...cfg },
+		);
+		cfg.pinnedScale = { mx: r.transform.scaleX, my: r.transform.scaleY };
+		trained = {
+			frame: frame.id,
+			mx: r.transform.scaleX,
+			my: r.transform.scaleY,
+			score: r.transform.score,
+		};
+	}
+
 	// The manifest states the golden's native size; prepareGolden measures
 	// it. Trust the measurement for the ratio and say so if they differ,
 	// because a silent mismatch would scale every ground-truth box wrongly
@@ -243,6 +273,8 @@ async function runSet(opts) {
 				scaleY: ctx.scaleY,
 			},
 			cfg,
+			rig: manifest.rig || null,
+			trained,
 			node: process.version,
 			ranAt: new Date().toISOString(),
 			warnings,
@@ -358,7 +390,14 @@ function buildMarkdown(report, sweep) {
 			`${report.meta.golden.nativeHeight} native -> ${report.meta.golden.workingWidth}x` +
 			`${report.meta.golden.workingHeight} working, \`workingSize\` ` +
 			`${report.meta.cfg.workingSize}, \`workers\` ${report.meta.cfg.workers}, ` +
-			`node ${report.meta.node}, ${report.meta.ranAt}.`,
+			`node ${report.meta.node}, ${report.meta.ranAt}.` +
+			(report.meta.rig
+				? ` Rig set: every frame at mx ${report.meta.rig.mx}, my ${report.meta.rig.my}.`
+				: " Free geometry: each frame drew its own magnification.") +
+			(report.meta.trained
+				? ` Pinned to mx ${num(report.meta.trained.mx, 4)}, my ${num(report.meta.trained.my, 4)} ` +
+					`trained on \`${report.meta.trained.frame}\`.`
+				: " Unpinned: the search solved magnification per frame."),
 	);
 	if (report.meta.warnings.length) {
 		out.push("");
@@ -524,6 +563,8 @@ async function main() {
 		cfg: cfgOverrides,
 		filter: args.flags.filter === true ? null : args.flags.filter,
 		limit: Number(args.flags.limit) || 0,
+		// null = "pin if the set is a rig set", the default
+		train: args.flags.train == null ? null : args.flags.train !== "false",
 		onCase: verbose
 			? (r, i, n) =>
 					console.log(

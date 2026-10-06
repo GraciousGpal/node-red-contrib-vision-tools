@@ -10,16 +10,33 @@
  * family and severity looks like and what the node says about it, without
  * a scratch directory, a CLI, or a customer's parts.
  *
- * Input (msg.payload): the golden - Buffer / Uint8Array / ArrayBuffer, a
- * file path string, an object carrying data/buffer/path, or a raw
- * { data, width, height, channels } descriptor. Empty or absent draws the
- * synthetic label at the configured width/height.
+ * The golden, in order of precedence: msg.payload (Buffer / Uint8Array /
+ * ArrayBuffer, a file path string, an object carrying data/buffer/path, or
+ * a raw { data, width, height, channels } descriptor), else the node's
+ * configured golden path (msg.goldenPath overrides it), else the synthetic
+ * label drawn at the configured width/height. So a real label's artwork
+ * can be the golden without a function node: set the path once and inject
+ * an empty payload.
  * Optional per-message overrides: msg.seed, msg.perVariant, msg.preset,
- * msg.families, msg.severities, msg.intervalMs.
+ * msg.families, msg.severities, msg.intervalMs, msg.previewEnabled,
+ * msg.previewWidth, msg.goldenPath, msg.rig.
+ *
+ * Fixed rig (on by default): one magnification and stretch for the whole
+ * set, as a camera on a stand gives, so golden-compare's trained
+ * transform applies to it the way it does on a line. Off, every frame
+ * draws its own, which exercises the search rather than the inspection.
  *
  * Output 1: one message per frame - msg.payload (the frame bytes),
  * msg.golden (the golden as PNG), msg.goldenKey, msg.filename, msg.synth.
  * Output 2: one message, first, carrying the golden itself.
+ *
+ * Preview (on by default - this node exists to be looked at): the golden
+ * and then every frame go under the node on the flow canvas as they are
+ * sent, each defect's ground-truth box drawn on the frame as the
+ * parallelogram the capture transform made of it, captioned with the
+ * case and what golden-compare is expected to say. The box is mapped from
+ * golden space through capture's own params (lib/synth/capture.js
+ * frameBox), so it sits on the painted defect, not beside it.
  *
  * Frames are pulled from the async generator one at a time rather than
  * built up front: a default set is ~170 frames and ~300MB of PNG, and
@@ -40,6 +57,10 @@ const { resolveImage, isBytes, clampInt, pickMode } = require("./lib/nodeInput.j
 const { FAMILIES, SEVERITIES } = require("./lib/synth/defects.js");
 const { capturePresets } = require("./lib/synth/capture.js");
 const { planCases, makeCases, goldenRaster } = require("./lib/synth/cases.js");
+const { frameBox } = require("./lib/synth/capture.js");
+
+const PREVIEW_WIDTH = [80, 600];
+const PREVIEW_TOPIC = "synthetic-defects-preview";
 
 // The checkbox flags, every one on by default. Spelled out rather than
 // derived, because the editor has one checkbox per name and the two lists
@@ -67,6 +88,24 @@ module.exports = (RED) => {
 		return kept.length ? kept : fallback;
 	}
 
+	function asBoolean(value, fallback) {
+		if (value == null || value === "") return fallback;
+		return value === true || value === "true";
+	}
+
+	const canPublish = () => RED.comms && typeof RED.comms.publish === "function";
+
+	/** An encoded image as a base64 JPEG no wider than `width`. */
+	async function thumbnail(buffer, width) {
+		const jpeg = await sharp(buffer)
+			.resize({ width, withoutEnlargement: true })
+			.jpeg({ quality: 70 })
+			.toBuffer();
+		return jpeg.toString("base64");
+	}
+
+	const round1 = (v) => Math.round(v * 10) / 10;
+
 	function SyntheticDefectsNode(config) {
 		RED.nodes.createNode(this, config);
 		const node = this;
@@ -77,6 +116,8 @@ module.exports = (RED) => {
 		node.intervalMs = clampInt(config.intervalMs, 500, [0, 60000]);
 		node.width = clampInt(config.width, 1500, [64, 10000]);
 		node.height = clampInt(config.height, 2100, [64, 10000]);
+		node.goldenPath = String(config.goldenPath || "").trim();
+		node.rig = config.rig !== false;
 		// A node instance saved before a checkbox existed carries no property
 		// for it, so "nothing ticked" and "never configured" look the same
 		// here. Either way an empty restriction means "all of them" in
@@ -84,6 +125,10 @@ module.exports = (RED) => {
 		// which reads as a broken node rather than as a setting.
 		node.families = chosen(config, FAMILY_NAMES);
 		node.severities = chosen(config, SEVERITY_NAMES);
+		// On unless switched off: a node saved before the property existed
+		// carries nothing, and the whole point of this node is the look.
+		node.previewEnabled = config.previewEnabled !== false;
+		node.previewWidth = clampInt(config.previewWidth, 260, PREVIEW_WIDTH);
 
 		// One run at a time. A second input message while frames are still
 		// going out stops the first: someone re-injecting wants the new
@@ -138,6 +183,31 @@ module.exports = (RED) => {
 				const intervalMs = clampInt(msg.intervalMs, node.intervalMs, [0, 60000]);
 				const families = overrideList(msg.families, FAMILY_NAMES, node.families);
 				const severities = overrideList(msg.severities, SEVERITY_NAMES, node.severities);
+				const rig = asBoolean(msg.rig, node.rig);
+				const previewEnabled = asBoolean(msg.previewEnabled, node.previewEnabled);
+				const previewWidth = clampInt(msg.previewWidth, node.previewWidth, PREVIEW_WIDTH);
+				const preview = previewEnabled && canPublish();
+				if (!previewEnabled && canPublish()) {
+					RED.comms.publish(PREVIEW_TOPIC, { id: node.id, clear: true });
+				}
+				// A preview is a diagnostic: it never stops a frame, and a run
+				// that was cancelled while its thumbnail encoded says nothing.
+				async function publishPreview(buffer, fields) {
+					if (!preview) return;
+					try {
+						const image = await thumbnail(buffer, previewWidth);
+						if (!alive()) return;
+						RED.comms.publish(PREVIEW_TOPIC, {
+							id: node.id,
+							image,
+							mimeType: "jpeg",
+							previewWidth,
+							...fields,
+						});
+					} catch (previewError) {
+						node.warn(`synthetic-defects preview: ${previewError.message}`);
+					}
+				}
 
 				node.status({ fill: "blue", shape: "dot", text: "preparing golden…" });
 
@@ -153,20 +223,27 @@ module.exports = (RED) => {
 					p.width > 0 &&
 					p.height > 0;
 				const empty = p == null || p === "";
+				const goldenPath =
+					typeof msg.goldenPath === "string" && msg.goldenPath.trim()
+						? msg.goldenPath.trim()
+						: node.goldenPath;
 				let raster;
 				let source;
-				if (empty) {
+				if (!empty) {
+					raster = await goldenRaster(
+						isRaw ? p : await resolveImage(p, "msg.payload"),
+					);
+					source = "input";
+				} else if (goldenPath) {
+					raster = await goldenRaster(await resolveImage(goldenPath, "golden path"));
+					source = "file";
+				} else {
 					raster = await goldenRaster(null, {
 						width: node.width,
 						height: node.height,
 						seed,
 					});
 					source = "synthetic";
-				} else {
-					raster = await goldenRaster(
-						isRaw ? p : await resolveImage(p, "msg.payload"),
-					);
-					source = "input";
 				}
 
 				const goldenPng = await sharp(raster.data, {
@@ -194,12 +271,23 @@ module.exports = (RED) => {
 					width: raster.width,
 					height: raster.height,
 					source,
+					rig,
 					total: plan.length,
 				};
 				send([null, first]);
+				await publishPreview(goldenPng, {
+					kind: "golden",
+					imageWidth: raster.width,
+					imageHeight: raster.height,
+					index: 0,
+					total: plan.length,
+					pass: true,
+					text: `golden · ${raster.width}×${raster.height} · ${source} · ${plan.length} frame${plan.length === 1 ? "" : "s"} to come`,
+					boxes: [],
+				});
 
 				let emitted = 0;
-				for await (const c of makeCases({ raster, seed, plan })) {
+				for await (const c of makeCases({ raster, seed, plan, rig })) {
 					if (!alive()) return done();
 					node.status({
 						fill: "blue",
@@ -220,11 +308,39 @@ module.exports = (RED) => {
 						severity: c.severity,
 						preset: c.preset,
 						capture: c.capture,
+						rig: c.rig,
 						defects: c.defects,
 						expected: c.expected,
 					};
 					send([out, null]);
 					emitted++;
+					const label =
+						c.family + (c.variant ? `/${c.variant}` : "") + (c.severity ? ` · ${c.severity}` : "");
+					const verdict = c.expected.pass
+						? "expect pass"
+						: `expect fail (${c.expected.channels.join("+")})`;
+					await publishPreview(c.buffer, {
+						kind: "frame",
+						imageWidth: c.capture.frameWidth,
+						imageHeight: c.capture.frameHeight,
+						index: c.index + 1,
+						total: c.total,
+						pass: c.expected.pass,
+						text: `${c.index + 1}/${c.total} · ${label} · ${verdict}`,
+						// rounded: this crosses the websocket per frame, and a
+						// tenth of a pixel is past what a thumbnail can show
+						boxes: c.defects
+							.filter((d) => d.bbox && d.bbox.w > 0 && d.bbox.h > 0)
+							.map((d) => ({
+								type: d.type,
+								variant: d.variant,
+								channel: d.channel,
+								corners: frameBox(d.bbox, c.capture, raster).map((p) => ({
+									x: round1(p.x),
+									y: round1(p.y),
+								})),
+							})),
+					});
 					if (intervalMs > 0 && c.index + 1 < c.total) {
 						await wait(intervalMs);
 						if (!alive()) return done();

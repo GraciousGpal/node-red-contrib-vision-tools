@@ -112,6 +112,7 @@ async function generate({
 	preset = "typical",
 	width = 1500,
 	height = 2100,
+	rig = true,
 	quiet = false,
 } = {}) {
 	if (!out) throw new Error("--out is required");
@@ -138,7 +139,9 @@ async function generate({
 	const plan = planCases({ perVariant, preset });
 	const cases = [];
 	let bytes = 0;
-	for await (const c of makeCases({ raster, seed, plan })) {
+	let rigRecord = null;
+	for await (const c of makeCases({ raster, seed, plan, rig })) {
+		if (c.rig) rigRecord = c.rig;
 		const frame = `frames/${c.id}.${c.format}`;
 		fs.writeFileSync(path.join(out, frame), c.buffer);
 		bytes += c.buffer.length;
@@ -159,6 +162,9 @@ async function generate({
 		version: MANIFEST_VERSION,
 		seed,
 		preset,
+		// the magnification and stretch every frame was shot at, or null
+		// when each frame drew its own (--rig false)
+		rig: rigRecord,
 		golden: {
 			path: "golden.png",
 			width: raster.width,
@@ -176,7 +182,11 @@ async function generate({
 	if (!quiet) {
 		console.log(
 			`\n${path.resolve(out)}  golden ${raster.width}x${raster.height} (${source}), ` +
-				`preset ${preset}, seed ${seed}\n`,
+				`preset ${preset}, seed ${seed}, ` +
+				(rigRecord
+					? `rig pinned at mx ${rigRecord.mx} my ${rigRecord.my}`
+					: "free geometry per frame") +
+				`\n`,
 		);
 		console.log(summarize(cases));
 		console.log(
@@ -196,6 +206,7 @@ if (require.main === module) {
 		preset: arg("preset", "typical"),
 		width: Number(arg("width", 1500)),
 		height: Number(arg("height", 2100)),
+		rig: arg("rig", "true") !== "false",
 	}).catch((err) => {
 		console.error(err.message);
 		process.exitCode = 1;

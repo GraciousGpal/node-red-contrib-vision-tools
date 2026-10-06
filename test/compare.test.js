@@ -73,6 +73,7 @@ function labelSvg(
 		missingBar = false,
 		panelFill = null,
 		localShift = null,
+		hairlines = null,
 	} = {},
 ) {
 	const bars = [];
@@ -99,6 +100,14 @@ function labelSvg(
 	const blob = extraBlob
 		? `<rect x="${extraBlob.x}" y="${extraBlob.y}" width="${extraBlob.w}" height="${extraBlob.h}" fill="${extraBlob.fill || "#000"}"/>`
 		: "";
+	// a patch of "body type": 2px rules every 20px, so a block over it is
+	// about a tenth ink - too thin to reach blockThreshold by area if the
+	// whole patch goes missing
+	const rules = hairlines
+		? Array.from({ length: Math.floor(hairlines.h / 20) }, (_, i) =>
+				`<rect x="${hairlines.x}" y="${hairlines.y + i * 20}" width="${hairlines.w}" height="2" fill="#000"/>`,
+			).join("")
+		: "";
 	return Buffer.from(
 		`<svg xmlns="http://www.w3.org/2000/svg" width="${width}" height="${height}">` +
 			`<rect width="100%" height="100%" fill="#fff"/>` +
@@ -106,6 +115,7 @@ function labelSvg(
 			bars.join("") +
 			panel +
 			blob +
+			rules +
 			`</svg>`,
 	);
 }
@@ -220,6 +230,44 @@ test("ink the golden expects but the target lacks fails the print check", async 
 		true,
 		"background must not double-count missing ink",
 	);
+});
+
+// The first miss mechanism in bench/synth-findings.md: a dropped word of
+// thin type is 10-15% of its blocks by area, under blockThreshold, and a
+// few hundred pixels, under failRatio - so it passed. Against the ink the
+// golden has in those blocks it is everything.
+test("a patch of thin type that went missing fails print on the missing fraction, not by area", async () => {
+	const patch = { x: 300, y: 1008, w: 200, h: 80 };
+	const goldenBuf = await png(labelSvg(1200, 1600, { hairlines: patch }));
+	const targetBuf = await png(labelSvg(1200, 1600));
+	const golden = await prepareGolden(goldenBuf, cfg());
+
+	// the gap, documented: by area and ratio alone the loss is invisible
+	const off = await compareFrame(targetBuf, golden, cfg({ printMissingFraction: 0 }));
+	assert.strictEqual(off.printBlemish.pass, true, "area and ratio gates alone let thin type go");
+	assert.strictEqual(off.printBlemish.worstMissing, 0);
+
+	const on = await compareFrame(targetBuf, golden, cfg({ printMissingFraction: 0.5 }));
+	assert.strictEqual(on.printBlemish.pass, false, "the missing-ink gate must catch it");
+	assert.ok(on.printBlemish.worstMissing >= 0.5, `worstMissing ${on.printBlemish.worstMissing}`);
+	// and it says where: a region over the patch, in working pixels
+	const sx = golden.width / 1200;
+	const sy = golden.height / 1600;
+	const hit = on.printBlemish.regions.find(
+		(r) =>
+			r.x < (patch.x + patch.w) * sx &&
+			r.x + r.w > patch.x * sx &&
+			r.y < (patch.y + patch.h) * sy &&
+			r.y + r.h > patch.y * sy,
+	);
+	assert.ok(hit, `no region over the patch: ${JSON.stringify(on.printBlemish.regions)}`);
+	assert.ok(hit.missing >= 0.5);
+	assert.strictEqual(on.backgroundBlemish.pass, true, "background is untouched by the gate");
+
+	// a frame that still has its type is not failed by the gate
+	const same = await compareFrame(goldenBuf, golden, cfg({ printMissingFraction: 0.5 }));
+	assert.strictEqual(same.printBlemish.pass, true);
+	assert.strictEqual(same.printBlemish.worstMissing, 0);
 });
 
 // The whole point of searching magnification: a golden that is rendered

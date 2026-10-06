@@ -104,6 +104,12 @@ module.exports = (RED) => {
 		blockThreshold: { value: 0.15, float: [0, 1] },
 		failThreshold: { value: 0.3, float: [0, 1] },
 		failRatio: { value: 0.002, float: [0, 1] },
+		// A print block that lost at least this fraction of the ink the golden
+		// has there fails, however small a share of the block's area that ink
+		// was. Body type is 10-15% ink, so a dropped word never reaches
+		// failThreshold by area and never reaches failRatio; against its own
+		// ink it reads 1.0. Print only - extra ink has no "should be". 0 = off.
+		printMissingFraction: { value: 0.5, float: [0, 1] },
 		outputPrintHeatmap: { value: true },
 		outputBackgroundHeatmap: { value: true },
 		// JPEG unless asked for PNG: a heat map is a picture for a person,

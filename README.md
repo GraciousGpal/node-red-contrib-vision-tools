@@ -241,7 +241,14 @@ verdict by different routes.
    own edge lands there, and so does whatever sits just past the printed
    artwork - the die-cut's substrate, a lifted edge's shadow - which is
    not a mark on the artwork. The position check still bounds how far the
-   label may sit from nominal.
+   label may sit from nominal. The print check has a third gate,
+   `printMissingFraction`: a block that lost at least that fraction of the
+   ink the golden has *in that block* fails, however small a share of the
+   block's area that ink was. Body type is 10-15% ink, so a dropped word
+   never reaches `failThreshold` by area and never reaches `failRatio`;
+   against its own ink it reads 1.0. Blocks with under 6% golden ink are
+   left out of it, so a stroke clipping a block's corner cannot read as
+   "lost everything". 0 switches it off.
 6. Overall `pass = position.pass && printBlemish.pass && backgroundBlemish.pass`.
 
 Decode/resize uses [`sharp`](https://sharp.pixelplumbing.com) (native,
@@ -411,25 +418,53 @@ for the wrong reason is scored as a `wrong-place`, not a detection — see
 
 ### How `synthetic-defects` works
 
-The same generator, in the editor. `synthetic-defects` takes a golden on
-`msg.payload` — image bytes, a path, a raw pixel descriptor, or nothing at
-all, in which case it draws the synthetic label itself — and emits the
+The same generator, in the editor. `synthetic-defects` takes a golden —
+`msg.payload` as image bytes, a path or a raw pixel descriptor; else the
+`Golden` path configured on the node (`msg.goldenPath` overrides it), so
+your own label's artwork is the golden with an empty inject; else nothing
+at all, in which case it draws the synthetic label itself — and emits the
 frame set one message at a time on output 1, with the golden announced
-once on output 2 first. Every frame message carries `msg.payload` (the
+once on output 2 first. Whichever golden it is, the defects are painted
+into that artwork, so a set made from a real label exercises
+`golden-compare` on that label's strokes and paper. Every frame message carries `msg.payload` (the
 frame), `msg.golden` (the golden as PNG), `msg.goldenKey` (so
 `golden-compare` prepares that golden once for the whole run instead of
 re-hashing it per frame), `msg.filename`, and `msg.synth` — the case id,
 its position in the run, the family/variant/severity, every sampled
 camera parameter, the measured ground truth, and `expected`.
 
+The node previews itself, on by default: the golden and then each frame
+appear under the node on the canvas as they are sent, with every defect's
+measured ground-truth box drawn on the frame. The box is mapped from
+golden space through the capture's own magnification, rotation and
+placement (`frameBox` in `lib/synth/capture.js`), so it sits on the
+painted defect as the parallelogram it became rather than beside it as an
+upright guess. The outline colour is the channel the defect landed in
+(blue print, red background, purple both, dashed grey for a sub-floor
+defect the node must still pass) and the caption says the case, its place
+in the run, and what `golden-compare` is expected to answer. `Preview
+width` sizes the thumbnail; `msg.previewEnabled` / `msg.previewWidth`
+override per message.
+
+`Fixed rig`, on by default, shoots the whole set at one magnification and
+one press stretch drawn once from the capture preset's range - what a
+camera on a stand and one media give a line, and what `golden-compare`'s
+trained transform pins. Angle and placement still vary per frame. Train
+`golden-compare` from the golden message or any clean frame and the set is
+judged the way the line is. Untick it and every frame draws its own
+magnification: that exercises the alignment search rather than the blemish
+checks, and books the search's misses as false fails - the state the first
+benchmark write-up measured.
+
 Wire output 1 straight into `golden-compare`, which reads `msg.golden` and
 `msg.goldenKey` off the message, so each frame is compared against the
 very golden it was made from. Put a debug node on `msg.result` and another
-on `msg.synth.expected`, and an image preview on `msg.payload`, and the
-gap between what a defect is and what the node called it is visible frame
-by frame. An interval setting (500ms by default) paces the run so a person
-can watch it. `examples/synthetic-defects-into-golden-compare.json` is
-that flow.
+on `msg.synth.expected`, and with both nodes' previews on, the gap between
+what a defect is and what the node called it is visible frame by frame.
+An interval setting (500ms by default) paces the run so a person can watch
+it. `examples/synthetic-defects-into-golden-compare.json` is that flow; a
+function node in it trains `golden-compare`'s transform on the first frame
+of each run so every later frame is pinned, the way a line runs.
 
 It is a look, not a measurement: for scored numbers — recall per family
 and severity, false-fail rate, timing percentiles, setting sweeps —
@@ -450,6 +485,7 @@ Per-message overrides:
 `msg.nativeFastAlign`,
 `msg.positionToleranceXMm`/`YMm`/`XPx`/`YPx`/`AngleDeg`, `msg.blockSize`,
 `msg.blockThreshold`, `msg.failThreshold`, `msg.failRatio`,
+`msg.printMissingFraction`,
 `msg.outputPrintHeatmap`, `msg.outputBackgroundHeatmap`,
 `msg.heatmapFormat`, `msg.heatmapQuality`, `msg.debugStages`.
 
@@ -1323,7 +1359,7 @@ nothing is found at all, one message with `msg.text = null` and
 
 ## Tests
 
-`npm test` (Node 18+, no test framework needed — `node --test`), 532
+`npm test` (Node 18+, no test framework needed — `node --test`), 545
 tests. Fixtures are generated with `sharp` rather than read from
 `data/sample_images`, so the suite runs anywhere; the real QC photos are
 gitignored. Coverage spans the lib pipeline (`compare`, `align`, `warp`,

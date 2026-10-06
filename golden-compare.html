@@ -564,6 +564,24 @@
     >
   </div>
   <div class="form-row">
+    <label for="node-input-printMissingFraction"
+      ><i class="fa fa-font"></i> Missing ink</label
+    >
+    <input
+      type="number"
+      id="node-input-printMissingFraction"
+      min="0"
+      max="1"
+      step="0.05"
+      style="width:70px;"
+    />
+    <span class="node-input-hint" style="margin-left:10px; color:#999;"
+      >print fails when a block lost this fraction of the ink the golden has
+      there - catches a dropped word of thin type that never fills a block;
+      0 = off</span
+    >
+  </div>
+  <div class="form-row">
     <label for="node-input-outputPrintHeatmap"
       ><i class="fa fa-picture-o"></i> Output heat maps</label
     >
@@ -877,6 +895,7 @@
       blockThreshold: { value: 0.15, validate: RED.validators.number(true) },
       failThreshold: { value: 0.3, validate: RED.validators.number(true) },
       failRatio: { value: 0.002, validate: RED.validators.number(true) },
+      printMissingFraction: { value: 0.5, validate: RED.validators.number(true) },
       outputPrintHeatmap: { value: true },
       outputBackgroundHeatmap: { value: true },
       heatmapFormat: { value: "jpg" },

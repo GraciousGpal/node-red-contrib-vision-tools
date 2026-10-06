@@ -156,6 +156,54 @@ the method.
   scorer calls that `wrong-place` because the node cannot point at it.
   One case. Arguably a detection; left strict.
 
+## Update, 2026-10-06: a fixed rig, a pin, and the missing-ink gate
+
+The set above re-rolled magnification per frame. A camera on a stand
+does not, and `golden-compare` on a line pins magnification and stretch
+with its trained transform - so the search's per-frame misses were being
+booked as the blemish checks' false fails. `generate.js --rig` (the
+default now) shoots one magnification and stretch per set, and `run.js
+--train` (default on a rig set) pins to what the full search finds on one
+clean frame. Then the first miss mechanism above got its structural fix:
+`printMissingFraction`, a print block that lost at least that fraction of
+the ink the golden has *in that block* fails, however small a share of
+the block's area that ink was.
+
+87 frames, seed 1, per-variant 1, typical, `workingSize` 2100, measured
+in that order:
+
+| configuration | recall | clean false fails |
+| --- | ---: | ---: |
+| rig set, unpinned, old verdict | 44.4% | 7 / 24 |
+| pinned, old verdict | 36.5% | 0 / 24 |
+| pinned, `printMissingFraction` 0.3 | 61.9% | 2 / 24 |
+| pinned, `printMissingFraction` 0.5 | 50.8% | 2 / 24 |
+| pinned, `printMissingFraction` 0.7 | 49.2% | 1 / 24 |
+| pinned, 0.5, `failThreshold` 0.2 | 58.7% | 2 / 24 |
+| pinned, 0.5, `failThreshold` 0.1 | 61.9% | 2 / 24 |
+
+Pinning alone drops recall. The five detections it loses were the search
+misregistering a defective frame and the residue, not the defect, tipping
+a block - four of them were already `wrong-place`. Those were never
+detections.
+
+Per variant, pinned, `printMissingFraction` 0.5 and `failThreshold` 0.1
+against pinned and the old verdict: `misprint/dropout` 25% → 100%,
+`misprint/streak` 0% → 75%, `overprint/bleed` 33% → 100%,
+`overprint/ghost` 50% → 100%, `scratch/dark` 0% → 75%, `misprint/void`
+50% → 75%, `mark/spatter` 50% → 75%, `random/fold` 50% → 75%. Unmoved:
+`misprint/faded` 0%, `scratch/light` 0%, `mark/smudge` 25%,
+`random/void-spots` 0%, `random/dust` 25% - the tone and sub-4px
+mechanisms, as predicted.
+
+The two clean false fails are both the missing-ink gate on thin strokes:
+a `harsh`-preset clean frame whose 1px hairlines blur and binarize away
+(a thresholding limit, not a gate limit - `clean-rig` and `typical`
+frames do not do this), and one `typical` frame with a single 16x16 block
+at the gate's 6% ink floor. 0.7 clears the second at a cost of two
+points of recall; 0.3 clears nothing more and gains eleven. The package
+default is 0.5; the example flow runs the sweep's `failThreshold` 0.1.
+
 ## How to repeat
 
 ```
@@ -163,6 +211,9 @@ node bench/synth/generate.js --out C:/tmp/set --seed 1 --per-variant 2
 node bench/synth/run.js C:/tmp/set --working 2100
 node bench/synth/run.js C:/tmp/set --working 2100 --sweep failThreshold=0.3,0.2,0.1
 node bench/synth/run.js C:/tmp/set --working 2100 --filter "clean|stain"
+node bench/synth/run.js C:/tmp/set --working 2100 --train false        # the unpinned search
+node bench/synth/run.js C:/tmp/set --working 2100 --sweep printMissingFraction=0,0.3,0.5,0.7
+node bench/synth/generate.js --out C:/tmp/free --rig false              # the pre-2026-10-06 set
 ```
 
 `--golden path/to/artwork.png` runs the same set on a real label without

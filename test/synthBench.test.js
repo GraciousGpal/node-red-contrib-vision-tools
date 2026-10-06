@@ -439,4 +439,17 @@ test("runSet scores a real clean frame and a real erased-ink frame", async (t) =
 
 	assert.strictEqual(report.summary.overall.recall, 1);
 	assert.strictEqual(report.summary.overall.falseFails, 0);
+	// no rig in this manifest, so nothing was pinned
+	assert.strictEqual(report.meta.trained, null);
+
+	// --train pins the set to what one clean frame measures; here the frame
+	// is the golden itself, so the pin is unity and the verdicts hold
+	const pinned = await runSet({ dir, cfg: { workingSize: 320, workers: 1 }, train: true });
+	assert.ok(pinned.meta.trained, "a trained pin is reported");
+	assert.strictEqual(pinned.meta.trained.frame, "clean-0001");
+	assert.ok(Math.abs(pinned.meta.trained.mx - 1) < 0.05, `mx ${pinned.meta.trained.mx}`);
+	assert.ok(Math.abs(pinned.meta.trained.my - 1) < 0.05, `my ${pinned.meta.trained.my}`);
+	assert.strictEqual(pinned.meta.cfg.pinnedScale.mx, pinned.meta.trained.mx);
+	assert.strictEqual(pinned.cases.find((c) => c.id === "clean-0001").verdict, "correct-pass");
+	assert.strictEqual(pinned.cases.find((c) => c.id === "mark-solid-medium-0001").verdict, "detected");
 });

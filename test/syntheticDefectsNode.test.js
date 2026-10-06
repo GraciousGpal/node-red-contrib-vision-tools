@@ -31,9 +31,10 @@ const BASE = {
 	height: 420,
 };
 
-function makeNode(config = {}) {
+function makeNode(config = {}, comms) {
 	const node = loadNode("synthetic-defects.js", { ...BASE, ...config }, {
 		id: "synthetic-defects-test",
+		comms,
 	});
 	const frames = [];
 	const goldens = [];
@@ -158,6 +159,75 @@ test("a Buffer payload is used as the golden", async () => {
 	assert.deepEqual(t.doneErrors, []);
 });
 
+test("a configured golden path is the golden when the payload is empty", async () => {
+	const fs = require("node:fs");
+	const os = require("node:os");
+	const path = require("node:path");
+	const dir = fs.mkdtempSync(path.join(os.tmpdir(), "synth-golden-"));
+	const file = path.join(dir, "artwork.png");
+	const raw = Buffer.alloc(280 * 360, 255);
+	for (let y = 100; y < 140; y++) raw.fill(0, y * 280 + 40, y * 280 + 200);
+	fs.writeFileSync(
+		file,
+		await sharp(raw, { raw: { width: 280, height: 360, channels: 1 } }).png().toBuffer(),
+	);
+	try {
+		const t = makeNode({ goldenPath: file });
+		await t.run({});
+		assert.deepEqual(t.doneErrors, []);
+		assert.equal(t.goldens[0].synth.source, "file");
+		assert.equal(t.goldens[0].synth.width, 280);
+		assert.equal(t.goldens[0].synth.height, 360);
+		assert.ok(t.frames.length > 0);
+
+		// msg.payload still wins over the configured path
+		const u = makeNode({ goldenPath: file });
+		await u.run({ payload: fs.readFileSync(file) });
+		assert.equal(u.goldens[0].synth.source, "input");
+
+		// and msg.goldenPath overrides the configured one
+		const v = makeNode({ goldenPath: "/nowhere/at/all.png" });
+		await v.run({ goldenPath: file });
+		assert.deepEqual(v.doneErrors, []);
+		assert.equal(v.goldens[0].synth.source, "file");
+
+		// a path that does not exist is an error, not a silent synthetic label
+		const w = makeNode({ goldenPath: "/nowhere/at/all.png" });
+		await w.run({});
+		assert.equal(w.doneErrors.length, 1);
+		assert.match(w.doneErrors[0], /golden path/);
+		assert.equal(w.goldens.length, 0);
+	} finally {
+		fs.rmSync(dir, { recursive: true, force: true });
+	}
+});
+
+test("a fixed rig shoots every frame at one magnification; a free one does not", async () => {
+	const rig = makeNode({ perVariant: 2 });
+	await rig.run({});
+	assert.equal(rig.goldens[0].synth.rig, true);
+	const mxs = new Set(rig.frames.map((m) => m.synth.capture.mx));
+	const mys = new Set(rig.frames.map((m) => m.synth.capture.my));
+	assert.equal(mxs.size, 1, `rig set drew ${mxs.size} magnifications`);
+	assert.equal(mys.size, 1);
+	for (const m of rig.frames) {
+		assert.deepEqual(m.synth.rig, { mx: [...mxs][0], my: [...mys][0] });
+	}
+	// angle and placement still vary - the applicator is not a stand
+	assert.ok(new Set(rig.frames.map((m) => m.synth.capture.angleDeg)).size > 1);
+
+	const free = makeNode({ perVariant: 2, rig: false });
+	await free.run({});
+	assert.equal(free.goldens[0].synth.rig, false);
+	assert.ok(new Set(free.frames.map((m) => m.synth.capture.mx)).size > 1, "a free set re-rolls magnification");
+	assert.equal(free.frames[0].synth.rig, null);
+
+	// msg.rig overrides the configured value either way
+	const over = makeNode({ perVariant: 2, rig: false });
+	await over.run({ rig: true });
+	assert.equal(new Set(over.frames.map((m) => m.synth.capture.mx)).size, 1);
+});
+
 test("an unusable payload reports through done(err) exactly once", async () => {
 	const t = makeNode();
 	await t.run({ payload: Buffer.from("not an image at all") });
@@ -192,5 +262,102 @@ test("a second input while running cancels the first", async () => {
 			`vs ${full.frames.length * 2} for two full runs`,
 	);
 	assert.equal(t.goldens.length, 2, "each run announces its own golden");
+	assert.deepEqual(t.doneErrors, []);
+});
+
+// ---- preview ---------------------------------------------------------------
+
+function fakeComms() {
+	const events = [];
+	return { events, publish: (topic, data) => events.push({ topic, data }) };
+}
+
+test("the preview shows the golden, then every frame with its box on the frame", async () => {
+	const comms = fakeComms();
+	const t = makeNode({ previewWidth: 120 }, comms);
+	await t.run({});
+
+	const events = comms.events;
+	assert.ok(events.every((e) => e.topic === "synthetic-defects-preview"));
+	assert.equal(events.length, 1 + t.frames.length, "one golden event plus one per frame");
+
+	const g = events[0].data;
+	assert.equal(g.id, "synthetic-defects-test");
+	assert.equal(g.kind, "golden");
+	assert.equal(g.imageWidth, 300);
+	assert.equal(g.imageHeight, 420);
+	assert.equal(g.total, t.frames.length);
+	assert.equal(g.pass, true);
+	assert.match(g.text, /^golden · 300×420 · synthetic · \d+ frames to come$/);
+	assert.deepEqual(g.boxes, []);
+	// the thumbnail is a real JPEG no wider than asked
+	const gm = await sharp(Buffer.from(g.image, "base64")).metadata();
+	assert.equal(gm.format, "jpeg");
+	assert.equal(gm.width, 120);
+
+	for (const [i, e] of events.slice(1).entries()) {
+		const d = e.data;
+		const m = t.frames[i];
+		assert.equal(d.kind, "frame");
+		assert.equal(d.index, i + 1);
+		assert.equal(d.total, t.frames.length);
+		assert.equal(d.previewWidth, 120);
+		assert.equal(d.imageWidth, m.synth.capture.frameWidth);
+		assert.equal(d.imageHeight, m.synth.capture.frameHeight);
+		assert.equal(d.pass, m.synth.expected.pass);
+		assert.ok(d.text.startsWith(`${i + 1}/${t.frames.length} · ${m.synth.family}`), d.text);
+		assert.match(d.text, / · expect (pass|fail \([a-z+]+\))$/);
+		if (m.synth.family === "clean") {
+			assert.deepEqual(d.boxes, []);
+			assert.match(d.text, /expect pass$/);
+		} else {
+			assert.equal(d.boxes.length, 1);
+			const b = d.boxes[0];
+			assert.equal(b.type, "mark");
+			assert.equal(b.channel, m.synth.defects[0].channel);
+			assert.equal(b.corners.length, 4);
+			// the box is on the frame, inside the label's placed footprint
+			const c = m.synth.capture;
+			for (const p of b.corners) {
+				assert.ok(p.x >= c.dx - 1 && p.x <= c.frameWidth - c.dx + 1, `corner x ${p.x} in frame ${c.frameWidth}`);
+				assert.ok(p.y >= c.dy - 1 && p.y <= c.frameHeight - c.dy + 1, `corner y ${p.y} in frame ${c.frameHeight}`);
+			}
+			// and it is the golden-space bbox grown by the magnification
+			const bbox = m.synth.defects[0].bbox;
+			const spanX = Math.max(...b.corners.map((p) => p.x)) - Math.min(...b.corners.map((p) => p.x));
+			assert.ok(spanX >= bbox.w * c.mx - 1 && spanX <= bbox.w * c.my * 1.1 + 2, `span ${spanX} vs bbox ${bbox.w} at ${c.mx}x`);
+		}
+	}
+	assert.deepEqual(t.doneErrors, []);
+});
+
+test("preview off publishes one clear and no images", async () => {
+	const comms = fakeComms();
+	const t = makeNode({ previewEnabled: false }, comms);
+	await t.run({});
+	assert.deepEqual(comms.events, [
+		{ topic: "synthetic-defects-preview", data: { id: "synthetic-defects-test", clear: true } },
+	]);
+	assert.ok(t.frames.length > 0, "frames still flow without a preview");
+});
+
+test("msg.previewEnabled overrides the configured preview either way", async () => {
+	const off = fakeComms();
+	const a = makeNode({}, off);
+	await a.run({ previewEnabled: false });
+	assert.equal(off.events.length, 1);
+	assert.equal(off.events[0].data.clear, true);
+
+	const on = fakeComms();
+	const b = makeNode({ previewEnabled: false }, on);
+	await b.run({ previewEnabled: true, previewWidth: 90 });
+	assert.ok(on.events.length > 1);
+	assert.ok(on.events.every((e) => e.data.previewWidth === 90));
+});
+
+test("no RED.comms means no preview and no complaint", async () => {
+	const t = makeNode({});
+	await t.run({});
+	assert.ok(t.frames.length > 0);
 	assert.deepEqual(t.doneErrors, []);
 });
