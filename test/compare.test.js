@@ -950,3 +950,40 @@ test("the nuisance map gates the background channel only, never the print channe
 	assert.strictEqual(extra.backgroundBlemish.noveltyPass, false);
 	assert.strictEqual(extra.backgroundBlemish.pass, false, "background still fails on novelty");
 });
+
+// The rig's left edge: a few px of substrate past the label's die-cut
+// edge, full height, dark against the golden's white border. It is not a
+// mark on the artwork, yet at x=0 it is one block column at density 0.75+
+// and trips the background density gate on a good part.
+test("edgeMargin: substrate past the label's edge is not a background blemish", async () => {
+	const w = 1024;
+	const h = 700;
+	const golden = await prepareGolden(await png(labelSvg(w, h)), cfg());
+	const frame = await png(
+		labelSvg(w, h, { extraBlob: { x: 0, y: 0, w: 12, h, fill: "#333" } }),
+	);
+
+	const bare = await compareFrame(frame, golden, cfg());
+	assert.strictEqual(
+		bare.backgroundBlemish.pass,
+		false,
+		"without a margin the strip is a background defect",
+	);
+	assert.ok(
+		bare.backgroundBlemish.regions.some((r) => r.x === 0 && r.h > h / 2),
+		"the defect is the full-height strip at x=0",
+	);
+
+	const trimmed = await compareFrame(frame, golden, cfg({ edgeMargin: 16 }));
+	assert.strictEqual(trimmed.backgroundBlemish.pass, true);
+	assert.ok(
+		trimmed.backgroundBlemish.defectRatio < 0.0002,
+		`background defect ratio should be negligible, got ${trimmed.backgroundBlemish.defectRatio.toFixed(5)}`,
+	);
+	assert.ok(
+		!trimmed.backgroundBlemish.regions.some((r) => r.x < 16),
+		"nothing inside the margin is reported",
+	);
+	assert.strictEqual(trimmed.printBlemish.pass, true);
+	assert.strictEqual(trimmed.position.pass, true);
+});

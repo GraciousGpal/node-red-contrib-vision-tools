@@ -101,6 +101,7 @@
         "positionToleranceAngleDeg": 1,
         "printTolerance": 2,
         "backgroundTolerance": 1,
+        "edgeMargin": 0,
         "alignSearch": 16,
         "scaleFilePath": "",
         "positionToleranceXMm": 2,

@@ -19,6 +19,16 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Added
 
+- **`edgeMargin` on `golden-compare`: px of the golden's border, every side,
+  that neither blemish check inspects.** Default 0, so nothing changes until
+  it is set. On a rig the substrate just past the label's die-cut edge
+  crept into the frame as one block column at x=0, full height, growing
+  frame by frame from density 0.25 to 0.875 while the alignment stayed put,
+  and failed good parts on the background density gate. That strip is the
+  world outside the artwork, not a mark on it; the position check already
+  bounds how far the label may sit from nominal. Also `msg.edgeMargin`.
+  The cleared border shows in the defect masks, stages and heat maps.
+
 - **A stage viewer for `golden-compare`.** With the new *Preview* box on,
   the node draws its last frame under itself on the flow canvas - the heat
   map of the channel that failed, or the aligned frame when nothing did,

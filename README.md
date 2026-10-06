@@ -236,7 +236,12 @@ verdict by different routes.
    defect. Each diff is block-summed into a density grid (`blockSize` px),
    thresholded (`blockThreshold`), and flood-filled into defect bounding
    boxes; each fails independently if any region exceeds `failThreshold`
-   or its overall defect ratio exceeds `failRatio`.
+   or its overall defect ratio exceeds `failRatio`. The outer `edgeMargin`
+   px of the golden (default 0) are left out of both checks: the label's
+   own edge lands there, and so does whatever sits just past the printed
+   artwork - the die-cut's substrate, a lifted edge's shadow - which is
+   not a mark on the artwork. The position check still bounds how far the
+   label may sit from nominal.
 6. Overall `pass = position.pass && printBlemish.pass && backgroundBlemish.pass`.
 
 Decode/resize uses [`sharp`](https://sharp.pixelplumbing.com) (native,
@@ -436,6 +441,7 @@ same frames.
 Per-message overrides:
 `msg.threshold`, `msg.thresholdMode`, `msg.sauvolaRadius`, `msg.sauvolaK`,
 `msg.inkMargin`, `msg.printTolerance`, `msg.backgroundTolerance`,
+`msg.edgeMargin`,
 `msg.alignSearch`, `msg.scaleSearchMin`/`Max`/`Steps`, `msg.maxAspect`,
 `msg.aspectSteps`, `msg.maxAngleDeg`, `msg.angleSteps`,
 `msg.alignCandidates`, `msg.localAlign`, `msg.localAlignTile`,

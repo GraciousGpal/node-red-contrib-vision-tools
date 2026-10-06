@@ -90,6 +90,11 @@ module.exports = (RED) => {
 		// has to absorb registration error, only genuine edge variation
 		printTolerance: { value: 2, int: [0, 50] },
 		backgroundTolerance: { value: 1, int: [0, 50] },
+		// px of the golden's own border, every side, that neither blemish
+		// check looks at. The label's edge lands here, and so does whatever
+		// is just past it - substrate, a lifted edge's shadow - which is not
+		// a mark on the artwork. 0 inspects to the edge.
+		edgeMargin: { value: 0, int: [0, 1024] },
 		alignSearch: { value: 16, int: [0, 200] },
 		positionToleranceXMm: { value: 2, float: [0, 1000] },
 		positionToleranceYMm: { value: 2, float: [0, 1000] },

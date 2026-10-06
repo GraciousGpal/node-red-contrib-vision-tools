@@ -426,9 +426,22 @@
       max="50"
       style="width:60px;"
     />
+    <label
+      for="node-input-edgeMargin"
+      style="width:auto; margin-left:16px; margin-right:4px;"
+      >Edge margin</label
+    >
+    <input
+      type="number"
+      id="node-input-edgeMargin"
+      min="0"
+      max="1024"
+      style="width:60px;"
+    />
     <span class="node-input-hint" style="margin-left:10px; color:#999;"
       >independent checks: missing ink (print) vs. unwanted ink
-      (background)</span
+      (background); edge margin is px of the golden's border neither
+      check inspects</span
     >
   </div>
   <div class="form-row">
@@ -847,6 +860,7 @@
       },
       printTolerance: { value: 2, validate: RED.validators.number(true) },
       backgroundTolerance: { value: 1, validate: RED.validators.number(true) },
+      edgeMargin: { value: 0, validate: RED.validators.number(true) },
       alignSearch: { value: 16, validate: RED.validators.number(true) },
       scaleFilePath: { value: "" },
       positionToleranceXMm: { value: 2, validate: RED.validators.number(true) },
