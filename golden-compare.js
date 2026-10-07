@@ -24,6 +24,7 @@ const {
 	readTransformFile,
 	writeTransformFile,
 } = require("./lib/transformFile.js");
+const { mergeRegister } = require("./lib/localAlign.js");
 const nuisance = require("./lib/nuisanceMap.js");
 const {
 	clampInt,
@@ -904,6 +905,10 @@ module.exports = (RED) => {
 						if (cfg.toneMarginAuto && Number.isFinite(slack) && slack >= 0 && slack <= 50) {
 							cfg.toneMargin = Math.round(slack);
 							trainedSlack = cfg.toneMargin;
+							// and per tile, where the record has it; compareFrame
+							// checks it against the golden's grid
+							const map = trained.record.register && trained.record.register.slack;
+							if (map && typeof map === "object") cfg.toneSlackMap = map;
 						}
 					}
 				}
@@ -978,18 +983,29 @@ module.exports = (RED) => {
 					);
 				}
 
+				// A training run is the consecutive training frames: the
+				// register slack is the worst any of them showed per tile, since
+				// one frame sits where it sits and the next part may not. A
+				// non-training frame ends the run, so re-ticking starts afresh.
 				if (training) {
+					const run = node.registerRun;
+					const register =
+						run && run.goldenKey === goldenKey
+							? mergeRegister(run.register, result.register)
+							: result.register;
+					node.registerRun = register ? { goldenKey, register } : null;
 					const record = {
 						scaleX: result.transform.scaleX,
 						scaleY: result.transform.scaleY,
 						stretchPercent: result.transform.stretchPercent,
 						angleDeg: result.transform.angleDeg,
 						alignScore: result.transform.score,
-						// how far off register the frame still sat after the local
-						// alignment, and the slack the tone and speck checks take
-						// from it on later frames (Register slack "from training")
-						register: result.register,
-						registerSlackPx: result.register ? result.register.slackPx : null,
+						// how far off register the frames of this training run sat
+						// after the local alignment, and the slack the tone and
+						// speck checks take from it on later frames (Register slack
+						// "from training")
+						register,
+						registerSlackPx: register ? register.slackPx : null,
 						goldenKey,
 						// what the record is really tied to: the golden's bytes, so
 						// the same image still matches when it arrives by a different
@@ -1012,11 +1028,16 @@ module.exports = (RED) => {
 							`scaleY=${record.scaleY.toFixed(5)} stretch=${record.stretchPercent.toFixed(2)}% ` +
 							`alignScore=${record.alignScore.toFixed(4)}` +
 							(record.register
-								? ` register(p98=${record.register.p98Px.toFixed(1)}px max=${record.register.maxPx.toFixed(1)}px` +
-									` beyond=${record.register.beyond}) -> tone slack ${record.registerSlackPx}px`
+								? ` register(frames=${record.register.frames} p98=${record.register.p98Px.toFixed(1)}px max=${record.register.maxPx.toFixed(1)}px` +
+									` beyond=${record.register.beyond}) -> tone slack ${record.registerSlackPx}px` +
+									(record.register.slack
+										? ` (${Math.min(...record.register.slack.slackPx)}-${Math.max(...record.register.slack.slackPx)} per tile)`
+										: "")
 								: "") +
 							` -> ${node.transformFilePath}`,
 					);
+				} else {
+					node.registerRun = null;
 				}
 
 				// Nuisance-map training folds this frame's background density
@@ -1120,6 +1141,10 @@ module.exports = (RED) => {
 						// came from the trained transform or the node's number
 						marginPx: cfg.toneMargin,
 						marginTrained: trainedSlack != null,
+						// the least and most slack any tile ran with: equal, and
+						// equal to marginPx, without a map
+						marginMinPx: result.toneBlemish.enabled ? result.toneBlemish.slackMin : cfg.toneMargin,
+						marginMaxPx: result.toneBlemish.enabled ? result.toneBlemish.slackMax : cfg.toneMargin,
 						// the frame's paper and ink levels the check measured
 						// against, whole-frame; absent when the check did not run
 						...(result.toneBlemish.enabled
@@ -1142,6 +1167,20 @@ module.exports = (RED) => {
 				if (result.toneBlemish.reason && node.toneWarnedFor !== goldenKey) {
 					node.toneWarnedFor = goldenKey;
 					node.warn(`golden-compare: tone and speck checks skipped - ${result.toneBlemish.reason}`);
+				}
+				// a map that does not fit this golden's grid is a record
+				// trained on another working size or tile; say so once
+				if (
+					cfg.toneSlackMap &&
+					result.toneBlemish.enabled &&
+					!result.toneBlemish.slackMapApplied &&
+					node.slackMapWarnedFor !== goldenKey
+				) {
+					node.slackMapWarnedFor = goldenKey;
+					node.warn(
+						"golden-compare: the trained register slack map does not fit this golden's grid; " +
+							`running with ${cfg.toneMargin} px everywhere - retrain the transform`,
+					);
 				}
 				const t = result.timings;
 				const ms = (v) => Math.round(v || 0);

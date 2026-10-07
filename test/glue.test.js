@@ -271,6 +271,9 @@ test("training measures the register slack and later frames take their tone marg
 	const record = JSON.parse(await fsp.readFile(xformPath, "utf8"));
 	assert.ok(record.register && record.register.localised > 0, JSON.stringify(record.register));
 	assert.ok(Number.isInteger(record.registerSlackPx) && record.registerSlackPx >= 2, `slack ${record.registerSlackPx}`);
+	const map = record.register.slack;
+	assert.ok(map && map.slackPx.length === map.gridW * map.gridH, "the record carries the per-tile map");
+	assert.strictEqual(Math.max(...map.slackPx), record.registerSlackPx);
 	assert.strictEqual(train.sent[0].result.register.slackPx, record.registerSlackPx);
 	assert.strictEqual(train.sent[0].trainedTransform.registerSlackPx, record.registerSlackPx);
 
@@ -281,6 +284,8 @@ test("training measures the register slack and later frames take their tone marg
 	assert.strictEqual(auto.sent[0].result.transform.pinned, true);
 	assert.strictEqual(auto.sent[0].result.toneBlemish.marginPx, record.registerSlackPx);
 	assert.strictEqual(auto.sent[0].result.toneBlemish.marginTrained, true);
+	assert.strictEqual(auto.sent[0].result.toneBlemish.marginMinPx, Math.min(...map.slackPx));
+	assert.strictEqual(auto.sent[0].result.toneBlemish.marginMaxPx, record.registerSlackPx);
 	assert.strictEqual(auto.sent[0].result.register, undefined);
 
 	// opted out: the node's own number
@@ -288,6 +293,46 @@ test("training measures the register slack and later frames take their tone marg
 	await manual.run({ payload: goldenPath });
 	assert.strictEqual(manual.sent[0].result.toneBlemish.marginPx, 9);
 	assert.strictEqual(manual.sent[0].result.toneBlemish.marginTrained, false);
+	assert.strictEqual(manual.sent[0].result.toneBlemish.marginMinPx, 9);
+});
+
+// One frame is not the rig: consecutive training frames merge, the worst
+// each tile saw, and a frame that is not training ends the run.
+test("a training run keeps the worst register slack over its frames", async () => {
+	const dir = await tmpDir();
+	const goldenPath = path.join(dir, "golden.png");
+	const xformPath = path.join(dir, "transform.json");
+	const goldenBuf = await png(labelSvg(900, 1300));
+	await fsp.writeFile(goldenPath, goldenBuf);
+	// the same label with one band of it 8 px to the right: a patch of
+	// substrate that sat differently, which no global fit removes
+	const band = { left: 0, top: 300, width: 900, height: 220 };
+	const shifted = await sharp(goldenBuf)
+		.composite([{ input: await sharp(goldenBuf).extract(band).toBuffer(), left: 8, top: band.top }])
+		.png()
+		.toBuffer();
+	const cfg = { ...NODE_CFG, goldenPath, transformFilePath: xformPath, localAlign: true, localAlignTile: 96, localAlignMax: 3 };
+
+	const train = makeNode({ ...cfg, trainTransform: true });
+	await train.run({ payload: goldenPath });
+	const one = JSON.parse(await fsp.readFile(xformPath, "utf8"));
+	await train.run({ payload: shifted });
+	const two = JSON.parse(await fsp.readFile(xformPath, "utf8"));
+	assert.strictEqual(train.errors.length, 0, train.errors.join("\n"));
+	assert.strictEqual(one.register.frames, 1);
+	assert.strictEqual(two.register.frames, 2);
+	assert.ok(two.registerSlackPx >= one.registerSlackPx, `${two.registerSlackPx} < ${one.registerSlackPx}`);
+	assert.ok(
+		two.register.slack.slackPx.every((v, i) => v >= one.register.slack.slackPx[i]),
+		"the merged map must be at least the first frame's everywhere",
+	);
+	assert.ok(two.registerSlackPx > one.registerSlackPx, "the shifted frame must raise the slack somewhere");
+
+	// a frame that is not training ends the run; the next training frame starts over
+	await train.run({ payload: goldenPath, trainTransform: false });
+	await train.run({ payload: goldenPath, trainTransform: true });
+	const fresh = JSON.parse(await fsp.readFile(xformPath, "utf8"));
+	assert.strictEqual(fresh.register.frames, 1);
 });
 
 // ---- FW2.4: mm/px conversion uses the calibration photo's resolution ---

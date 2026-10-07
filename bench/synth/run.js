@@ -41,6 +41,9 @@
 const fs = require("node:fs");
 const path = require("node:path");
 const { prepareGolden, compareFrame } = require("../../lib/compare.js");
+const { mergeRegister } = require("../../lib/localAlign.js");
+// clean frames of the run preset the register slack is trained over
+const TRAIN_REGISTER_FRAMES = 3;
 const { shutdown } = require("../../lib/pool.js");
 const score = require("./score.js");
 
@@ -207,10 +210,8 @@ async function runSet(opts) {
 	const train = opts.train == null ? !!manifest.rig : !!opts.train;
 	let trained = opts.trained || null;
 	if (train && !trained) {
-		const frame =
-			manifest.cases.find((c) => c.id.startsWith(`clean-${manifest.preset}-`)) ||
-			manifest.cases.find((c) => c.family === "clean") ||
-			manifest.cases[0];
+		const cleans = manifest.cases.filter((c) => c.id.startsWith(`clean-${manifest.preset}-`));
+		const frame = cleans[0] || manifest.cases.find((c) => c.family === "clean") || manifest.cases[0];
 		const r = await compareFrame(
 			fs.readFileSync(path.resolve(setDir, frame.frame)),
 			golden,
@@ -223,13 +224,27 @@ async function runSet(opts) {
 			: r.match.grade === "poor"
 				? `the training frame registered poorly (${r.transform.score.toFixed(3)})`
 				: null;
+		// the register slack as the node trains it: the worst over a few
+		// clean frames, since one frame sits where it sits
+		let register = r.register;
+		if (!refused) {
+			for (const c of cleans.slice(1, TRAIN_REGISTER_FRAMES)) {
+				const more = await compareFrame(fs.readFileSync(path.resolve(setDir, c.frame)), golden, {
+					...cfg,
+					pinnedScale: { mx: r.transform.scaleX, my: r.transform.scaleY },
+					measureRegister: true,
+				});
+				register = mergeRegister(register, more.register);
+			}
+		}
 		trained = {
 			frame: frame.id,
 			mx: r.transform.scaleX,
 			my: r.transform.scaleY,
 			score: r.transform.score,
-			register: r.register,
-			slackPx: r.register ? r.register.slackPx : null,
+			register,
+			slackPx: register ? register.slackPx : null,
+			slackMap: register ? register.slack : null,
 			refused,
 		};
 	}
@@ -243,6 +258,7 @@ async function runSet(opts) {
 			!(opts.cfg && opts.cfg.toneMargin != null)
 		) {
 			cfg.toneMargin = trained.slackPx;
+			cfg.toneSlackMap = trained.slackMap;
 		}
 	}
 
@@ -431,7 +447,10 @@ function buildMarkdown(report, sweep) {
 				? ` Pinned to mx ${num(report.meta.trained.mx, 4)}, my ${num(report.meta.trained.my, 4)} ` +
 					`trained on \`${report.meta.trained.frame}\`` +
 					(report.meta.trained.register
-						? `, register p98 ${num(report.meta.trained.register.p98Px, 2)} px -> tone slack ${report.meta.trained.slackPx} px`
+						? `, register over ${report.meta.trained.register.frames} frame(s) p98 ${num(report.meta.trained.register.p98Px, 2)} px -> tone slack ${report.meta.trained.slackPx} px` +
+							(report.meta.trained.slackMap
+								? ` (${Math.min(...report.meta.trained.slackMap.slackPx)}-${Math.max(...report.meta.trained.slackMap.slackPx)} per tile)`
+								: "")
 						: "") +
 					"."
 				: report.meta.trained

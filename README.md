@@ -249,10 +249,14 @@ verdict by different routes.
      that close to ink. The slack is a rig number, not an artwork one, so
      with **from training** ticked (`toneMarginAuto`, the default) it
      comes from the trained transform: training measures how far off
-     register the frame still sits after the local alignment and writes
-     the slack down (`registerSlackPx`), and the number on the node is
-     only the fallback for an untrained rig. Untick it to set the slack
-     by hand. `toneThreshold` 0 switches the check off; a golden whose paper
+     register the frame still sits after the local alignment, tile by
+     tile, and writes the slack down (`registerSlackPx` for the worst
+     tile, `register.slack` for the map), and each tile runs with its
+     own - a corner of the label at 5 px does not cost the rest of it,
+     which sits at 2, a dot on a line. The number on the node is only
+     the fallback for an untrained rig. Untick it to set one slack by
+     hand. `msg.result.toneBlemish.marginMinPx` / `marginMaxPx` say what
+     a frame ran with. `toneThreshold` 0 switches the check off; a golden whose paper
      and ink cannot be told apart, or a frame showing too little of
      either, leaves the check off with a `reason` on the result and one
      warning per golden.
@@ -1331,7 +1335,13 @@ nothing is found at all, one message with `msg.text = null` and
   the slack the tone and speck checks need from it (`registerSlackPx`:
   the worst tile whose neighbours moved with it, plus one for the blur -
   a barcode shifted by one period matches as well as the truth, so a
-  tile on its own is not believed; `register` has the measurement). With the checks' **from training** box ticked, later
+  tile on its own is not believed; `register` has the measurement, and
+  `register.slack` the same per tile, each tile its own residual plus
+  one, spread one tile outward). One frame is not the rig: consecutive
+  training frames merge, the worst each tile saw, so leave the box
+  ticked for a handful of good parts that sit on the tray the way parts
+  do, then untick it (a frame that is not training ends the run).
+  With the checks' **from training** box ticked, later
   frames run with that slack; `msg.result.toneBlemish.marginPx` and
   `marginTrained` say what a frame ran with. To train from any two
   images rather than the configured golden, send `msg.golden` alongside

@@ -17,7 +17,14 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   transform record (`registerSlackPx`: the worst tile whose neighbours
   moved with it plus one for the blur - a barcode shifted by one period
   matches as well as the truth, so a tile on its own is not believed -
-  with the measurement under `register`). With
+  with the measurement under `register` and the same per tile under
+  `register.slack`, each tile its own residual plus one, spread one tile
+  outward). The checks apply it per tile: the rig that needs 5 px in one
+  corner of the label runs at 2 px over the rest, where one slack for
+  the whole label had swallowed a 9x11 px dot on a printed line.
+  Consecutive training frames merge, the worst each tile saw: the frame
+  that rig was first trained on sat in register at a corner where the
+  next five good parts were 3-5 px off. With
   **from training** ticked on the node (`toneMarginAuto`, the default)
   every pinned frame runs with that slack and the node's number is only
   the fallback for an untrained rig; `msg.result.toneBlemish.marginPx`

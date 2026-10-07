@@ -481,3 +481,35 @@ choosing them, and the rig gets the 5 it needs; the fixed default of 6
 was costing the benches 5 points for register they do not have. The
 measurement is ~220 ms once, on the training frame. A transform file
 trained before this has no slack in it: retrain once.
+
+## 2026-10-07: the slack as a map, trained over frames
+
+The rig's register is not the same everywhere: the tile under the dotted
+icon sat at 1.8 px while the left column needed 5. The training frame
+now measures the residual per tile - each axis from the edges that can
+see it, since a bar's long edges are blind to a shift along the bar and
+drowned its end's few pixels; an axis a tile cannot see borrows the
+worst seen along that axis nearby - and writes a map, each tile its own
+residual plus one, spread one tile outward. Consecutive training frames
+merge, the worst each tile saw: the first frame trained on sat in
+register at the corner where the next five good frames were 3-5 px off.
+
+| set | trained on | slack | recall / verdicts | false fails |
+| --- | --- | --- | --- | --- |
+| synthetic rig set | 3 clean frames | 2-3 per tile | 84.1% (flat 3: 81.0%, flat 6: 76.2%) | 2 / 24, unchanged |
+| real-artwork set | 3 clean frames | 2-4 per tile | 87.7% (flat 3: 86.2%, flat 6: 81.5%) | 0 / 22 |
+| rig, 150 good + 14 bad, `localAlignMax` 3 | 6 good frames | 2-5 | bad 12 / 14 fail | good 2 / 150 (one specks, one print) |
+| rig, same, `localAlignMax` 3 | 30 good frames | 2-6 | bad 12 / 14 fail | good 1 / 150 (print, pre-existing) |
+| rig, same, `localAlignMax` 6 | 30 good frames | 2-5 | bad 13 / 14 fail | good 0 / 150 |
+
+Six training frames left one good frame with eight small specks the map
+had not seen; thirty left none. The two dots on the icon's outline are
+the two bad frames that pass at `localAlignMax` 3: the map gives their
+tile 3 px and exposes 13-22 px of each 44-52 px dot, under the 48 px
+speck gate. At `localAlignMax` 6 the register tightens enough that the
+background check catches one of them outright, the other stands as a
+22 px speck while no good frame of 150 has one over 9 px - a
+`speckMaxArea` of 20 would take it with nothing lost - and the
+pre-existing print false fail goes too, for 40 ms a frame on this box
+(472 ms mean against ~430). The per-tile map and the training run are
+what shipped; `localAlignMax` and the speck gate are the node's numbers.

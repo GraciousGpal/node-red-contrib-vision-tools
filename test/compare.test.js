@@ -377,6 +377,49 @@ test("a training frame measures the register residual and the slack it needs", a
 	assert.strictEqual(none.register, null);
 });
 
+// The slack is the rig's and not the same everywhere on it. With three
+// bars off register and the rest of the label true, the map allows the
+// shift where the bars are and next to nothing elsewhere - so a dot on a
+// line in the true part, which one slack for the whole label would
+// swallow, is seen.
+test("a per-tile slack map allows the register where it is and sees a dot on a line where it is not", async () => {
+	const goldenBuf = await png(labelSvg(1200, 1600));
+	const golden = await prepareGolden(goldenBuf, cfg());
+	const aligned = { localAlign: true, localAlignTile: 96, localAlignMax: 3 };
+	const shift = { localShift: { from: 3, to: 6, px: 8 } };
+	const trained = await compareFrame(await png(labelSvg(1200, 1600, shift)), golden, cfg({ ...aligned, measureRegister: true }));
+	const map = trained.register.slack;
+	assert.ok(map && map.slackPx.length === map.gridW * map.gridH, JSON.stringify(trained.register));
+	const lo = Math.min(...map.slackPx);
+	const hi = Math.max(...map.slackPx);
+	assert.ok(hi >= 3 && lo < hi, `the map should vary over the label: ${lo}-${hi}`);
+	assert.strictEqual(hi, trained.register.slackPx);
+
+	// a 4 px dot 2 px under the eleventh bar, far from the shifted ones
+	const bar = Math.round(1600 * 0.68) + Math.round(1600 * 0.022);
+	const dot = { extraRects: [{ x: 420, y: bar + 3, w: 6, h: 6 }] };
+	const frame = await png(labelSvg(1200, 1600, { ...shift, ...dot }));
+	const checks = { ...TONE, speckThreshold: 0.3, speckMinArea: 2, speckMaxCount: 8, speckMaxArea: 48 };
+
+	const flat = await compareFrame(frame, golden, cfg({ ...aligned, ...checks, toneMargin: hi }));
+	assert.strictEqual(flat.toneBlemish.pass && flat.speckBlemish.pass, true, "one slack for the whole label swallows the dot");
+	assert.strictEqual(flat.toneBlemish.slackMapApplied, false);
+
+	const mapped = await compareFrame(frame, golden, cfg({ ...aligned, ...checks, toneMargin: hi, toneSlackMap: map }));
+	assert.strictEqual(mapped.toneBlemish.slackMapApplied, true);
+	assert.strictEqual(mapped.toneBlemish.slackMin, lo);
+	assert.strictEqual(mapped.toneBlemish.slackMax, hi);
+	assert.ok(mapped.speckBlemish.count >= 1, `the map should expose the dot: ${JSON.stringify(mapped.speckBlemish.regions)}`);
+	// and the shifted bars are still not a defect
+	const clean = await compareFrame(await png(labelSvg(1200, 1600, shift)), golden, cfg({ ...aligned, ...checks, toneMargin: hi, toneSlackMap: map }));
+	assert.strictEqual(clean.toneBlemish.pass && clean.speckBlemish.pass, true, JSON.stringify([clean.toneBlemish.regions, clean.speckBlemish.regions]));
+
+	// a map for another grid is refused, not misapplied
+	const other = await compareFrame(frame, golden, cfg({ ...aligned, ...checks, toneMargin: hi, toneSlackMap: { ...map, gridW: map.gridW + 1 } }));
+	assert.strictEqual(other.toneBlemish.slackMapApplied, false);
+	assert.strictEqual(other.toneBlemish.slackMin, hi);
+});
+
 test("faded print that still binarizes as ink fails the tone check", async () => {
 	const goldenBuf = await png(labelSvg(1200, 1600));
 	// #707070 is well under the Otsu level, so every bar is still ink to
