@@ -546,3 +546,30 @@ frame will be.
 Retrained on the rig over the same 30 good frames at `localAlignMax` 6:
 map 2-5 px, worst residual 3.0 px, 148 of 148 good pass and 14 of 14
 bad fail at `speckMaxArea` 20, the two dots at 22 and 24 px.
+
+## 2026-10-07: the frame time back
+
+With the preview on, the rig's node took 455-570 ms a frame against the
+200 it had before the tone and speck checks. Split on the rig (the
+installed node driven in-process, 12 pool workers, working size 2125):
+the inspection's own stages summed to ~315 ms and ~150 ms was outside
+them - the inspector worker's reply copying five raw heat maps and a
+dozen stage images, 60 MB, to the main thread every frame. A
+performance pass moved those buffers instead of copying them, put the
+golden's stages in shared memory once, decided each heat-map block once
+rather than per pixel, split the tone check's two passes over the pool
+with whole-grey-level tables, and let the local alignment stop scoring
+an offset once it cannot win. Verdicts, regions and images are
+byte-identical: zero differences over the 87-case synthetic rig set,
+the 87-case real-artwork set and the rig's 162 frames.
+
+| rig, per frame | before | after |
+| --- | ---: | ---: |
+| preview on | 508-683 ms | 268-340 ms |
+| preview off | 219-398 ms | 157-267 ms |
+
+What is left with the preview on is ~100 ms of align, 35-90 ms of
+tone (the spread is the pool workers' own collections landing on the
+tone dispatch), and ~60 ms of rendering the heat maps and stages the
+viewer may never open; rendering those only while a viewer is attached
+is the next step if the preview's cost matters.

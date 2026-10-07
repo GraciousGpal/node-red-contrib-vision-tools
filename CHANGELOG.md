@@ -283,6 +283,20 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Fixed
 
+- **A frame with the preview on took 500 ms where it had taken 200.** Most
+  of the difference was never inside the inspection: under `heatmapFormat`
+  "raw" with the preview on, a frame carries five heat maps and a dozen
+  stage images at working size, some 60 MB at 3 MP, and the inspector
+  worker's reply copied every byte to the main thread. The worker now
+  moves those buffers (the golden's own stages sit in shared memory once,
+  from `prepareGolden`), the heat maps decide each block once rather than
+  per pixel, the masks write only their set pixels, the tone check's two
+  passes run over the worker pool with whole-grey-level tables, and the
+  local alignment stops scoring an offset once it cannot win. Every
+  verdict, region and image is byte-identical; on the rig a frame is
+  268-340 ms with the preview on (from 508-683) and 157-267 without (from
+  219-398), 12 pool workers at working size 2125.
+
 - **A node saved before a setting existed lost that setting's default in
   the editor.** Node-RED fills in nothing for a property an older node
   has no value for, so a box added since rendered unticked and a number

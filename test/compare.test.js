@@ -597,6 +597,28 @@ test("pinholes inside a bar fail the speck check by count", async () => {
 	assert.strictEqual(on.speckBlemish.pass, false);
 });
 
+// The tone check's two passes run over the worker pool when the frame is
+// big enough; the verdict must not depend on how many cores ran it.
+test("the tone and speck checks give the same answer over the pool and on one thread", async () => {
+	const goldenBuf = await png(labelSvg(1200, 1600));
+	const golden = await prepareGolden(goldenBuf, cfg({ debugStages: true, heatmapFormat: "raw" }));
+	const blob = { x: 650, y: 1250, w: 160, h: 120, fill: "#999" };
+	const dust = Array.from({ length: 12 }, (_, i) => ({ x: 200 + i * 60, y: 1500, w: 3, h: 3 }));
+	const frame = await png(labelSvg(1200, 1600, { extraBlob: blob, extraRects: dust }));
+	const settings = { ...SPECKS, debugStages: true, heatmapFormat: "raw", outputToneHeatmap: true, outputSpeckHeatmap: true };
+	const serial = await compareFrame(frame, golden, cfg({ ...settings, workers: 1 }));
+	const pooled = await compareFrame(frame, golden, cfg({ ...settings, workers: 0 }));
+	assert.strictEqual(serial.toneBlemish.defectRatio, pooled.toneBlemish.defectRatio);
+	assert.deepStrictEqual(serial.toneBlemish.regions, pooled.toneBlemish.regions);
+	assert.deepStrictEqual(
+		[serial.speckBlemish.count, serial.speckBlemish.area, serial.speckBlemish.largest, serial.speckBlemish.regions],
+		[pooled.speckBlemish.count, pooled.speckBlemish.area, pooled.speckBlemish.largest, pooled.speckBlemish.regions],
+	);
+	assert.ok(Buffer.from(serial.stages.toneDeviation.data).equals(Buffer.from(pooled.stages.toneDeviation.data)), "the deviation map must match byte for byte");
+	assert.ok(Buffer.from(serial.toneBlemish.heatmap.data).equals(Buffer.from(pooled.toneBlemish.heatmap.data)));
+	assert.ok(Buffer.from(serial.speckBlemish.heatmap.data).equals(Buffer.from(pooled.speckBlemish.heatmap.data)));
+});
+
 test("one spatter fails the speck check on its size, and a clean frame has no specks", async () => {
 	const goldenBuf = await png(labelSvg(1200, 1600));
 	const golden = await prepareGolden(goldenBuf, cfg());
