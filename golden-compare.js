@@ -24,7 +24,7 @@ const {
 	readTransformFile,
 	writeTransformFile,
 } = require("./lib/transformFile.js");
-const { mergeRegister } = require("./lib/localAlign.js");
+const { mergeRegister, slackLevel } = require("./lib/localAlign.js");
 const nuisance = require("./lib/nuisanceMap.js");
 const {
 	clampInt,
@@ -911,10 +911,13 @@ module.exports = (RED) => {
 						trainedScore = trained.record.alignScore;
 						// the register slack training measured, when this record
 						// has one and the node is set to take it
-						// a slack sent on the message is an override, not a fallback
+						// a slack sent on the message is an override, not a fallback;
+						// the record's is rounded to the levels the map runs at,
+						// which a record trained before the levels is not
+						const sentMargin = msg.toneMargin != null && Number.isFinite(Number(msg.toneMargin));
 						const slack = trained.record.registerSlackPx;
-						if (cfg.toneMarginAuto && msg.toneMargin == null && Number.isFinite(slack) && slack >= 0 && slack <= 50) {
-							cfg.toneMargin = Math.round(slack);
+						if (cfg.toneMarginAuto && !sentMargin && Number.isFinite(slack) && slack >= 0 && slack <= 50) {
+							cfg.toneMargin = slackLevel(Math.round(slack));
 							trainedSlack = cfg.toneMargin;
 							// and per tile, where the record has it; compareFrame
 							// checks it against the golden's grid
@@ -1001,73 +1004,83 @@ module.exports = (RED) => {
 				if (training) {
 					// A frame that did not register is not a measurement of the
 					// rig: its tiles read large coherent offsets, and merged in they
-					// would blind the checks there for the rest of the run.
+					// would blind the checks there for the rest of the run - and its
+					// scale is nobody's either, so the record stands as it was.
 					const usable =
 						result.match.grade !== "poor" && !result.match.labelMissing && !result.match.mismatchSuspected;
 					if (!usable) {
 						node.warn(
 							`training frame registered ${result.match.labelMissing ? "no label" : result.match.grade} ` +
-								`(${result.transform.score.toFixed(3)}); its register measurement was not used`,
+								`(${result.transform.score.toFixed(3)}); nothing was trained from it`,
 						);
-					} else if (result.register && result.register.beyond > 0) {
-						node.warn(
-							`training frame: ${result.register.beyond} tile(s) sit 16 px or more off register ` +
-								"and were not measured; check the rig before trusting the slack",
-						);
-					}
-					const run = node.registerRun;
-					const measured = usable ? result.register : null;
-					const register =
-						run && run.goldenKey === goldenKey ? mergeRegister(run.register, measured) : measured;
-					const pin =
-						run && run.goldenKey === goldenKey && run.pin
-							? run.pin
-							: usable
-								? { mx: result.transform.scaleX, my: result.transform.scaleY }
-								: null;
-					node.registerRun = register || pin ? { goldenKey, register, pin } : null;
-					const record = {
-						scaleX: result.transform.scaleX,
-						scaleY: result.transform.scaleY,
-						stretchPercent: result.transform.stretchPercent,
-						angleDeg: result.transform.angleDeg,
-						alignScore: result.transform.score,
-						// how far off register the frames of this training run sat
-						// after the local alignment, and the slack the tone and
-						// speck checks take from it on later frames (Register slack
-						// "from training")
-						register,
-						registerSlackPx: register ? register.slackPx : null,
-						goldenKey,
-						// what the record is really tied to: the golden's bytes, so
-						// the same image still matches when it arrives by a different
-						// route than the one it was trained through
-						goldenContentKey: await goldenContentKey(),
-						workingSize: cfg.workingSize,
-						goldenWidth: goldenMeta.width,
-						goldenHeight: goldenMeta.height,
-						trainedAt: new Date().toISOString(),
-					};
-					if (!node.transformFilePath) {
-						throw new Error(
-							"training needs a Trained transform path to write to - set one on the node",
-						);
-					}
-					await writeTransformFile(node.transformFilePath, record);
-					msg.trainedTransform = record;
-					node.log(
-						`trained transform: scaleX=${record.scaleX.toFixed(5)} ` +
-							`scaleY=${record.scaleY.toFixed(5)} stretch=${record.stretchPercent.toFixed(2)}% ` +
-							`alignScore=${record.alignScore.toFixed(4)}` +
-							(record.register
-								? ` register(frames=${record.register.frames} p98=${record.register.p98Px.toFixed(1)}px max=${record.register.maxPx.toFixed(1)}px` +
-									` beyond=${record.register.beyond}) -> tone slack ${record.registerSlackPx}px` +
-									(record.register.slack
-										? ` (${Math.min(...record.register.slack.slackPx)}-${Math.max(...record.register.slack.slackPx)} per tile)`
-										: "")
-								: "") +
-							` -> ${node.transformFilePath}`,
-					);
+					} else {
+						if (result.register && result.register.beyond > 0) {
+							node.warn(
+								`training frame: ${result.register.beyond} tile(s) sit 16 px or more off register ` +
+									"and were not measured; check the rig before trusting the slack",
+							);
+						}
+						const run = node.registerRun && node.registerRun.goldenKey === goldenKey ? node.registerRun : null;
+						const register = run ? mergeRegister(run.register, result.register) : result.register;
+						// the run's pin is its first frame that registered well; a
+						// marginal one keeps solving free until a good one comes
+						let pin = run ? run.pin : null;
+						if (!pin && result.match.grade === "good") {
+							pin = { mx: result.transform.scaleX, my: result.transform.scaleY };
+						} else if (!pin && !(run && run.warnedMarginal)) {
+							node.warn(
+								`training frame registered ${result.match.grade} (${result.transform.score.toFixed(3)}); ` +
+									"the run pins its scale on the first frame that registers well",
+							);
+						}
+						node.registerRun = {
+							goldenKey,
+							register,
+							pin,
+							warnedMarginal: (run && run.warnedMarginal) || !pin,
+						};
+						const record = {
+							scaleX: result.transform.scaleX,
+							scaleY: result.transform.scaleY,
+							stretchPercent: result.transform.stretchPercent,
+							angleDeg: result.transform.angleDeg,
+							alignScore: result.transform.score,
+							// how far off register the frames of this training run sat
+							// after the local alignment, and the slack the tone and
+							// speck checks take from it on later frames (Register slack
+							// "from training")
+							register,
+							registerSlackPx: register ? register.slackPx : null,
+							goldenKey,
+							// what the record is really tied to: the golden's bytes, so
+							// the same image still matches when it arrives by a different
+							// route than the one it was trained through
+							goldenContentKey: await goldenContentKey(),
+							workingSize: cfg.workingSize,
+							goldenWidth: goldenMeta.width,
+							goldenHeight: goldenMeta.height,
+							trainedAt: new Date().toISOString(),
+						};
+						if (!node.transformFilePath) {
+							throw new Error(
+								"training needs a Trained transform path to write to - set one on the node",
+							);
+						}
+						await writeTransformFile(node.transformFilePath, record);
+						msg.trainedTransform = record;
+						node.log(
+							`trained transform: scaleX=${record.scaleX.toFixed(5)} ` +
+								`scaleY=${record.scaleY.toFixed(5)} stretch=${record.stretchPercent.toFixed(2)}% ` +
+								`alignScore=${record.alignScore.toFixed(4)}` +
+								(record.register
+									? ` register(frames=${record.register.frames} p98=${record.register.p98Px.toFixed(1)}px max=${record.register.maxPx.toFixed(1)}px` +
+										` beyond=${record.register.beyond}) -> tone slack ${record.registerSlackPx}px` +
+										(record.register.slack
+											? ` (${Math.min(...record.register.slack.slackPx)}-${Math.max(...record.register.slack.slackPx)} per tile)`
+											: "")
+									: "") +
+								` -> ${node.transformFilePath}`,
+						);	}
 				} else {
 					node.registerRun = null;
 				}

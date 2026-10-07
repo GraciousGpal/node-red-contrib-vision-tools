@@ -362,7 +362,8 @@ test("a training run keeps the worst register slack over its frames", async () =
 	await train.run({ payload: blank });
 	const guarded = JSON.parse(await fsp.readFile(xformPath, "utf8"));
 	assert.strictEqual(guarded.register.frames, 2, "a frame with no label must not count");
-	assert.ok(train.warns.some((w) => /register measurement was not used/.test(w)), train.warns.join("\n"));
+	assert.deepStrictEqual(guarded, two, "a frame with no label must leave the record as it was");
+	assert.ok(train.warns.some((w) => /nothing was trained from it/.test(w)), train.warns.join("\n"));
 
 	// a frame that is not training ends the run; the next training frame starts over
 	await train.run({ payload: goldenPath, trainTransform: false });

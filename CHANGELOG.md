@@ -21,9 +21,10 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   node's number is the fallback for an untrained rig.
   `msg.result.toneBlemish.marginTrained` / `marginMinPx` / `marginMaxPx`
   say what a frame ran with, and a training frame carries
-  `msg.result.register`. A training frame that registered poorly or
-  found no label is not merged, and `msg.toneMargin` sent on a message
-  overrides the trained slack. Transform files trained before this have
+  `msg.result.register`. The slacks are rounded up to 2, 3, 4, 5, 6, 8,
+  10, 12 or 16 px. A training frame that registered poorly or found no
+  label trains nothing and leaves the record as it was, and
+  `msg.toneMargin` sent on a message overrides the trained slack. Transform files trained before this have
   no slack: retrain. Synthetic rig set 84.1% recall (flat 6 px: 76.2%),
   real artwork 87.7% (81.5%), no false fail added.
 

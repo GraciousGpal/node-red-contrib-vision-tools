@@ -1329,7 +1329,10 @@ nothing is found at all, one message with `msg.text = null` and
   only position and angle. The same frame also measures how far off
   register it still sits after the local alignment, tile by tile, and
   the record carries the slack the tone and speck checks take from it:
-  `registerSlackPx` for the worst tile and `register.slack` per tile.
+  `registerSlackPx` for the worst tile and `register.slack` per tile,
+  both rounded up to 2, 3, 4, 5, 6, 8, 10, 12 or 16 px. A training frame
+  that registers poorly or finds no label trains nothing and leaves the
+  record as it was.
   One frame is not the rig: consecutive training frames merge, the
   worst each tile saw - the frames after the first measured against its
   pin, as later frames will be - so leave the box ticked for a handful
