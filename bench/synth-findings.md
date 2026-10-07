@@ -271,8 +271,8 @@ So the third mechanism - anything under ~4 px closed by the dilation -
 got its own check. Dust and pinholes are one to three px each, 40 to
 2400 of them; no block ever gets dense and, after the blur, not enough
 of them are at ink level for the ratio. What they have is number.
-`speckThreshold` takes the tone deviation (so the same edge band and
-border are out) as pixel-level connected components of at least
+`speckThreshold` takes the tone deviation (so the same register slack and
+border apply) as pixel-level connected components of at least
 `speckMinArea` px and fails the part at `speckMaxCount` of them, or on
 one speck of `speckMaxArea` px - a single spatter no block gate sees.
 
@@ -296,8 +296,8 @@ the default is 8. The check costs ~10 ms a frame at `workingSize`
 What is left at the example flow's settings, 9 of 63: six `tiny`
 defects, and `scratch/light` at every size. A light scratch removes ink
 only where it crosses type - 10 to 220 changed pixels in total, as 2-4
-px gaps in 1-3 px strokes - and every gap sits inside the edge band
-both grey checks leave out and inside the dilation the print check
+px gaps in 1-3 px strokes - and every gap sits inside the register
+slack both grey checks allow and inside the dilation the print check
 applies. It is the last of the five mechanisms, and the only one left
 that is not a resolution question: it needs a line detector across the
 strokes, which nothing here is yet. On small-and-up alone the set is
@@ -379,3 +379,105 @@ the file entering the repository. Heat maps are off in the runner; to look
 at one frame, run `compareFrame` on it with `outputPrintHeatmap` and
 `outputBackgroundHeatmap` on and write the two buffers out - that is how
 the residual in the first section was seen to sit on strokes.
+
+## 2026-10-07: the tone check on a real rig
+
+Deployed, the tone and speck checks failed every good frame of a
+production tab whose print and background checks passed (`FAIL
+[tone+specks]`, alignment good at 0.019). Reproduced outside Node-RED
+with the tab's own pipeline - PDF artwork rendered at 400 dpi, the
+photo at half size through the rig's perspective calibration, the
+trained transform pinned, `inkMargin` 64, `blockSize` 8, `failThreshold`
+0.5 - the findings sat on one corner of the label: a vertical rule 5 px
+off register after the local alignment (`localAlignMax` at its default
+3 cannot move it further) booked as a 24x216 tone region at density
+0.63 on its far side and a 1x176 px "speck" along its edge, the logo
+next to it the same, and the label's own die-cut edge, 8-11 px inside
+the canvas, as a 3x256 speck. Raising `localAlignMax` to 6 cleared all
+of it, which is the proof it was register and not print.
+
+The first model cut `toneMargin` px either side of each *ink* edge and
+held every other pixel to the grey of exactly its own position, so a
+grey edge had no band at all and an ink edge off by more than the band
+failed on its far side. The check now accepts a pixel if the artwork
+predicts its grey anywhere within `toneMargin` px - the darkest and
+lightest golden grey in that window read the low and high tables - the
+same tolerance the binary checks have in `printTolerance`. Next to an
+edge the window spans paper to ink and accepts anything, which is the
+old band, graded, and now over grey edges too. The default went from 3
+to 6 and the border both checks skip from 8 to 16 px.
+
+On the rig, four good frames and two bad, `toneMargin` swept with the
+windowed check:
+
+| `toneMargin` | good frames passing | the bad frame with a real mark |
+| ---: | ---: | --- |
+| 3 | 1 / 4 | fails all four checks |
+| 4 | 4 / 4 | fails all four checks |
+| 6 | 4 / 4 | fails all four checks |
+| 8 | 4 / 4 | fails all four checks |
+
+At the default, six good frames of six pass. The other "bad" frame
+passes every check at 4 and up, as it did before the tone check
+existed; whatever marks it carries, nothing here sees them.
+
+One trap on the way: the paper and ink levels are sampled where the
+golden is pure paper or pure ink some px clear of the other class, and
+that clearance had been the register slack. Cut to a fixed 3 px so thin
+type at a small working size keeps some pure ink, every good frame
+failed again: a cell whose only ink is the 5 px rule sampled frame paper
+as its ink level, and the real ink around it was then "too dark". The
+clearance is the slack again, with 3 px only as the fallback when the
+slack leaves no pure ink.
+
+The slack costs sensitivity next to edges, and the two benches have
+perfect register, so they pay it for nothing. Synthetic rig set, pinned,
+package defaults (`failThreshold` 0.3), and the real-artwork set with
+the production settings:
+
+| `toneMargin` | synthetic rig recall | false fails | real-artwork recall | false fails |
+| ---: | ---: | ---: | ---: | ---: |
+| 3 (old band model) | 82.5% | 2 / 24 | 86.2% | 0 / 22 |
+| 3 | 81.0% | 2 / 24 | 86.2% | 0 / 22 |
+| 4 | 76.2% | 2 / 24 | 84.6% | 0 / 22 |
+| 5 | 76.2% | 2 / 24 | 81.5% | 0 / 22 |
+| 6 (default) | 76.2% | 2 / 24 | 81.5% | 0 / 22 |
+
+Every case lost between 3 and 6 was a speck-only detection within a few
+px of ink - `scratch/dark/large`, `mark/smudge/tiny`,
+`overprint/ghost/small`, `random/void-spots/tiny` on the synthetic set;
+`misprint/faded/medium`, `overprint/ghost/small`, `overprint/stroke/small`
+on the real artwork - and no wrong-place verdict or false fail moved. The
+default is 6 because the rig's own frames need 4 on the four measured
+and a default with no headroom fails good parts on a worse day, which is
+the complaint that started this. A rig with better register can set 3 or
+4 and have those cases back; so can `localAlignMax` 6, which cleared the
+rig's residual with the old model, at about 180 ms more a frame at 2125.
+
+## 2026-10-07: the slack is trained, not chosen
+
+The slack is a rig number - the same artwork wants 3 px on one rig and
+6 on another - so the training frame now measures it: after the local
+alignment, each tile is matched again with a 16 px search, and the
+worst tile whose neighbours moved with it, plus one for the blur, is
+written into the transform record as `registerSlackPx`. With *from
+training* ticked (the default) every pinned frame runs with that; the
+node's number is the fallback for an untrained rig. Two things fooled
+the first measurement and are now handled: a barcode or a line of type
+shifted by one period scores as well as the truth, so the far minimum
+is believed only when it beats the near one by half (a plain 16 px
+search put a dozen rig tiles at 14 px that sat at half a pixel), and
+along a straight edge every offset scores the same, so ties go to the
+smaller offset (an identical synthetic frame read 3.0 px before that).
+
+| set | measured | slack | recall | false fails |
+| --- | ---: | ---: | ---: | ---: |
+| rig photos, six good frames | max 3.0-3.9 px, 1-6 spurious tiles | 5 | all pass | 0 / 6 |
+| synthetic rig set | p98 1.13 px | 3 | 81.0% | 2 / 24 |
+| real-artwork set | p98 1.01 px | 3 | 86.2% | 0 / 22 |
+
+The two benches get their margin-3 numbers back without anyone
+choosing them, and the rig gets the 5 it needs; the fixed default of 6
+was costing the benches 5 points for register they do not have. The
+measurement is ~220 ms once, on the training frame. A transform file
+trained before this has no slack in it: retrain once.

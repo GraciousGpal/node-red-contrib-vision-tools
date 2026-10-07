@@ -235,7 +235,12 @@ type, which is a tenth of its blocks by area and never fills one. A third
 check, tone, runs on the aligned grey rather than on the mask: each pixel
 against the grey the artwork predicts for it - the golden's own grey
 mapped between the paper and ink levels of its neighbourhood - as a
-fraction of the span between them, through the same block stage. It is
+fraction of the span between them, through the same block stage; the
+prediction is taken anywhere within `toneMargin` px, since registration
+is never exact and a rule a few px off register is not a tone defect.
+That slack is a property of the rig, so training measures it - the
+residual the local alignment leaves, tile by tile, with a wider search -
+and writes it into the transform record for later frames to use. It is
 the only check that can see a smudge, a ghost or faded print, none of
 which crosses the ink threshold. A fourth, specks, takes the same deviation as pixel-level
 connected components and counts them, because dust and pinholes are a few

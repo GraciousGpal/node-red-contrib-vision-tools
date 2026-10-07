@@ -122,7 +122,10 @@ module.exports = (RED) => {
 		toneThreshold: { value: 0.3, float: [0, 1] },
 		// px either side of an ink edge the tone check leaves out: where
 		// blur and sub-pixel registration put legitimate grey
-		toneMargin: { value: 3, int: [0, 50] },
+		toneMargin: { value: 6, int: [0, 50] },
+		// the slack comes from the trained transform when it measured one;
+		// the number above is then the fallback for an untrained rig
+		toneMarginAuto: { value: true },
 		// The speck check: connected components of the same tone deviation,
 		// at this level, counted. Dust and pinholes are one to three px each
 		// and never make a block dense; what they have is number. 0 = off.
@@ -875,7 +878,9 @@ module.exports = (RED) => {
 				// Send msg.golden alongside msg.payload to train from any two
 				// images without disturbing the node's configured golden.
 				const training = cfg.trainTransform;
+				cfg.measureRegister = training;
 				let trainedScore = null;
+				let trainedSlack = null;
 				let pinRefused = null;
 				if (!training && node.transformFilePath) {
 					const trained = await readTransformFile(node.transformFilePath, {
@@ -893,6 +898,13 @@ module.exports = (RED) => {
 					} else if (trained) {
 						cfg.pinnedScale = { mx: trained.scaleX, my: trained.scaleY };
 						trainedScore = trained.record.alignScore;
+						// the register slack training measured, when this record
+						// has one and the node is set to take it
+						const slack = trained.record.registerSlackPx;
+						if (cfg.toneMarginAuto && Number.isFinite(slack) && slack >= 0 && slack <= 50) {
+							cfg.toneMargin = Math.round(slack);
+							trainedSlack = cfg.toneMargin;
+						}
 					}
 				}
 
@@ -973,6 +985,11 @@ module.exports = (RED) => {
 						stretchPercent: result.transform.stretchPercent,
 						angleDeg: result.transform.angleDeg,
 						alignScore: result.transform.score,
+						// how far off register the frame still sat after the local
+						// alignment, and the slack the tone and speck checks take
+						// from it on later frames (Register slack "from training")
+						register: result.register,
+						registerSlackPx: result.register ? result.register.slackPx : null,
 						goldenKey,
 						// what the record is really tied to: the golden's bytes, so
 						// the same image still matches when it arrives by a different
@@ -993,7 +1010,12 @@ module.exports = (RED) => {
 					node.log(
 						`trained transform: scaleX=${record.scaleX.toFixed(5)} ` +
 							`scaleY=${record.scaleY.toFixed(5)} stretch=${record.stretchPercent.toFixed(2)}% ` +
-							`alignScore=${record.alignScore.toFixed(4)} -> ${node.transformFilePath}`,
+							`alignScore=${record.alignScore.toFixed(4)}` +
+							(record.register
+								? ` register(p98=${record.register.p98Px.toFixed(1)}px max=${record.register.maxPx.toFixed(1)}px` +
+									` beyond=${record.register.beyond}) -> tone slack ${record.registerSlackPx}px`
+								: "") +
+							` -> ${node.transformFilePath}`,
 					);
 				}
 
@@ -1069,6 +1091,8 @@ module.exports = (RED) => {
 					match: result.match,
 					thresholds: result.thresholds,
 					localAlign: result.localAlign,
+					// a training frame's register measurement, else absent
+					...(result.register ? { register: result.register } : {}),
 					printBlemish: {
 						pass: result.printBlemish.pass,
 						defectRatio: result.printBlemish.defectRatio,
@@ -1092,6 +1116,10 @@ module.exports = (RED) => {
 						pass: result.toneBlemish.pass,
 						defectRatio: result.toneBlemish.defectRatio,
 						regions: result.toneBlemish.regions,
+						// the register slack the check ran with, and whether it
+						// came from the trained transform or the node's number
+						marginPx: cfg.toneMargin,
+						marginTrained: trainedSlack != null,
 						// the frame's paper and ink levels the check measured
 						// against, whole-frame; absent when the check did not run
 						...(result.toneBlemish.enabled

@@ -256,6 +256,40 @@ test("a refused trained transform says so on the message, not only in a warning"
 	assert.match(sent[0].result.transform.pinRefused, /different golden/);
 });
 
+// ---- the register slack is trained, not guessed ------------------------
+
+test("training measures the register slack and later frames take their tone margin from it", async () => {
+	const dir = await tmpDir();
+	const goldenPath = path.join(dir, "golden.png");
+	const xformPath = path.join(dir, "transform.json");
+	await fsp.writeFile(goldenPath, await png(labelSvg(900, 1300)));
+	const cfg = { ...NODE_CFG, goldenPath, transformFilePath: xformPath };
+
+	const train = makeNode({ ...cfg, trainTransform: true });
+	await train.run({ payload: goldenPath });
+	assert.strictEqual(train.errors.length, 0, train.errors.join("\n"));
+	const record = JSON.parse(await fsp.readFile(xformPath, "utf8"));
+	assert.ok(record.register && record.register.localised > 0, JSON.stringify(record.register));
+	assert.ok(Number.isInteger(record.registerSlackPx) && record.registerSlackPx >= 2, `slack ${record.registerSlackPx}`);
+	assert.strictEqual(train.sent[0].result.register.slackPx, record.registerSlackPx);
+	assert.strictEqual(train.sent[0].trainedTransform.registerSlackPx, record.registerSlackPx);
+
+	// the default: the trained slack, whatever number the node holds
+	const auto = makeNode({ ...cfg, trainTransform: false, toneMargin: 9 });
+	await auto.run({ payload: goldenPath });
+	assert.strictEqual(auto.errors.length, 0, auto.errors.join("\n"));
+	assert.strictEqual(auto.sent[0].result.transform.pinned, true);
+	assert.strictEqual(auto.sent[0].result.toneBlemish.marginPx, record.registerSlackPx);
+	assert.strictEqual(auto.sent[0].result.toneBlemish.marginTrained, true);
+	assert.strictEqual(auto.sent[0].result.register, undefined);
+
+	// opted out: the node's own number
+	const manual = makeNode({ ...cfg, trainTransform: false, toneMargin: 9, toneMarginAuto: false });
+	await manual.run({ payload: goldenPath });
+	assert.strictEqual(manual.sent[0].result.toneBlemish.marginPx, 9);
+	assert.strictEqual(manual.sent[0].result.toneBlemish.marginTrained, false);
+});
+
 // ---- FW2.4: mm/px conversion uses the calibration photo's resolution ---
 
 const MM_CFG = {

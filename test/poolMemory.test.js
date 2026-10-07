@@ -75,7 +75,7 @@ const CFG = {
 	failRatio: 0.002,
 	printMissingFraction: 0.5,
 	toneThreshold: 0.3,
-	toneMargin: 3,
+	toneMargin: 6,
 	speckThreshold: 0.3,
 	speckMinArea: 3,
 	speckMaxCount: 8,

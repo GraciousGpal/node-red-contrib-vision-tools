@@ -321,6 +321,62 @@ test("a grey smudge the ink threshold never sees fails the tone check, on the sm
 	assert.ok(on.timings.toneMs >= 0);
 });
 
+// Registration is never exact: on a real rig a rule sat 5 px off register
+// after the local alignment, and the first tone model booked its far
+// side as a tone region and its edge as a speck on every good part. A
+// pixel is held to the grey the artwork predicts anywhere within
+// toneMargin px, so a few px of register is not a defect.
+test("a bar a few px off register is not a tone defect within the slack", async () => {
+	const goldenBuf = await png(labelSvg(1200, 1600));
+	// three bars 8 px over: 5 working px at 1024, which no global fit
+	// removes; the local alignment is off so the shift reaches the check
+	const targetBuf = await png(labelSvg(1200, 1600, { localShift: { from: 3, to: 6, px: 8 } }));
+	const golden = await prepareGolden(goldenBuf, cfg());
+	const specks = { speckThreshold: 0.3, speckMinArea: 2, speckMaxCount: 8, speckMaxArea: 48 };
+
+	const tight = await compareFrame(targetBuf, golden, cfg({ ...TONE, ...specks, toneMargin: 2, localAlign: false }));
+	assert.strictEqual(tight.toneBlemish.pass && tight.speckBlemish.pass, false, "2 px of slack must not cover a 5 px shift");
+
+	const slack = await compareFrame(targetBuf, golden, cfg({ ...TONE, ...specks, toneMargin: 6, localAlign: false }));
+	assert.strictEqual(slack.toneBlemish.pass, true, `tone regions: ${JSON.stringify(slack.toneBlemish.regions)}`);
+	assert.strictEqual(slack.speckBlemish.pass, true, `specks: ${JSON.stringify(slack.speckBlemish.regions)}`);
+	// the slack is register, not blindness: the smudge still fails
+	const blob = { x: 650, y: 1250, w: 160, h: 120, fill: "#999" };
+	const smudged = await png(labelSvg(1200, 1600, { localShift: { from: 3, to: 6, px: 8 }, extraBlob: blob }));
+	const seen = await compareFrame(smudged, golden, cfg({ ...TONE, ...specks, toneMargin: 6, localAlign: false }));
+	assert.strictEqual(seen.toneBlemish.pass, false, "the smudge must still fail at 6 px of slack");
+});
+
+// The slack is a rig number, so training measures it: how far off
+// register the frame still sits after the alignment it was given, as the
+// worst coherent tile plus one for the blur.
+test("a training frame measures the register residual and the slack it needs", async () => {
+	const goldenBuf = await png(labelSvg(1200, 1600));
+	const golden = await prepareGolden(goldenBuf, cfg());
+	// measured after the alignment the node runs with: the global fit alone
+	// leaves a few px at the edges even of an identical frame
+	const aligned = { localAlign: true, localAlignTile: 96, localAlignMax: 3 };
+	const same = await compareFrame(goldenBuf, golden, cfg({ ...aligned, measureRegister: true }));
+	assert.ok(same.register && same.register.localised > 0, JSON.stringify(same.register));
+	assert.ok(same.register.maxPx < 1.5, `an identical frame measured ${same.register.maxPx} px`);
+	assert.strictEqual(same.register.slackPx, 2);
+	assert.ok(same.timings.registerMs >= 0);
+
+	// three bars 8 px over - 5 working px, past what the local alignment
+	// may move - leave a residual, and the slack measured from it is what
+	// the tone and speck checks need on that same frame
+	const shifted = await png(labelSvg(1200, 1600, { localShift: { from: 3, to: 6, px: 8 } }));
+	const off = await compareFrame(shifted, golden, cfg({ ...aligned, measureRegister: true }));
+	assert.ok(off.register.maxPx >= 1.5, `the shifted bars measured ${off.register.maxPx} px`);
+	assert.ok(off.register.slackPx >= 3 && off.register.slackPx <= 8, `slack ${off.register.slackPx}`);
+	const specks = { speckThreshold: 0.3, speckMinArea: 2, speckMaxCount: 8, speckMaxArea: 48 };
+	const checked = await compareFrame(shifted, golden, cfg({ ...aligned, ...TONE, ...specks, toneMargin: off.register.slackPx }));
+	assert.strictEqual(checked.toneBlemish.pass && checked.speckBlemish.pass, true, JSON.stringify([checked.toneBlemish.regions, checked.speckBlemish.regions]));
+
+	const none = await compareFrame(shifted, golden, cfg(aligned));
+	assert.strictEqual(none.register, null);
+});
+
 test("faded print that still binarizes as ink fails the tone check", async () => {
 	const goldenBuf = await png(labelSvg(1200, 1600));
 	// #707070 is well under the Otsu level, so every bar is still ink to

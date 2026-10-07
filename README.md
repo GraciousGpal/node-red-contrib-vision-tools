@@ -241,9 +241,18 @@ verdict by different routes.
      where it should be is a tone defect: a smudge at 70% opacity reads
      0.56, a ghosted second impression 0.46, a stain a few levels off
      paper 0.1-0.2 - none of which the two binary checks can see, because
-     none crosses the ink threshold. The `toneMargin` px either side of
-     an ink edge are left out, where blur and registration put legitimate
-     grey. `toneThreshold` 0 switches the check off; a golden whose paper
+     none crosses the ink threshold. Registration is never exact, so a
+     pixel is accepted if the artwork predicts its grey anywhere within
+     `toneMargin` (6) px of it - the darkest and lightest golden grey in
+     that window set the band - which is what lets blur and a few px of
+     register at an edge through, at the price of specks and hairlines
+     that close to ink. The slack is a rig number, not an artwork one, so
+     with **from training** ticked (`toneMarginAuto`, the default) it
+     comes from the trained transform: training measures how far off
+     register the frame still sits after the local alignment and writes
+     the slack down (`registerSlackPx`), and the number on the node is
+     only the fallback for an untrained rig. Untick it to set the slack
+     by hand. `toneThreshold` 0 switches the check off; a golden whose paper
      and ink cannot be told apart, or a frame showing too little of
      either, leaves the check off with a `reason` on the result and one
      warning per golden.
@@ -1316,8 +1325,17 @@ nothing is found at all, one message with `msg.text = null` and
   transform** with a **Trained transform** path set (or send
   `msg.trainTransform`), and the node measures `scaleX`/`scaleY` from that
   frame, writes them down, and pins them on every later frame — solving
-  only position and angle. To train from any two images rather than the
-  configured golden, send `msg.golden` alongside `msg.payload`.
+  only position and angle. The same frame also measures how far off
+  register it still sits after the local alignment, tile by tile with a
+  search wider than the local alignment's cap, and the record carries
+  the slack the tone and speck checks need from it (`registerSlackPx`:
+  the worst tile whose neighbours moved with it, plus one for the blur -
+  a barcode shifted by one period matches as well as the truth, so a
+  tile on its own is not believed; `register` has the measurement). With the checks' **from training** box ticked, later
+  frames run with that slack; `msg.result.toneBlemish.marginPx` and
+  `marginTrained` say what a frame ran with. To train from any two
+  images rather than the configured golden, send `msg.golden` alongside
+  `msg.payload`.
 
   It roughly halves the time (2.0–2.7x on this project's captures), but
   the reason to do it is accuracy: a search free to re-solve magnification

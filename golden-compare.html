@@ -157,7 +157,10 @@
     >
     <span class="node-input-hint" style="margin-left:10px; color:#999;"
       >measures magnification and press stretch once and writes them to the file
-      above; later frames reuse them and solve only position and angle. Send
+      above; later frames reuse them and solve only position and angle. It also
+      measures how far off register the frame still sits after the local
+      alignment and writes that down as the register slack the tone and speck
+      checks take. Send
       <code>msg.golden</code> with <code>msg.payload</code> to train from any
       two images. Untick when trained, or drive it per message with
       <code>msg.trainTransform</code></span
@@ -441,8 +444,8 @@
     <span class="node-input-hint" style="margin-left:10px; color:#999;"
       >independent checks: missing ink (print) vs. unwanted ink
       (background); edge margin is px of the golden's border no
-      check inspects; the ink-edge band is px either side of an ink edge
-      the tone and speck checks leave out</span
+      check inspects; register slack is px the tone and speck checks let
+      a pixel sit off register</span
     >
   </div>
   <div class="form-row">
@@ -458,7 +461,7 @@
     <label
       for="node-input-toneMargin"
       style="width:auto; margin-left:16px; margin-right:4px;"
-      >Ink-edge band</label
+      >Register slack</label
     >
     <input
       type="number"
@@ -467,11 +470,22 @@
       max="50"
       style="width:60px;"
     />
+    <label for="node-input-toneMarginAuto" style="width:auto; margin-left:8px;"
+      ><input
+        type="checkbox"
+        id="node-input-toneMarginAuto"
+        style="width:auto; vertical-align:top;"
+      />
+      from training</label
+    >
     <span class="node-input-hint" style="margin-left:10px; color:#999;"
       >a third check on grey: how far a pixel has moved along the
       paper-to-ink span measured nearby - a smudge, a ghost, faded print
-      the ink threshold never sees. 0 = off. The band is px either side of
-      an ink edge left out</span
+      the ink threshold never sees. 0 = off. Register slack: a pixel's
+      grey is accepted if the artwork predicts it anywhere within that
+      many px, since registration is never exact. "From training" takes
+      the slack the trained transform measured on this rig and keeps the
+      number as the fallback for an untrained one</span
     >
   </div>
   <div class="form-row">
@@ -808,10 +822,11 @@
         scaleX, scaleY, stretchPercent, pass }, transform: { pinned, native, nativeFallback?, seeded, pinRefused?, scaleX,
         scaleY, scale, stretchPercent, angleDeg, ox, oy, score }, match: {
         score, grade, coverage, labelMissing, mismatchSuspected, reason }, thresholds: { golden, target
-        }, localAlign: { tiles, localised, meanPx, medianPx, maxPx },
+        }, localAlign: { tiles, localised, meanPx, medianPx, maxPx }, register?: { tiles,
+        localised, spurious, beyond, searchPx, medianPx, p98Px, maxPx, slackPx },
         printBlemish: { pass, defectRatio, regions, worstMissing }, backgroundBlemish: { pass,
         defectRatio, regions, worstExcess, noveltyPass }, toneBlemish: { enabled, pass,
-        defectRatio, regions, paperLevel, inkLevel }, speckBlemish: { enabled, pass,
+        defectRatio, regions, paperLevel, inkLevel, marginPx, marginTrained }, speckBlemish: { enabled, pass,
         count, area, largest, regions } }</code
       >
       - a check that could not run (a golden with no ink, or none its
@@ -987,7 +1002,8 @@
       failRatio: { value: 0.002, validate: RED.validators.number(true) },
       printMissingFraction: { value: 0.5, validate: RED.validators.number(true) },
       toneThreshold: { value: 0.3, validate: RED.validators.number(true) },
-      toneMargin: { value: 3, validate: RED.validators.number(true) },
+      toneMargin: { value: 6, validate: RED.validators.number(true) },
+      toneMarginAuto: { value: true },
       speckThreshold: { value: 0.3, validate: RED.validators.number(true) },
       speckMinArea: { value: 3, validate: RED.validators.number(true) },
       speckMaxCount: { value: 8, validate: RED.validators.number(true) },

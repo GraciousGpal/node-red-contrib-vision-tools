@@ -8,6 +8,24 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Added
 
+- **The tone and speck checks take their register slack from training.**
+  `toneMargin` is a rig number - how far off register a frame still sits
+  after the local alignment - and no artwork can say it; the same PDF
+  wants 3 px on one rig and 6 on another. A training frame
+  (`trainTransform`) now measures it, tile by tile with a 16 px search
+  wider than the local alignment's cap, and writes the slack into the
+  transform record (`registerSlackPx`: the worst tile whose neighbours
+  moved with it plus one for the blur - a barcode shifted by one period
+  matches as well as the truth, so a tile on its own is not believed -
+  with the measurement under `register`). With
+  **from training** ticked on the node (`toneMarginAuto`, the default)
+  every pinned frame runs with that slack and the node's number is only
+  the fallback for an untrained rig; `msg.result.toneBlemish.marginPx`
+  and `marginTrained` say what a frame ran with, and a training frame
+  carries `msg.result.register`. The bench pins the same way. So a flow
+  that starts from the PDF and trains on one good frame gets the slack
+  its rig needs without anyone choosing it.
+
 - **`edgeMargin` on `golden-compare`: px of the golden's border, every side,
   that no blemish check inspects.** Default 0, so nothing changes until
   it is set. On a rig the substrate just past the label's die-cut edge
@@ -207,7 +225,8 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   own grey says it should - the neighbourhood's paper and ink levels,
   taken per 128 px cell so lighting cancels, with the golden's grey
   mapped between them, so a grey panel in the artwork is expected grey -
-  with `toneMargin` (3) px either side of an ink edge left out. Same
+  and accepts the pixel if the artwork predicts its grey anywhere within
+  `toneMargin` (6) px, since registration is never exact. Same
   block stage, same regions; `result.toneBlemish` with the measured
   `paperLevel` / `inkLevel`, `msg.toneHeatmap` (`outputToneHeatmap`, off
   by default - the overlay shows it), a `toneDeviation` stage, and
@@ -263,6 +282,30 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   free on the set (the package default stays 0.3).
 
 ### Fixed
+
+- **The tone and speck checks failed every good part on a real rig.** Their
+  first model cut a 3 px band either side of each ink edge and held every
+  other pixel to the grey of exactly its own position; a rig that leaves
+  a rule 5 px off register after the local alignment - which the binary
+  checks had been tuned around with `inkMargin` 64 - painted that rule's
+  far side as a tone region and its edge as a 180 px speck, on frames
+  whose print and background checks passed. A pixel is now accepted if the
+  artwork predicts its grey anywhere within `toneMargin` px (the darkest
+  and lightest golden grey in that window set the band), the way
+  `printTolerance` works for the binary checks, with the default raised
+  from 3 to 6 and the border the two checks skip from 8 to 16 px. The
+  levels are still sampled that far clear of the other class - 3 px of
+  clearance let a rule off register hand its cell frame paper as its ink
+  level - with 3 px as the fallback for artwork too thin to leave any
+  pure ink at a small working size. On the rig the good frames measured
+  pass at 4 px and up, six of six at the default; a bad one still fails
+  on all four checks. The slack costs sensitivity next to ink: on the
+  perfectly registered benches the default takes the synthetic rig set
+  from 82.5% to 76.2% recall and the real artwork from 86.2% to 81.5%,
+  every case lost a speck-only detection within a few px of an edge, no
+  false fail or wrong-place verdict moved. A rig with better register
+  can set 3-4 and have them back, or raise `localAlignMax` to 6 at some
+  180 ms a frame.
 
 - **The worker pool no longer holds on to finished frames.** A shared
   buffer is freed only when every thread that viewed it has let go, and

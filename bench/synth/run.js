@@ -90,7 +90,8 @@ function defaultCfg() {
 		failRatio: 0.002,
 		printMissingFraction: 0.5,
 		toneThreshold: 0.3,
-		toneMargin: 3,
+		toneMargin: 6,
+		toneMarginAuto: true,
 		speckThreshold: 0.3,
 		speckMinArea: 3,
 		speckMaxCount: 8,
@@ -213,7 +214,7 @@ async function runSet(opts) {
 		const r = await compareFrame(
 			fs.readFileSync(path.resolve(setDir, frame.frame)),
 			golden,
-			{ ...cfg },
+			{ ...cfg, measureRegister: true },
 		);
 		// a solve that did not find the label is not a pin: one bad solve
 		// would misregister the whole set and read as blemish false fails
@@ -227,11 +228,22 @@ async function runSet(opts) {
 			mx: r.transform.scaleX,
 			my: r.transform.scaleY,
 			score: r.transform.score,
+			register: r.register,
+			slackPx: r.register ? r.register.slackPx : null,
 			refused,
 		};
 	}
 	if (trained && !trained.refused) {
 		cfg.pinnedScale = { mx: trained.mx, my: trained.my };
+		// as the node does: the trained slack, unless the run set the
+		// margin itself (an override or the swept key)
+		if (
+			cfg.toneMarginAuto &&
+			trained.slackPx != null &&
+			!(opts.cfg && opts.cfg.toneMargin != null)
+		) {
+			cfg.toneMargin = trained.slackPx;
+		}
 	}
 
 	// The manifest states the golden's native size; prepareGolden measures
@@ -417,7 +429,11 @@ function buildMarkdown(report, sweep) {
 				: " Free geometry: each frame drew its own magnification.") +
 			(report.meta.trained && !report.meta.trained.refused
 				? ` Pinned to mx ${num(report.meta.trained.mx, 4)}, my ${num(report.meta.trained.my, 4)} ` +
-					`trained on \`${report.meta.trained.frame}\`.`
+					`trained on \`${report.meta.trained.frame}\`` +
+					(report.meta.trained.register
+						? `, register p98 ${num(report.meta.trained.register.p98Px, 2)} px -> tone slack ${report.meta.trained.slackPx} px`
+						: "") +
+					"."
 				: report.meta.trained
 					? ` Not pinned: ${report.meta.trained.refused}.`
 					: " Unpinned: the search solved magnification per frame."),
