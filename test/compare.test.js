@@ -412,14 +412,14 @@ test("a per-tile slack map allows the register where it is and sees a dot on a l
 
 	const flat = await compareFrame(frame, golden, cfg({ ...aligned, ...checks, toneMargin: hi }));
 	assert.strictEqual(flat.toneBlemish.pass && flat.speckBlemish.pass, true, "one slack for the whole label swallows the dot");
-	assert.strictEqual(flat.toneBlemish.slackMapApplied, false);
+	assert.strictEqual(flat.toneSlack.mapApplied, false);
 
 	const mapped = await compareFrame(frame, golden, cfg({ ...aligned, ...checks, toneMargin: hi, toneSlackMap: map }));
-	assert.strictEqual(mapped.toneBlemish.slackMapApplied, true);
+	assert.strictEqual(mapped.toneSlack.mapApplied, true);
 	// the map's values are rounded up to the levels the check keeps windows for
 	const level = (v) => [2, 3, 4, 5, 6, 8, 10, 12, 16].find((l) => l >= v);
-	assert.strictEqual(mapped.toneBlemish.slackMin, level(lo));
-	assert.strictEqual(mapped.toneBlemish.slackMax, level(hi));
+	assert.strictEqual(mapped.toneSlack.min, level(lo));
+	assert.strictEqual(mapped.toneSlack.max, level(hi));
 	assert.ok(mapped.speckBlemish.count >= 1, `the map should expose the dot: ${JSON.stringify(mapped.speckBlemish.regions)}`);
 	// and the shifted bars are still not a defect
 	const clean = await compareFrame(await png(labelSvg(1200, 1600, shift)), golden, cfg({ ...aligned, ...checks, toneMargin: hi, toneSlackMap: map }));
@@ -427,8 +427,8 @@ test("a per-tile slack map allows the register where it is and sees a dot on a l
 
 	// a map for another grid is refused, not misapplied
 	const other = await compareFrame(frame, golden, cfg({ ...aligned, ...checks, toneMargin: hi, toneSlackMap: { ...map, gridW: map.gridW + 1 } }));
-	assert.strictEqual(other.toneBlemish.slackMapApplied, false);
-	assert.strictEqual(other.toneBlemish.slackMin, hi);
+	assert.strictEqual(other.toneSlack.mapApplied, false);
+	assert.strictEqual(other.toneSlack.min, hi);
 });
 
 test("faded print that still binarizes as ink fails the tone check", async () => {

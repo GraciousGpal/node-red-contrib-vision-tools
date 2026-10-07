@@ -242,15 +242,13 @@ verdict by different routes.
      0.56, a ghosted second impression 0.46, a stain a few levels off
      paper 0.1-0.2 - none of which the two binary checks can see, because
      none crosses the ink threshold. Registration is never exact, so a
-     pixel is accepted if the artwork predicts its grey anywhere within
-     `toneMargin` (6) px of it - the darkest and lightest golden grey in
-     that window set the band - which is what lets blur and a few px of
-     register at an edge through, at the price of specks and hairlines
-     that close to ink. The slack is a rig number, so with **from
-     training** ticked (`toneMarginAuto`, the default) each tile of the
-     label runs with the slack training measured for it (see **Train the
-     transform**); the number on the node is the fallback for an
-     untrained rig, and unticking sets one slack by hand.
+     pixel is accepted if the artwork predicts its grey anywhere within a
+     register slack of it. That lets blur and a few px of register at an
+     edge through, at the price of specks and hairlines that close to
+     ink. With **from training** ticked (`toneMarginAuto`, the default)
+     each tile runs with the slack training measured for it (see **Train
+     the transform**); `toneMargin` (6) is the fallback for an untrained
+     rig, or the one slack when unticked.
      `msg.result.toneBlemish.marginMinPx` / `marginMaxPx` say what a
      frame ran with. `toneThreshold` 0 switches the check off; a golden whose paper
      and ink cannot be told apart, or a frame showing too little of
@@ -721,20 +719,21 @@ overlay and zoom you were on, and **Pause** holds again. The thumbnail
 under the node keeps following meanwhile.
 
 The node keeps one inspection per golden-compare node in memory for
-this, every stage at working size, and serves it over
+this - the thumbnail's picture, and every stage at working size while a
+viewer is open - and serves it over
 `GET /golden-compare/last/:id` (the verdict, timings and stage list) and
 `GET /golden-compare/last/:id/stage/:key` (one image, in the format the
 pipeline rendered it; `raw` is encoded on the way out). It survives a
 redeploy, not a restart, and a deleted node's goes with it. The viewer
 fetches each image as you step to it rather than all at once, so opening
 it costs one image, not fifteen. With no viewer open the preview renders
-only its thumbnail's picture, a few ms a frame, so it can stay on in
-production; the stages and the per-check heat maps are rendered while a
-viewer is open on the node (it says so with
+only its thumbnail's picture, about 17 ms a frame on the rig (199 ms
+mean against 182 with the preview off), so it can stay on in production; the stages and the per-check heat maps are
+rendered while a viewer is open on the node (it says so with
 `POST /golden-compare/last/:id/watch` every few seconds and lets go on
 close), and the frame it opens on is rendered in full then, from the
-frame the node kept. The message still carries only what the output
-boxes asked for.
+frame the node kept, while the inspector still holds the golden. The
+message still carries only what the output boxes asked for.
 
 ## How `checkerboard-calibrate` works
 
@@ -1338,8 +1337,9 @@ nothing is found at all, one message with `msg.text = null` and
   that registers poorly or finds no label trains nothing and leaves the
   record as it was.
   One frame is not the rig: consecutive training frames merge, the
-  worst each tile saw - the frames after the first measured against its
-  pin, as later frames will be - so leave the box ticked for a handful
+  worst each tile saw - the frames after the run's first well-registered
+  one measured against its scale, as later frames will be - so leave the
+  box ticked for a handful
   of good parts that sit on the tray the way parts do, then untick it (a
   frame that is not training ends the run). With the checks' **from
   training** box ticked, later frames run with that slack;

@@ -72,7 +72,7 @@ authoritative list.
 
 | file | role |
 | --- | --- |
-| `golden-compare.js` | Node-RED wiring: config and clamping, `msg` overrides, golden cache key, transform and nuisance-map training, logging; hands frames to `lib/inspector.js`. Keeps each node's last inspection (every stage, both heat maps) for the editor's stage viewer and serves it over two admin routes |
+| `golden-compare.js` | Node-RED wiring: config and clamping, `msg` overrides, golden cache key, transform and nuisance-map training, logging; hands frames to `lib/inspector.js`. Keeps each node's last inspection (the thumbnail's picture every frame; every stage and heat map while a viewer is open) for the editor's stage viewer and serves it over admin routes (last, stage, hold, watch) |
 | `lib/nodeInput.js` | input handling shared by every node: bounded `clampInt`/`clampFloat`/`pickMode` settings and the size-capped image loader for `msg.payload` / `msg.golden` (bytes, a path, or an object carrying `data`/`buffer`/`path`) |
 | `lib/inspector.js` | main-thread client for the inspection pipeline: one unref()'d worker per process, spawned on first use; runs the core inline when worker threads or `SharedArrayBuffer` are unavailable |
 | `lib/inspectorCore.js` | the pipeline behind one request/response surface (`prepare`, `inspect`, `calibrate`, `rectify`) plus the bounded prepared-golden store; same code on the worker and inline, no file I/O |
@@ -236,11 +236,11 @@ check, tone, runs on the aligned grey rather than on the mask: each pixel
 against the grey the artwork predicts for it - the golden's own grey
 mapped between the paper and ink levels of its neighbourhood - as a
 fraction of the span between them, through the same block stage; the
-prediction is taken anywhere within `toneMargin` px, since registration
-is never exact and a rule a few px off register is not a tone defect.
-That slack is a property of the rig, so training measures it per tile
-(lib/localAlign.js `measureRegister`, merged over consecutive training
-frames) and writes the map into the transform record for later frames. It is
+prediction is taken anywhere within a register slack, since
+registration is never exact. The slack belongs to the rig: training
+measures it per tile (lib/localAlign.js `measureRegister`, merged over
+consecutive training frames) and writes the map into the transform
+record, with `toneMargin` as the fallback for an untrained rig. It is
 the only check that can see a smudge, a ghost or faded print, none of
 which crosses the ink threshold. A fourth, specks, takes the same deviation as pixel-level
 connected components and counts them, because dust and pinholes are a few

@@ -156,10 +156,9 @@ module.exports = (RED) => {
 		heatmapFormat: { value: "jpg", modes: ["jpg", "png", "raw"] },
 		heatmapQuality: { value: 85, int: [1, 100] },
 		debugStages: { value: false },
-		// A thumbnail under the node on the flow canvas, and the whole
-		// pipeline behind it - every stage, both heat maps - kept for the
-		// editor's stage viewer. Diagnostic: it renders every stage on every
-		// frame, which is what "Output pipeline stages" costs.
+		// A thumbnail under the node on the flow canvas, and the pipeline
+		// behind it kept for the editor's stage viewer: the stages and
+		// per-check heat maps are rendered only while a viewer is open.
 		previewEnabled: { value: false },
 		previewWidth: { value: 260, int: [80, 600] },
 		trainTransform: { value: false },
@@ -423,16 +422,36 @@ module.exports = (RED) => {
 	const heldInspections = new Map();
 
 	/**
-	 * The viewers open on a node's preview, by node id, with when their
-	 * attention lapses: a viewer renews it every few seconds while open
-	 * and lets it go on close. The stages and the per-check heat maps are
-	 * rendered only while one is attached; the thumbnail every frame. A
-	 * viewer that opens on a frame rendered without them gets that one
-	 * frame rendered in full, once, from the frame the node kept for it.
+	 * The viewers open on a node's preview, by node id and then by the
+	 * viewer's own token, each with when its attention lapses: a viewer
+	 * renews it every few seconds while open and lets it go on close, and
+	 * one closing does not detach another on the same node. The stages and
+	 * the per-check heat maps are rendered only while one is attached; the
+	 * thumbnail every frame. A viewer that opens on a frame rendered
+	 * without them gets that one frame rendered in full, once, from the
+	 * frame the node kept for it, while the inspector still holds the
+	 * golden.
 	 */
 	const viewers = new Map();
 	const VIEWER_TTL_MS = 15000;
-	const viewerAttached = (id) => (viewers.get(id) || 0) > Date.now();
+	function viewerAttached(id) {
+		const byToken = viewers.get(id);
+		if (!byToken) return false;
+		const now = Date.now();
+		for (const [token, until] of byToken) if (until <= now) byToken.delete(token);
+		if (byToken.size === 0) viewers.delete(id);
+		return byToken.size > 0;
+	}
+	function attachViewer(id, token) {
+		if (!viewers.has(id)) viewers.set(id, new Map());
+		viewers.get(id).set(String(token || "viewer"), Date.now() + VIEWER_TTL_MS);
+	}
+	function detachViewer(id, token) {
+		const byToken = viewers.get(id);
+		if (!byToken) return;
+		byToken.delete(String(token || "viewer"));
+		if (byToken.size === 0) viewers.delete(id);
+	}
 
 	/** The entry a route should serve: the held one when its time is
 	 * asked for, else the latest. */
@@ -552,7 +571,7 @@ module.exports = (RED) => {
 			group: "verdict",
 			title: "Tone deviation",
 			description:
-				"How far each pixel's grey sits from what the artwork predicts for it - the golden's grey mapped between the paper and ink levels measured nearby - as a fraction of that span: white is ink where paper should be, or paper where ink should be. Blank within the ink-edge band and the canvas border, where blur, registration and the warp's fill put legitimate grey.",
+				"How far each pixel's grey sits from what the artwork predicts for it - the golden's grey mapped between the paper and ink levels measured nearby - as a fraction of that span: white is ink where paper should be, or paper where ink should be. Blank where the artwork predicts the grey within the register slack, and in the canvas border, where the warp's fill and the label's edge meet.",
 		},
 		{
 			key: "toneHeatmap",
@@ -669,20 +688,16 @@ module.exports = (RED) => {
 				for (const [key, spec] of Object.entries(SETTINGS)) {
 					cfg[key] = spec.fixed ? node[key] : readSetting(spec, msg[key], node[key]);
 				}
-				// The stage viewer needs every stage and every heat map whether
-				// or not the message is to carry them: render them when the
-				// preview is on, and put on the message only what was asked
-				// for. debugStages goes into the golden cache key below, so it
-				// must be settled here.
+				// The preview renders this frame's stages and per-check heat maps
+				// only while a viewer is attached (or the message asked for
+				// them), and the combined heat map every frame for the
+				// thumbnail; the message carries only what was asked for.
+				// debugStages is in the golden cache key below, so it is settled
+				// here.
 				const wantStages = cfg.debugStages;
 				const wanted = Object.fromEntries(HEATMAPS.map(([key, flag]) => [key, cfg[flag]]));
 				const attached = cfg.previewEnabled && viewerAttached(node.id);
 				if (cfg.previewEnabled) {
-					// the golden's own stages are baked once (debugStages is in
-					// its cache key); the frame's stages and the per-check heat
-					// maps are rendered only while a viewer is attached, or when
-					// the message asked for them; the thumbnail needs the one
-					// picture every frame
 					cfg.debugStages = true;
 					cfg.frameStages = wantStages || attached;
 					cfg.outputHeatmap = true;
@@ -904,10 +919,9 @@ module.exports = (RED) => {
 				const training = cfg.trainTransform;
 				cfg.measureRegister = training;
 				// The frames of a training run after the first are measured
-				// against the first one's scale, as every later frame will be:
-				// solved free, a frame's own scale error reads as register at
-				// the label's edges (4 px on a synthetic rig whose true residual
-				// was 1).
+				// against the scale of the run's first well-registered frame, as
+				// every later frame will be: solved free, a frame's own scale
+				// error reads as register at the label's edges.
 				if (training && node.registerRun && node.registerRun.goldenKey === goldenKey && node.registerRun.pin) {
 					cfg.pinnedScale = node.registerRun.pin;
 				}
@@ -932,9 +946,9 @@ module.exports = (RED) => {
 						trainedScore = trained.record.alignScore;
 						// the register slack training measured, when this record
 						// has one and the node is set to take it
-						// a slack sent on the message is an override, not a fallback;
-						// the record's is rounded to the levels the map runs at,
-						// which a record trained before the levels is not
+						// the trained slack when the record has one and
+						// toneMarginAuto is set; msg.toneMargin overrides it. A record
+						// trained before the levels existed is rounded here.
 						const sentMargin = msg.toneMargin != null && Number.isFinite(Number(msg.toneMargin));
 						const slack = trained.record.registerSlackPx;
 						if (cfg.toneMarginAuto && !sentMargin && Number.isFinite(slack) && slack >= 0 && slack <= 50) {
@@ -1101,7 +1115,8 @@ module.exports = (RED) => {
 											: "")
 									: "") +
 								` -> ${node.transformFilePath}`,
-						);	}
+						);
+					}
 				} else {
 					node.registerRun = null;
 				}
@@ -1314,13 +1329,19 @@ module.exports = (RED) => {
 					// thumbnail under the node. A preview is a diagnostic,
 					// never a reason to fail a frame that was inspected fine.
 					try {
-						await publishPreview(node, msg, result, cfg, verdictText, { cacheKey, cfg, frame });
+						await publishPreview(node, msg, result, cfg, verdictText, attached, { cacheKey, cfg, frame });
 					} catch (previewError) {
 						node.warn(`golden-compare preview: ${previewError.message}`);
 					}
-				} else if (node.previewShown && RED.comms) {
-					node.previewShown = false;
-					RED.comms.publish("golden-compare-preview", { id: node.id, clear: true });
+				} else {
+					// the preview is off: the last entry stays for the routes, but
+					// not the frame it kept for a viewer that will not come
+					const kept = lastInspections.get(node.id);
+					if (kept) kept.replay = null;
+					if (node.previewShown && RED.comms) {
+						node.previewShown = false;
+						RED.comms.publish("golden-compare-preview", { id: node.id, clear: true });
+					}
 				}
 				const pos = result.position;
 				const posStr =
@@ -1380,12 +1401,6 @@ module.exports = (RED) => {
 		});
 	}
 
-	/**
-	 * Store this frame's stages for the viewer and draw the thumbnail. The
-	 * thumbnail is the heat map of the channel that failed - or the print
-	 * one, which is the aligned frame with no blocks on it, when nothing
-	 * did - so the picture under the node says where, not just whether.
-	 */
 	/** Every image an inspection rendered, by stage key. */
 	function previewImages(result) {
 		const images = {};
@@ -1405,22 +1420,40 @@ module.exports = (RED) => {
 	 * entry kept the frame. False when there is nothing to do or the
 	 * golden has gone (the next frame renders in full anyway).
 	 */
-	async function renderInFull(entry) {
-		if (!entry.partial || !entry.replay) return false;
-		const { cacheKey, cfg, frame } = entry.replay;
-		const full = { ...cfg, frameStages: true };
-		for (const [, flag] of HEATMAPS) full[flag] = true;
-		const reply = await inspector.inspect({ cacheKey, cfg: full, frame });
-		if (reply.needGolden) return false;
-		entry.images = previewImages(reply.result);
-		entry.partial = false;
-		entry.replay = null;
-		return true;
+	function renderInFull(entry) {
+		if (!entry.partial || !entry.replay) return Promise.resolve(false);
+		// two viewers opening at once render once
+		if (!entry.rendering) {
+			const { cacheKey, cfg, frame } = entry.replay;
+			const full = { ...cfg, frameStages: true };
+			for (const [, flag] of HEATMAPS) full[flag] = true;
+			entry.rendering = inspector
+				.inspect({ cacheKey, cfg: full, frame })
+				.then((reply) => {
+					if (reply.needGolden) return false;
+					entry.images = previewImages(reply.result);
+					entry.partial = false;
+					entry.replay = null;
+					return true;
+				})
+				.finally(() => {
+					entry.rendering = null;
+				});
+		}
+		return entry.rendering;
 	}
 
-	async function publishPreview(node, msg, result, cfg, verdictText, replay) {
+	/**
+	 * Store this frame's images for the viewer and draw the thumbnail: the
+	 * one picture with every check's regions on it, or the aligned frame
+	 * when that picture is off, so the picture under the node says where,
+	 * not just whether. `attached` says whether a viewer had every stage
+	 * and heat map rendered for this frame; else the frame is kept so one
+	 * can have them rendered when it opens.
+	 */
+	async function publishPreview(node, msg, result, cfg, verdictText, attached, replay) {
 		const images = previewImages(result);
-		const partial = !cfg.frameStages;
+		const partial = !attached;
 		const entry = {
 			receivedAt: Date.now(),
 			filename: typeof msg.filename === "string" ? msg.filename : null,
@@ -1470,11 +1503,21 @@ module.exports = (RED) => {
 	RED.httpAdmin.get(
 		"/golden-compare/last/:id",
 		RED.auth.needsPermission("golden-compare.read"),
-		(req, res) => {
+		async (req, res) => {
 			const entry = entryFor(req.params.id, req.query && req.query.t);
 			if (!entry) {
 				res.status(404).json({ ok: false, error: "no frame yet" });
 				return;
+			}
+			// a viewer reading a frame that was inspected before it attached
+			// gets it rendered in full first, so the list it reads is whole
+			if (entry.partial && viewerAttached(req.params.id)) {
+				try {
+					await renderInFull(entry);
+				} catch (err) {
+					res.status(500).json({ ok: false, error: err.message });
+					return;
+				}
 			}
 			const held = heldInspections.get(req.params.id);
 			res.setHeader("Cache-Control", "no-store");
@@ -1562,12 +1605,13 @@ module.exports = (RED) => {
 	// A viewer's attention: posted on open and every few seconds while
 	// open, so frames render their stages while someone looks; deleted on
 	// close. The frame the viewer opens on is rendered in full here when
-	// it was not, so the viewer never opens on a thumbnail alone.
+	// it was not and the inspector still holds the golden. Reading is all
+	// it takes, as for the stages themselves.
 	RED.httpAdmin.post(
 		"/golden-compare/last/:id/watch",
-		RED.auth.needsPermission("golden-compare.write"),
+		RED.auth.needsPermission("golden-compare.read"),
 		async (req, res) => {
-			viewers.set(req.params.id, Date.now() + VIEWER_TTL_MS);
+			attachViewer(req.params.id, req.body && req.body.token);
 			const entry = entryFor(req.params.id, req.body && req.body.receivedAt);
 			let rendered = false;
 			try {
@@ -1582,9 +1626,9 @@ module.exports = (RED) => {
 
 	RED.httpAdmin.delete(
 		"/golden-compare/last/:id/watch",
-		RED.auth.needsPermission("golden-compare.write"),
+		RED.auth.needsPermission("golden-compare.read"),
 		(req, res) => {
-			viewers.delete(req.params.id);
+			detachViewer(req.params.id, req.query && req.query.token);
 			res.json({ ok: true });
 		},
 	);

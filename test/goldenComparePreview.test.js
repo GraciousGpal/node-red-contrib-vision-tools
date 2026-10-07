@@ -213,7 +213,7 @@ function boot(node, { meta, fail, holdFail } = {}) {
 	// the hold calls and the viewer's attention calls, kept apart: a test
 	// about holds should not count the watch posted on open
 	const holds = () => ajaxCalls.filter((c) => /\/hold$/.test(c.url));
-	const watches = () => ajaxCalls.filter((c) => /\/watch$/.test(c.url));
+	const watches = () => ajaxCalls.filter((c) => /\/watch(\?|$)/.test(c.url));
 	return { group, bodyEl, publish, panel, viewer, open, key, settle, images, listeners, requests, notices, live, ajaxCalls, holds, watches };
 }
 
@@ -559,9 +559,13 @@ test("closing releases the hold; a hold refused because the frame has gone retri
 	h.open();
 	h.key("Escape");
 	assert.deepStrictEqual(h.holds().map((c) => c.type), ["POST", "DELETE"]);
-	// and the viewer said it was open on the way in, and gone on the way out
+	// and the viewer said it was open on the way in, and gone on the way out,
+	// under its own token
 	assert.deepStrictEqual(h.watches().map((c) => c.type), ["POST", "DELETE"]);
 	assert.strictEqual(h.watches()[0].url, "golden-compare/last/gc1/watch");
+	const token = JSON.parse(h.watches()[0].data).token;
+	assert.ok(token, "a token of its own");
+	assert.strictEqual(h.watches()[1].url, "golden-compare/last/gc1/watch?token=" + encodeURIComponent(token));
 	assert.strictEqual(h.viewer(), null);
 
 	const r = boot(NODE, { meta: META, holdFail: "that frame has already been replaced" });

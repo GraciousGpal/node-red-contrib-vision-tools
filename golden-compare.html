@@ -758,8 +758,8 @@
       style="width:80px;"
     />
     <span class="node-input-hint" style="margin-left:10px; color:#999;"
-      >px; diagnostic only - it renders every stage and both heat maps on
-      every frame, whatever the output boxes say</span
+      >px; the stages and per-check heat maps are rendered only while a
+      viewer is open</span
     >
   </div>
 </script>
@@ -917,12 +917,12 @@
     <code>GET /golden-compare/last/:id</code> (the verdict and the stage
     list) and <code>GET /golden-compare/last/:id/stage/:key</code> (one
     image). It survives a redeploy, not a restart. With no viewer open the
-    preview renders only its thumbnail, a few ms a frame; the stages and
+    preview renders only its thumbnail, about 17 ms a frame on the rig; the stages and
     the per-check heat maps are rendered while a viewer is open on the
     node (it says so with <code>POST /golden-compare/last/:id/watch</code>
     every few seconds), and the frame it opens on is rendered in full
-    then. <code>msg.previewEnabled</code> overrides the preview per
-    message.
+    then, while the inspector still holds the golden.
+    <code>msg.previewEnabled</code> overrides the preview per message.
   </p>
 </script>
 
@@ -1078,14 +1078,35 @@
 
     let viewer = null;
 
+    // The viewer's attention, kept outside the viewer itself: a live
+    // viewer is rebuilt on every frame, and a heartbeat that restarted
+    // with it never fired on a line faster than its interval.
+    let watching = null;
+    const stopWatching = function () {
+      if (!watching) return;
+      clearInterval(watching.timer);
+      detach(watching.nodeId, watching.token);
+      watching = null;
+    };
+    const startWatching = function (nodeId) {
+      if (watching && watching.nodeId === nodeId) return watching.token;
+      stopWatching();
+      const token = Math.random().toString(36).slice(2) + Date.now().toString(36);
+      const timer = setInterval(function () { attach(nodeId, token); }, 5000);
+      // unref where timers have it (the editor's tests run this under
+      // Node), so an open viewer never keeps a process alive
+      if (timer && typeof timer.unref === "function") timer.unref();
+      watching = { nodeId, token, timer };
+      return token;
+    };
+
     const closeViewer = function (reopening) {
       if (!viewer) return;
       document.removeEventListener("keydown", viewer.onKey);
-      clearInterval(viewer.watching);
       viewer.root.remove();
       if (!reopening) {
         if (viewer.paused) releaseHold(viewer.nodeId);
-        detach(viewer.nodeId);
+        stopWatching();
       }
       viewer = null;
     };
@@ -1106,14 +1127,14 @@
     const watchUrl = function (nodeId) {
       return "golden-compare/last/" + nodeId + "/watch";
     };
-    const attach = function (nodeId, receivedAt) {
+    const attach = function (nodeId, token) {
       return ajax({
         url: watchUrl(nodeId), type: "POST", contentType: "application/json",
-        data: JSON.stringify({ receivedAt: receivedAt || null }),
+        data: JSON.stringify({ token: token }),
       });
     };
-    const detach = function (nodeId) {
-      ajax({ url: watchUrl(nodeId), type: "DELETE" });
+    const detach = function (nodeId, token) {
+      ajax({ url: watchUrl(nodeId) + "?token=" + encodeURIComponent(token), type: "DELETE" });
     };
 
     const fmt = function (v, digits) {
@@ -1594,10 +1615,7 @@
       };
       document.body.appendChild(root);
       viewer = { root, onKey, show, nodeId, receivedAt: meta.receivedAt, paused, refresh };
-      // unref where timers have it (the editor's tests run this under
-      // Node), so an open viewer never keeps a process alive
-      viewer.watching = setInterval(function () { attach(nodeId); }, 5000);
-      if (viewer.watching && typeof viewer.watching.unref === "function") viewer.watching.unref();
+      startWatching(nodeId);
       syncPause();
       syncOverlayUi();
       applyZoom();
@@ -1628,7 +1646,7 @@
       };
       // attached first, so the frame on screen has its stages by the
       // time the list is read
-      const req = attach(nodeId);
+      const req = attach(nodeId, startWatching(nodeId));
       if (req) req.always(load);
       else load();
     };

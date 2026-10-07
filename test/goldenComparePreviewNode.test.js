@@ -102,10 +102,10 @@ const hold = (h, receivedAt, id = "gc-preview-test") =>
 	callRoute(h.node, "/golden-compare/last/:id/hold", { params: { id }, body: { receivedAt } });
 const release = (h, id = "gc-preview-test") =>
 	callRoute(h.node, "DELETE /golden-compare/last/:id/hold", { params: { id } });
-const watch = (h, id = "gc-preview-test", receivedAt) =>
-	callRoute(h.node, "/golden-compare/last/:id/watch", { params: { id }, body: { receivedAt } });
-const unwatch = (h, id = "gc-preview-test") =>
-	callRoute(h.node, "DELETE /golden-compare/last/:id/watch", { params: { id } });
+const watch = (h, id = "gc-preview-test", receivedAt, token) =>
+	callRoute(h.node, "/golden-compare/last/:id/watch", { params: { id }, body: { receivedAt, token } });
+const unwatch = (h, id = "gc-preview-test", token) =>
+	callRoute(h.node, "DELETE /golden-compare/last/:id/watch", { params: { id }, query: token ? { token } : {} });
 
 const EXPECTED_ORDER = [
 	"goldenGray",
@@ -212,7 +212,34 @@ test("with the preview on: a thumbnail under the node, every stage served, the m
 	assert.deepStrictEqual((await unwatch(h)).body, { ok: true });
 	await h.run({ golden, payload: golden, filename: "frame-3.png" });
 	assert.deepStrictEqual(h.published[2].data.stages, ["heatmap", "printHeatmap"], "a frame after the viewer closed");
+
+	// two viewers: one closing does not detach the other
+	await watch(h, undefined, undefined, "a");
+	await watch(h, undefined, undefined, "b");
+	await unwatch(h, undefined, "a");
+	await h.run({ golden, payload: golden, filename: "frame-4.png" });
+	assert.deepStrictEqual(h.published[3].data.stages, EXPECTED_ORDER, "viewer b is still open");
+	await unwatch(h, undefined, "b");
+
+	// a frame inspected before the viewer attached is rendered when the
+	// viewer reads it, so the list it reads is whole
+	await h.run({ golden, payload: golden, filename: "frame-5.png" });
+	assert.deepStrictEqual(h.published[4].data.stages, ["heatmap", "printHeatmap"]);
+	await watch(h, undefined, undefined, "c");
+	await h.run({ golden, payload: golden, filename: "frame-6.png" });
+	assert.deepStrictEqual((await last(h)).body.stages.map((s) => s.key), EXPECTED_ORDER);
+	await unwatch(h, undefined, "c");
 	assert.deepStrictEqual(h.warns, []);
+});
+
+test("stages asked for on the message do not stand in for a viewer's full render", async () => {
+	const h = makeNode({ previewEnabled: true, debugStages: true });
+	await h.run({ golden, payload: golden });
+	assert.ok(h.sent[0].stages, "the message got its stages");
+	const listed = (await last(h)).body.stages.map((s) => s.key);
+	assert.ok(listed.includes("targetGrayAligned") && !listed.includes("toneHeatmap"), `no viewer: ${listed}`);
+	assert.strictEqual((await watch(h)).body.rendered, true, "the heat maps a viewer wants were still to render");
+	assert.deepStrictEqual((await last(h)).body.stages.map((s) => s.key), EXPECTED_ORDER);
 });
 
 test("a raw image format is encoded on the way out, and the next frame replaces the last", async () => {

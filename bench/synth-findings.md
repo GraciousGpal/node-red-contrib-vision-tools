@@ -220,7 +220,8 @@ that far toward paper, is a tone defect, through the same block stage.
 The `toneMargin` px either side of an ink edge and the outer 8 px of the
 canvas are left out - blur, sub-pixel registration and the warp's fill
 put legitimate grey there, and the first version booked a 4 px strip of
-tray along the bottom row as a tone region.
+tray along the bottom row as a tone region. (Replaced 2026-10-07 by a
+register slack; see below.)
 
 Same rig set, pinned, `printMissingFraction` 0.5:
 
@@ -271,8 +272,8 @@ So the third mechanism - anything under ~4 px closed by the dilation -
 got its own check. Dust and pinholes are one to three px each, 40 to
 2400 of them; no block ever gets dense and, after the blur, not enough
 of them are at ink level for the ratio. What they have is number.
-`speckThreshold` takes the tone deviation (so the same register slack and
-border apply) as pixel-level connected components of at least
+`speckThreshold` takes the tone deviation (so the same edge band and
+border are out) as pixel-level connected components of at least
 `speckMinArea` px and fails the part at `speckMaxCount` of them, or on
 one speck of `speckMaxArea` px - a single spatter no block gate sees.
 
@@ -296,8 +297,8 @@ the default is 8. The check costs ~10 ms a frame at `workingSize`
 What is left at the example flow's settings, 9 of 63: six `tiny`
 defects, and `scratch/light` at every size. A light scratch removes ink
 only where it crosses type - 10 to 220 changed pixels in total, as 2-4
-px gaps in 1-3 px strokes - and every gap sits inside the register
-slack both grey checks allow and inside the dilation the print check
+px gaps in 1-3 px strokes - and every gap sits inside the edge band
+both grey checks leave out and inside the dilation the print check
 applies. It is the last of the five mechanisms, and the only one left
 that is not a resolution question: it needs a line detector across the
 strokes, which nothing here is yet. On small-and-up alone the set is
@@ -454,7 +455,8 @@ the complaint that started this. A rig with better register can set 3 or
 4 and have those cases back; so can `localAlignMax` 6, which cleared the
 rig's residual with the old model, at about 180 ms more a frame at 2125.
 (Superseded below: the slack is now trained, and 6 is only the untrained
-fallback.)
+fallback. The 180 ms was measured offline on one thread; in the node,
+with 12 pool workers, `localAlignMax` 6 cost about 40 ms a frame.)
 
 ## 2026-10-07: the slack is trained, not chosen
 
@@ -482,8 +484,10 @@ The two benches get their margin-3 numbers back without anyone
 choosing them, and the rig gets the 5 it needs; the fixed default of 6
 was costing the benches 5 points for register they do not have. The
 measurement is ~75 ms once, on the training frame (220 ms before the
-per-axis search). A transform file
-trained before this has no slack in it: retrain once.
+per-axis search). A transform file trained before this has no slack in
+it: retrain once. (Superseded: "max 3.0-3.9 px" was the near search's
+edge, see the audit section; the slack is now a per-tile map, next
+section.)
 
 ## 2026-10-07: the slack as a map, trained over frames
 
@@ -517,7 +521,9 @@ pre-existing print false fail goes too, for 40 ms a frame on this box
 (472 ms mean against ~430). The per-tile map and the training run are
 what shipped; `localAlignMax` and the speck gate are the node's numbers.
 At `localAlignMax` 6 and `speckMaxArea` 20, set on the flow, not as
-defaults: 148 of 148 good pass and 14 of 14 bad fail.
+defaults: 148 of 148 good pass and 14 of 14 bad fail. (Rows and timings
+in this section are before the audit's corrections and the performance
+pass; current figures are in the sections below.)
 
 ## 2026-10-07: the audit's corrections to the measurement
 
@@ -549,8 +555,10 @@ bad fail at `speckMaxArea` 20, the two dots at 22 and 24 px.
 
 ## 2026-10-07: the frame time back
 
-With the preview on, the rig's node took 455-570 ms a frame against the
-200 it had before the tone and speck checks. Split on the rig (the
+With the preview on, the rig's node took 455-570 ms a frame as the
+harness on the live tab measured it, 508-683 driven in-process with the
+tab's debug node still on, against the 200 it had before the tone and
+speck checks. Split on the rig (the
 installed node driven in-process, 12 pool workers, working size 2125):
 the inspection's own stages summed to ~315 ms and ~150 ms was outside
 them - the inspector worker's reply copying five raw heat maps and a
@@ -571,5 +579,9 @@ the 87-case real-artwork set and the rig's 162 frames.
 What is left with the preview on is ~100 ms of align, 35-90 ms of
 tone (the spread is the pool workers' own collections landing on the
 tone dispatch), and ~60 ms of rendering the heat maps and stages the
-viewer may never open; rendering those only while a viewer is attached
-is the next step if the preview's cost matters.
+viewer may never open. That step is taken: the preview renders its
+stages and per-check heat maps only while a viewer is attached, and the
+frame a viewer opens on is rendered in full then. On the rig with the
+tab's debug node off, a frame is 199 ms mean with the preview on and no
+viewer, 182 ms with it off, and 327 ms with the always-rendering
+preview.

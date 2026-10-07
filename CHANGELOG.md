@@ -9,24 +9,24 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 ### Added
 
 - **The tone and speck checks take their register slack from training.**
-  `toneMargin` is a rig number - how far off register a frame still sits
-  after the local alignment - that no artwork can say. Training frames
-  (`trainTransform`) now measure it per tile with a 16 px search and
-  write it into the transform record (`registerSlackPx` for the worst
-  tile, `register.slack` per tile); consecutive training frames merge,
-  the worst each tile saw, the frames after the first measured against
-  its pin. With **from training** ticked
-  (`toneMarginAuto`, the default) each tile runs with its own slack, so a
-  corner that needs 5 px does not blind the rest of the label at 2; the
-  node's number is the fallback for an untrained rig.
+  How far off register a frame still sits after the local alignment
+  belongs to the rig, not the artwork. A training frame
+  (`trainTransform`) measures it per tile and writes it into the
+  transform record (`registerSlackPx` for the worst tile, `register.slack`
+  per tile, rounded up to 2, 3, 4, 5, 6, 8, 10, 12 or 16 px). Consecutive
+  training frames merge, keeping the worst each tile saw, the frames
+  after the run's first well-registered one measured against its scale;
+  a frame that registered poorly or found no label trains nothing. With
+  **from training** ticked (`toneMarginAuto`, the default) each tile runs
+  with its own slack. `toneMargin` (6) is the fallback for an untrained
+  rig, and `msg.toneMargin` overrides the trained slack.
   `msg.result.toneBlemish.marginTrained` / `marginMinPx` / `marginMaxPx`
   say what a frame ran with, and a training frame carries
-  `msg.result.register`. The slacks are rounded up to 2, 3, 4, 5, 6, 8,
-  10, 12 or 16 px. A training frame that registered poorly or found no
-  label trains nothing and leaves the record as it was, and
-  `msg.toneMargin` sent on a message overrides the trained slack. Transform files trained before this have
-  no slack: retrain. Synthetic rig set 84.1% recall (flat 6 px: 76.2%),
-  real artwork 87.7% (81.5%), no false fail added.
+  `msg.result.register`. Transform files trained before this have no
+  slack: retrain. Synthetic rig set 84.1% recall (flat 6 px: 76.2%), real
+  artwork 87.7% (81.5%), no false fail added. On the rig, trained over 30
+  good frames at `localAlignMax` 6 and `speckMaxArea` 20 (flow settings,
+  not defaults), 148 of 148 good frames pass and 14 of 14 bad fail.
 
 - **`edgeMargin` on `golden-compare`: px of the golden's border, every side,
   that no blemish check inspects.** Default 0, so nothing changes until
@@ -60,10 +60,13 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   inspection per node in memory, plus the held one, and serves them over
   `GET /golden-compare/last/:id` and
   `GET /golden-compare/last/:id/stage/:key`, one image per request as the
-  viewer reaches it. The preview renders every stage and both heat maps
-  on every frame; the message still carries only what the output boxes
-  asked for. `previewEnabled` and `previewWidth` are settings and
-  per-message overrides.
+  viewer reaches it. With no viewer open the preview renders only its
+  thumbnail; the stages and per-check heat maps are rendered while a
+  viewer is open (`POST`/`DELETE /golden-compare/last/:id/watch`,
+  renewed every few seconds), and the frame it opens on is rendered in
+  full then, while the inspector still holds the golden. The message
+  still carries only what the output boxes asked for. `previewEnabled`
+  and `previewWidth` are settings and per-message overrides.
 - **`msg.stages.nuisanceBaseline`**: with *Output pipeline stages* on and
   a nuisance map loaded, the trained per-block baseline rendered over the
   golden the way a heat map is rendered over the frame, so a map can be
@@ -228,7 +231,12 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   taken per 128 px cell so lighting cancels, with the golden's grey
   mapped between them, so a grey panel in the artwork is expected grey -
   and accepts the pixel if the artwork predicts its grey anywhere within
-  `toneMargin` (6) px, since registration is never exact. Same
+  the register slack (trained per tile; `toneMargin` (6) untrained),
+  since registration is never exact: on a real rig a rule 5 px off
+  register read as a tone region on its far side and a 176 px speck
+  along its edge. The border both checks skip is 16 px, and the paper and
+  ink levels are sampled as far clear of the other class as the slack, 3
+  px as the fallback for artwork too thin to leave pure ink. Same
   block stage, same regions; `result.toneBlemish` with the measured
   `paperLevel` / `inkLevel`, `msg.toneHeatmap` (`outputToneHeatmap`, off
   by default - the overlay shows it), a `toneDeviation` stage, and
@@ -284,32 +292,6 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Fixed
 
-- **The preview renders its stages only while a viewer is open.** With
-  nobody looking it rendered every stage and heat map on every frame -
-  the cost of *Output pipeline stages*, 60-90 ms at 3 MP - for a viewer
-  that may never open. Now a frame with the preview on and no viewer
-  renders the thumbnail's one picture and whatever the message asked for;
-  a viewer says it is open (`POST /golden-compare/last/:id/watch`, renewed
-  every few seconds, released on close), frames render in full while it
-  is, and the frame it opens on is rendered in full then from the frame
-  the node kept, so it never opens on a thumbnail alone. On the rig a
-  frame with the preview on and no viewer is where a frame without the
-  preview was.
-
-- **A frame with the preview on took 500 ms where it had taken 200.** Most
-  of the difference was never inside the inspection: under `heatmapFormat`
-  "raw" with the preview on, a frame carries five heat maps and a dozen
-  stage images at working size, some 60 MB at 3 MP, and the inspector
-  worker's reply copied every byte to the main thread. The worker now
-  moves those buffers (the golden's own stages sit in shared memory once,
-  from `prepareGolden`), the heat maps decide each block once rather than
-  per pixel, the masks write only their set pixels, the tone check's two
-  passes run over the worker pool with whole-grey-level tables, and the
-  local alignment stops scoring an offset once it cannot win. Every
-  verdict, region and image is byte-identical; on the rig a frame is
-  268-340 ms with the preview on (from 508-683) and 157-267 without (from
-  219-398), 12 pool workers at working size 2125.
-
 - **A node saved before a setting existed lost that setting's default in
   the editor.** Node-RED fills in nothing for a property an older node
   has no value for, so a box added since rendered unticked and a number
@@ -317,26 +299,6 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   on the first rig to retrain, *from training* came out off and the
   trained slack was never applied. `golden-compare`'s editor now gives
   such a setting its default, as a fresh node would have.
-
-- **The tone and speck checks failed every good part on a real rig.** The
-  check held every pixel to the grey of exactly its own position, less a
-  3 px band either side of ink; a rig that leaves
-  a rule 5 px off register after the local alignment - which the binary
-  checks had been tuned around with `inkMargin` 64 - painted that rule's
-  far side as a tone region and its edge as a 180 px speck, on frames
-  whose print and background checks passed. A pixel is now accepted if the
-  artwork predicts its grey anywhere within `toneMargin` px (the darkest
-  and lightest golden grey in that window set the band), the way
-  `printTolerance` works for the binary checks, with the default raised
-  from 3 to 6 and the border the two checks skip from 8 to 16 px. The
-  levels are still sampled that far clear of the other class - 3 px of
-  clearance let a rule off register hand its cell frame paper as its ink
-  level - with 3 px as the fallback for artwork too thin to leave any
-  pure ink at a small working size. On the rig, trained over 30 good
-  frames, 1 good frame of 148 fails (print, as before) and 12 of 14 bad
-  ones fail; at `localAlignMax` 6, none of 148 and 13 of 14, for about
-  40 ms a frame. The slack costs sensitivity next to ink, which
-  training's per-tile map mostly recovers (see Added).
 
 - **The worker pool no longer holds on to finished frames.** A shared
   buffer is freed only when every thread that viewed it has let go, and
@@ -359,6 +321,18 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   `printBlemish.worstExcess` is 0 and `noveltyPass` true.
 
 ### Changed
+
+- **A frame costs what it did before the tone and speck checks.** The
+  inspector worker moves a frame's raw images to the main thread instead
+  of copying them, and the golden's stages sit in shared memory once.
+  Heat maps decide each block once, masks write only their set pixels,
+  and the tone check's two passes run over the worker pool. The local
+  alignment stops scoring an offset once it cannot win, and the preview
+  renders its stages only while a viewer is open. Every verdict, region
+  and image is byte-identical. On the rig (12 pool workers, working size
+  2125) a frame is 199 ms mean with the preview on and no viewer and 182
+  ms with it off, against 327 ms for the always-rendering preview and
+  455-570 ms before this work.
 
 - **`golden-compare` searches scale on a 4% ladder, not 8%.**
   `scaleSearchSteps` defaults to 37 over 0.6-2.5 instead of 19. The
