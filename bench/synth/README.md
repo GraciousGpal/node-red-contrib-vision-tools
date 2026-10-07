@@ -62,7 +62,7 @@ with it.
 | `--json path` / `--md path` | report paths, default inside the set |
 | `--sweep key=v1,v2,...` | run the whole set once per value of one setting and add a table of recall and false-fail rate per value; the report body is the last value's run |
 | `--verbose` | one line per case as it runs |
-| `--train` | pin magnification and stretch to what the full search finds on one clean frame of the run preset, as `golden-compare`'s `trainTransform` does on a line. Default: on for a rig set, off for a free one; `--train false` / `--train true` override. The report says what it pinned to |
+| `--train` | pin magnification and stretch to what the full search finds on the first clean frame of the run preset, and measure the register slack over the first three clean frames (the later two pinned to the first, a frame that registers poorly skipped), as `golden-compare`'s training run does on a line; the tone and speck checks then run with that slack map unless the run sets `toneMargin` itself. Default: on for a rig set, off for a free one; `--train false` / `--train true` override. The report says what it pinned to and the slack's range per tile |
 
 The rules, from `score.js`, which is pure and tested without images:
 

@@ -290,35 +290,44 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   the rest, and runs `failThreshold` 0.1, which the pinned sweep found
   free on the set (the package default stays 0.3).
 
-### Fixed
+- **The camera's perspective, measured once and applied per frame.**
+  `checkerboard-calibrate` now fits a plane homography to the same
+  square centroids it measures the pitch from: an ideal lattice is placed
+  over the photo with a similarity, so the board's own placement stays
+  put, and what remains between the measured squares and the lattice is
+  the keystone. It is reported as `msg.result.perspective` — before/after
+  reprojection in pixels, so the operator can see whether there is any
+  perspective worth correcting — and saved with the scale as
+  `homography`. On a square-on camera it is the identity. Existing scale
+  files keep working; `readScaleFile` validates the homography only when
+  one is present.
 
-- **A node saved before a setting existed lost that setting's default in
-  the editor.** Node-RED fills in nothing for a property an older node
-  has no value for, so a box added since rendered unticked and a number
-  blank, and saving the node wrote those back as a choice nobody made:
-  on the first rig to retrain, *from training* came out off and the
-  trained slack was never applied. `golden-compare`'s editor now gives
-  such a setting its default, as a fresh node would have.
+  The new **`perspective-rectify`** node reads that record and resamples
+  each frame through it, in front of `label-crop`. Bilinear, edge
+  replicated rather than filled, pure JS split across the worker pool by
+  rows like the golden warp (~20ms on a 1500×1850 RGB frame, ~140ms on
+  24MP; neither OpenCV engine offered a faster `warpPerspective`),
+  rescaled to the frame's resolution
+  when it differs from the calibration photo's. A frame it cannot
+  rectify (a different aspect ratio, an undecodable payload) passes
+  through unchanged with `msg.rectify.applied === false` and a reason, so
+  the inspection behind it still grades the part; setup problems (no
+  scale file, no homography in it) are errors, since no frame could ever
+  pass. On a synthetic
+  board keystoned by 12% the measurement reads 3.9px rms before and
+  0.16px after; rectifying with it brings the board back to 0.23px. On
+  this project's real rig it reads 1.6px before, 1.3px after: square-on,
+  the rest lens distortion. The lattice takes x and y pitch separately,
+  so a board with rectangular cells (the real one measures 0.855) is left
+  as the aspect it is rather than "corrected" into a stretch of every
+  frame.
 
-- **The worker pool no longer holds on to finished frames.** A shared
-  buffer is freed only when every thread that viewed it has let go, and
-  nothing made a pool worker's collector run; the allocating thread's
-  own collector does not run for shared bytes before some 800 MB of
-  them either. With the pool, 70 MB a frame was retained, 1.8 GB after
-  25 frames at 3 MP. Both sides now count the shared bytes they handle
-  and collect by volume (`lib/shared.js`, `lib/poolWorker.js`); shared
-  buffers hold at ~285 MB over 60 frames at 3 MP, and frame time is
-  within noise at 3 MP and 5-10% over at 4096 px, the cost of giving
-  the memory back. No flag to start Node with; a host that exposes `gc`
-  under a name it cannot be taken by warns once (`VISION_TOOLS_NO_GC`).
-- **The nuisance map no longer gates the print channel.** The map is
-  trained from the background channel - what extra ink looks like on a
-  good part, block by block - but the novelty gate was applied to both
-  channels, so once a map was loaded any print block at the novelty
-  threshold failed against a baseline that had never been measured for
-  print. Training a map silently tightened the print check. The print
-  channel is now judged by its own density and ratio gates only;
-  `printBlemish.worstExcess` is 0 and `noveltyPass` true.
+  This is deliberately not a document-scanner style per-frame quad
+  detection: that re-solves the camera geometry on every part, from four
+  contour corners, and does so least reliably on exactly the damaged
+  label the inspection exists to catch. It is also not a change to
+  `golden-compare`'s alignment model, whose residual is the label bowing
+  on the tray (a homography removes 18% of it), not the camera.
 
 ### Changed
 
@@ -417,6 +426,34 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Fixed
 
+- **A node saved before a setting existed lost that setting's default in
+  the editor.** Node-RED fills in nothing for a property an older node
+  has no value for, so a box added since rendered unticked and a number
+  blank, and saving the node wrote those back as a choice nobody made:
+  on the first rig to retrain, *from training* came out off and the
+  trained slack was never applied. `golden-compare`'s editor now gives
+  such a setting its default, as a fresh node would have.
+
+- **The worker pool no longer holds on to finished frames.** A shared
+  buffer is freed only when every thread that viewed it has let go, and
+  nothing made a pool worker's collector run; the allocating thread's
+  own collector does not run for shared bytes before some 800 MB of
+  them either. With the pool, 70 MB a frame was retained, 1.8 GB after
+  25 frames at 3 MP. Both sides now count the shared bytes they handle
+  and collect by volume (`lib/shared.js`, `lib/poolWorker.js`); shared
+  buffers hold at ~285 MB over 60 frames at 3 MP, and frame time is
+  within noise at 3 MP and 5-10% over at 4096 px, the cost of giving
+  the memory back. No flag to start Node with; a host that exposes `gc`
+  under a name it cannot be taken by warns once (`VISION_TOOLS_NO_GC`).
+- **The nuisance map no longer gates the print channel.** The map is
+  trained from the background channel - what extra ink looks like on a
+  good part, block by block - but the novelty gate was applied to both
+  channels, so once a map was loaded any print block at the novelty
+  threshold failed against a baseline that had never been measured for
+  print. Training a map silently tightened the print check. The print
+  channel is now judged by its own density and ratio gates only;
+  `printBlemish.worstExcess` is 0 and `noveltyPass` true.
+
 - **A frame with no label in it passed.** Two blank frames in the rig's
   bad set - paper and a sliver of tray, nothing printed - went through
   every check, and one passed: the search sat at nominal because every
@@ -485,47 +522,6 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   are `null` rather than 0. On this rig that reads straight off as
   "raise `maxBorderContact` to 0.75", which takes the run from 137 to 151
   of 151 full frames detected.
-
-### Added
-
-- **The camera's perspective, measured once and applied per frame.**
-  `checkerboard-calibrate` now fits a plane homography to the same
-  square centroids it measures the pitch from: an ideal lattice is placed
-  over the photo with a similarity, so the board's own placement stays
-  put, and what remains between the measured squares and the lattice is
-  the keystone. It is reported as `msg.result.perspective` — before/after
-  reprojection in pixels, so the operator can see whether there is any
-  perspective worth correcting — and saved with the scale as
-  `homography`. On a square-on camera it is the identity. Existing scale
-  files keep working; `readScaleFile` validates the homography only when
-  one is present.
-
-  The new **`perspective-rectify`** node reads that record and resamples
-  each frame through it, in front of `label-crop`. Bilinear, edge
-  replicated rather than filled, pure JS split across the worker pool by
-  rows like the golden warp (~20ms on a 1500×1850 RGB frame, ~140ms on
-  24MP; neither OpenCV engine offered a faster `warpPerspective`),
-  rescaled to the frame's resolution
-  when it differs from the calibration photo's. A frame it cannot
-  rectify (a different aspect ratio, an undecodable payload) passes
-  through unchanged with `msg.rectify.applied === false` and a reason, so
-  the inspection behind it still grades the part; setup problems (no
-  scale file, no homography in it) are errors, since no frame could ever
-  pass. On a synthetic
-  board keystoned by 12% the measurement reads 3.9px rms before and
-  0.16px after; rectifying with it brings the board back to 0.23px. On
-  this project's real rig it reads 1.6px before, 1.3px after: square-on,
-  the rest lens distortion. The lattice takes x and y pitch separately,
-  so a board with rectangular cells (the real one measures 0.855) is left
-  as the aspect it is rather than "corrected" into a stretch of every
-  frame.
-
-  This is deliberately not a document-scanner style per-frame quad
-  detection: that re-solves the camera geometry on every part, from four
-  contour corners, and does so least reliably on exactly the damaged
-  label the inspection exists to catch. It is also not a change to
-  `golden-compare`'s alignment model, whose residual is the label bowing
-  on the tray (a homography removes 18% of it), not the camera.
 
 ## [1.2.0] - 2026-09-10
 
