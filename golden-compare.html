@@ -1029,6 +1029,18 @@
       return "golden compare";
     },
     oneditprepare: function () {
+      // A node saved before a setting existed has no value for it, and the
+      // editor fills nothing in: the box renders unticked and the number
+      // blank, and saving writes those back as a choice nobody made. Give
+      // such a setting its default, as a fresh node would have.
+      for (const name in this._def.defaults) {
+        const def = this._def.defaults[name];
+        if (this[name] !== undefined || def.value === undefined) continue;
+        const input = document.getElementById("node-input-" + name);
+        if (!input) continue;
+        if (input.type === "checkbox") input.checked = !!def.value;
+        else input.value = def.value;
+      }
       // preview width only means anything when the preview is on
       const previewCheckbox = document.getElementById("node-input-previewEnabled");
       const previewWidthRow = document.getElementById("golden-compare-preview-width-row");

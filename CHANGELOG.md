@@ -283,6 +283,14 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Fixed
 
+- **A node saved before a setting existed lost that setting's default in
+  the editor.** Node-RED fills in nothing for a property an older node
+  has no value for, so a box added since rendered unticked and a number
+  blank, and saving the node wrote those back as a choice nobody made:
+  on the first rig to retrain, *from training* came out off and the
+  trained slack was never applied. `golden-compare`'s editor now gives
+  such a setting its default, as a fresh node would have.
+
 - **The tone and speck checks failed every good part on a real rig.** Their
   first model cut a 3 px band either side of each ink edge and held every
   other pixel to the grey of exactly its own position; a rig that leaves
