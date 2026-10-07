@@ -229,11 +229,16 @@ async function runSet(opts) {
 		let register = r.register;
 		if (!refused) {
 			for (const c of cleans.slice(1, TRAIN_REGISTER_FRAMES)) {
+				// as the node trains: the frames after the first measured
+				// against its pin (solved free, a frame's own scale error reads
+				// as register), and one that registered poorly or found no
+				// label not merged
 				const more = await compareFrame(fs.readFileSync(path.resolve(setDir, c.frame)), golden, {
 					...cfg,
 					pinnedScale: { mx: r.transform.scaleX, my: r.transform.scaleY },
 					measureRegister: true,
 				});
+				if (more.match.grade === "poor" || more.match.labelMissing) continue;
 				register = mergeRegister(register, more.register);
 			}
 		}
@@ -447,7 +452,7 @@ function buildMarkdown(report, sweep) {
 				? ` Pinned to mx ${num(report.meta.trained.mx, 4)}, my ${num(report.meta.trained.my, 4)} ` +
 					`trained on \`${report.meta.trained.frame}\`` +
 					(report.meta.trained.register
-						? `, register over ${report.meta.trained.register.frames} frame(s) p98 ${num(report.meta.trained.register.p98Px, 2)} px -> tone slack ${report.meta.trained.slackPx} px` +
+						? `, register over ${report.meta.trained.register.frames} frame(s) max ${num(report.meta.trained.register.maxPx, 2)} px -> tone slack ${report.meta.trained.slackPx} px` +
 							(report.meta.trained.slackMap
 								? ` (${Math.min(...report.meta.trained.slackMap.slackPx)}-${Math.max(...report.meta.trained.slackMap.slackPx)} per tile)`
 								: "")

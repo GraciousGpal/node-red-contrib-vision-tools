@@ -121,11 +121,13 @@ module.exports = (RED) => {
 		// paper (0.1-0.2) alone, and a grey panel in the artwork is expected
 		// grey. 0 = off.
 		toneThreshold: { value: 0.3, float: [0, 1] },
-		// px either side of an ink edge the tone check leaves out: where
-		// blur and sub-pixel registration put legitimate grey
+		// px off register a pixel's grey may sit and still match the artwork
+		// (the tone and speck checks); the fallback when toneMarginAuto has
+		// no trained slack
 		toneMargin: { value: 6, int: [0, 50] },
-		// the slack comes from the trained transform when it measured one;
-		// the number above is then the fallback for an untrained rig
+		// take the slack (and its per-tile map) from the trained transform
+		// when it has one; the number above, from the node or
+		// msg.toneMargin, is then only the fallback for an untrained rig
 		toneMarginAuto: { value: true },
 		// The speck check: connected components of the same tone deviation,
 		// at this level, counted. Dust and pinholes are one to three px each
@@ -880,6 +882,14 @@ module.exports = (RED) => {
 				// images without disturbing the node's configured golden.
 				const training = cfg.trainTransform;
 				cfg.measureRegister = training;
+				// The frames of a training run after the first are measured
+				// against the first one's scale, as every later frame will be:
+				// solved free, a frame's own scale error reads as register at
+				// the label's edges (4 px on a synthetic rig whose true residual
+				// was 1).
+				if (training && node.registerRun && node.registerRun.goldenKey === goldenKey && node.registerRun.pin) {
+					cfg.pinnedScale = node.registerRun.pin;
+				}
 				let trainedScore = null;
 				let trainedSlack = null;
 				let pinRefused = null;
@@ -901,8 +911,9 @@ module.exports = (RED) => {
 						trainedScore = trained.record.alignScore;
 						// the register slack training measured, when this record
 						// has one and the node is set to take it
+						// a slack sent on the message is an override, not a fallback
 						const slack = trained.record.registerSlackPx;
-						if (cfg.toneMarginAuto && Number.isFinite(slack) && slack >= 0 && slack <= 50) {
+						if (cfg.toneMarginAuto && msg.toneMargin == null && Number.isFinite(slack) && slack >= 0 && slack <= 50) {
 							cfg.toneMargin = Math.round(slack);
 							trainedSlack = cfg.toneMargin;
 							// and per tile, where the record has it; compareFrame
@@ -988,12 +999,33 @@ module.exports = (RED) => {
 				// one frame sits where it sits and the next part may not. A
 				// non-training frame ends the run, so re-ticking starts afresh.
 				if (training) {
+					// A frame that did not register is not a measurement of the
+					// rig: its tiles read large coherent offsets, and merged in they
+					// would blind the checks there for the rest of the run.
+					const usable =
+						result.match.grade !== "poor" && !result.match.labelMissing && !result.match.mismatchSuspected;
+					if (!usable) {
+						node.warn(
+							`training frame registered ${result.match.labelMissing ? "no label" : result.match.grade} ` +
+								`(${result.transform.score.toFixed(3)}); its register measurement was not used`,
+						);
+					} else if (result.register && result.register.beyond > 0) {
+						node.warn(
+							`training frame: ${result.register.beyond} tile(s) sit 16 px or more off register ` +
+								"and were not measured; check the rig before trusting the slack",
+						);
+					}
 					const run = node.registerRun;
+					const measured = usable ? result.register : null;
 					const register =
-						run && run.goldenKey === goldenKey
-							? mergeRegister(run.register, result.register)
-							: result.register;
-					node.registerRun = register ? { goldenKey, register } : null;
+						run && run.goldenKey === goldenKey ? mergeRegister(run.register, measured) : measured;
+					const pin =
+						run && run.goldenKey === goldenKey && run.pin
+							? run.pin
+							: usable
+								? { mx: result.transform.scaleX, my: result.transform.scaleY }
+								: null;
+					node.registerRun = register || pin ? { goldenKey, register, pin } : null;
 					const record = {
 						scaleX: result.transform.scaleX,
 						scaleY: result.transform.scaleY,
@@ -1143,8 +1175,8 @@ module.exports = (RED) => {
 						marginTrained: trainedSlack != null,
 						// the least and most slack any tile ran with: equal, and
 						// equal to marginPx, without a map
-						marginMinPx: result.toneBlemish.enabled ? result.toneBlemish.slackMin : cfg.toneMargin,
-						marginMaxPx: result.toneBlemish.enabled ? result.toneBlemish.slackMax : cfg.toneMargin,
+						marginMinPx: result.toneSlack ? result.toneSlack.min : cfg.toneMargin,
+						marginMaxPx: result.toneSlack ? result.toneSlack.max : cfg.toneMargin,
 						// the frame's paper and ink levels the check measured
 						// against, whole-frame; absent when the check did not run
 						...(result.toneBlemish.enabled
@@ -1172,8 +1204,8 @@ module.exports = (RED) => {
 				// trained on another working size or tile; say so once
 				if (
 					cfg.toneSlackMap &&
-					result.toneBlemish.enabled &&
-					!result.toneBlemish.slackMapApplied &&
+					result.toneSlack &&
+					!result.toneSlack.mapApplied &&
 					node.slackMapWarnedFor !== goldenKey
 				) {
 					node.slackMapWarnedFor = goldenKey;
@@ -1191,6 +1223,8 @@ module.exports = (RED) => {
 					heatmapMs: ms(t.heatmapMs),
 					toneMs: ms(t.toneMs),
 					speckMs: ms(t.speckMs),
+					// a training frame's register measurement; 0 otherwise
+					registerMs: ms(t.registerMs),
 					overlayMs: ms(t.overlayMs),
 					stagesMs: ms(t.stagesMs),
 					totalMs: Math.round(performance.now() - totalStart),

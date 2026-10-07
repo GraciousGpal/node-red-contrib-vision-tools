@@ -246,17 +246,13 @@ verdict by different routes.
      `toneMargin` (6) px of it - the darkest and lightest golden grey in
      that window set the band - which is what lets blur and a few px of
      register at an edge through, at the price of specks and hairlines
-     that close to ink. The slack is a rig number, not an artwork one, so
-     with **from training** ticked (`toneMarginAuto`, the default) it
-     comes from the trained transform: training measures how far off
-     register the frame still sits after the local alignment, tile by
-     tile, and writes the slack down (`registerSlackPx` for the worst
-     tile, `register.slack` for the map), and each tile runs with its
-     own - a corner of the label at 5 px does not cost the rest of it,
-     which sits at 2, a dot on a line. The number on the node is only
-     the fallback for an untrained rig. Untick it to set one slack by
-     hand. `msg.result.toneBlemish.marginMinPx` / `marginMaxPx` say what
-     a frame ran with. `toneThreshold` 0 switches the check off; a golden whose paper
+     that close to ink. The slack is a rig number, so with **from
+     training** ticked (`toneMarginAuto`, the default) each tile of the
+     label runs with the slack training measured for it (see **Train the
+     transform**); the number on the node is the fallback for an
+     untrained rig, and unticking sets one slack by hand.
+     `msg.result.toneBlemish.marginMinPx` / `marginMaxPx` say what a
+     frame ran with. `toneThreshold` 0 switches the check off; a golden whose paper
      and ink cannot be told apart, or a frame showing too little of
      either, leaves the check off with a `reason` on the result and one
      warning per golden.
@@ -523,7 +519,8 @@ Per-message overrides:
 `msg.nativeFastAlign`,
 `msg.positionToleranceXMm`/`YMm`/`XPx`/`YPx`/`AngleDeg`, `msg.blockSize`,
 `msg.blockThreshold`, `msg.failThreshold`, `msg.failRatio`,
-`msg.printMissingFraction`, `msg.toneThreshold`, `msg.toneMargin`,
+`msg.printMissingFraction`, `msg.toneThreshold`, `msg.toneMargin` (sent
+on a message it overrides the trained slack), `msg.toneMarginAuto`,
 `msg.outputToneHeatmap`, `msg.speckThreshold`, `msg.speckMinArea`,
 `msg.speckMaxCount`, `msg.speckMaxArea`, `msg.outputSpeckHeatmap`,
 `msg.outputHeatmap`, `msg.outputPrintHeatmap`, `msg.outputBackgroundHeatmap`,
@@ -618,7 +615,7 @@ trusting it.
 
 - `msg.payload` — `true`/`false` overall pass
 - `msg.result` —
-  `{ pass, position: { dxPx, dyPx, dxMm, dyMm, angleDeg, anglePass, scale, scaleX, scaleY, stretchPercent, pass }, transform: { pinned, native, nativeFallback?, seeded, pinRefused?, scaleX, scaleY, scale, stretchPercent, angleDeg, ox, oy, score }, match: { score, grade, coverage, labelMissing, mismatchSuspected, reason }, thresholds: { golden, target }, localAlign: { tiles, localised, meanPx, medianPx, maxPx }, printBlemish: { pass, defectRatio, regions: [{x,y,w,h,density,avgDensity,missing,cells}], worstMissing }, backgroundBlemish: { pass, defectRatio, regions, worstExcess, noveltyPass }, toneBlemish: { enabled, pass, defectRatio, regions }, speckBlemish: { enabled, pass, count, area, largest, regions: [{x,y,w,h,area}] } }`
+  `{ pass, position: { dxPx, dyPx, dxMm, dyMm, angleDeg, anglePass, scale, scaleX, scaleY, stretchPercent, pass }, transform: { pinned, native, nativeFallback?, seeded, pinRefused?, scaleX, scaleY, scale, stretchPercent, angleDeg, ox, oy, score }, match: { score, grade, coverage, labelMissing, mismatchSuspected, reason }, thresholds: { golden, target }, localAlign: { tiles, localised, meanPx, medianPx, maxPx }, register?: { frames, tiles, localised, spurious, beyond, searchPx, medianPx, p98Px, maxPx, slackPx, slack: { tile, gridW, gridH, slackPx[] } }, printBlemish: { pass, defectRatio, regions: [{x,y,w,h,density,avgDensity,missing,cells}], worstMissing }, backgroundBlemish: { pass, defectRatio, regions, worstExcess, noveltyPass }, toneBlemish: { enabled, pass, defectRatio, regions, paperLevel, inkLevel, marginPx, marginTrained, marginMinPx, marginMaxPx }, speckBlemish: { enabled, pass, count, area, largest, regions: [{x,y,w,h,area}] } }`
   (region coordinates in the working-resolution image, same size as the
   heat maps — not the original camera resolution). `transform` is the raw
   recovered placement in frame-canvas pixels: `pinned` reports whether a
@@ -1330,20 +1327,16 @@ nothing is found at all, one message with `msg.text = null` and
   `msg.trainTransform`), and the node measures `scaleX`/`scaleY` from that
   frame, writes them down, and pins them on every later frame — solving
   only position and angle. The same frame also measures how far off
-  register it still sits after the local alignment, tile by tile with a
-  search wider than the local alignment's cap, and the record carries
-  the slack the tone and speck checks need from it (`registerSlackPx`:
-  the worst tile whose neighbours moved with it, plus one for the blur -
-  a barcode shifted by one period matches as well as the truth, so a
-  tile on its own is not believed; `register` has the measurement, and
-  `register.slack` the same per tile, each tile its own residual plus
-  one, spread one tile outward). One frame is not the rig: consecutive
-  training frames merge, the worst each tile saw, so leave the box
-  ticked for a handful of good parts that sit on the tray the way parts
-  do, then untick it (a frame that is not training ends the run).
-  With the checks' **from training** box ticked, later
-  frames run with that slack; `msg.result.toneBlemish.marginPx` and
-  `marginTrained` say what a frame ran with. To train from any two
+  register it still sits after the local alignment, tile by tile, and
+  the record carries the slack the tone and speck checks take from it:
+  `registerSlackPx` for the worst tile and `register.slack` per tile.
+  One frame is not the rig: consecutive training frames merge, the
+  worst each tile saw - the frames after the first measured against its
+  pin, as later frames will be - so leave the box ticked for a handful
+  of good parts that sit on the tray the way parts do, then untick it (a
+  frame that is not training ends the run). With the checks' **from
+  training** box ticked, later frames run with that slack;
+  `msg.result.toneBlemish.marginTrained` says whether they did. To train from any two
   images rather than the configured golden, send `msg.golden` alongside
   `msg.payload`.
 

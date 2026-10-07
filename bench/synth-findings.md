@@ -453,6 +453,8 @@ and a default with no headroom fails good parts on a worse day, which is
 the complaint that started this. A rig with better register can set 3 or
 4 and have those cases back; so can `localAlignMax` 6, which cleared the
 rig's residual with the old model, at about 180 ms more a frame at 2125.
+(Superseded below: the slack is now trained, and 6 is only the untrained
+fallback.)
 
 ## 2026-10-07: the slack is trained, not chosen
 
@@ -479,7 +481,8 @@ smaller offset (an identical synthetic frame read 3.0 px before that).
 The two benches get their margin-3 numbers back without anyone
 choosing them, and the rig gets the 5 it needs; the fixed default of 6
 was costing the benches 5 points for register they do not have. The
-measurement is ~220 ms once, on the training frame. A transform file
+measurement is ~75 ms once, on the training frame (220 ms before the
+per-axis search). A transform file
 trained before this has no slack in it: retrain once.
 
 ## 2026-10-07: the slack as a map, trained over frames
@@ -498,9 +501,9 @@ register at the corner where the next five good frames were 3-5 px off.
 | --- | --- | --- | --- | --- |
 | synthetic rig set | 3 clean frames | 2-3 per tile | 84.1% (flat 3: 81.0%, flat 6: 76.2%) | 2 / 24, unchanged |
 | real-artwork set | 3 clean frames | 2-4 per tile | 87.7% (flat 3: 86.2%, flat 6: 81.5%) | 0 / 22 |
-| rig, 150 good + 14 bad, `localAlignMax` 3 | 6 good frames | 2-5 | bad 12 / 14 fail | good 2 / 150 (one specks, one print) |
-| rig, same, `localAlignMax` 3 | 30 good frames | 2-6 | bad 12 / 14 fail | good 1 / 150 (print, pre-existing) |
-| rig, same, `localAlignMax` 6 | 30 good frames | 2-5 | bad 13 / 14 fail | good 0 / 150 |
+| rig, 148 good + 14 bad, `localAlignMax` 3 | 6 good frames | 2-5 | bad 12 / 14 fail | good 2 / 148 (one specks, one print) |
+| rig, same, `localAlignMax` 3 | 30 good frames | 2-6 | bad 12 / 14 fail | good 1 / 148 (print, pre-existing) |
+| rig, same, `localAlignMax` 6 | 30 good frames | 2-5 | bad 13 / 14 fail | good 0 / 148 |
 
 Six training frames left one good frame with eight small specks the map
 had not seen; thirty left none. The two dots on the icon's outline are
@@ -508,8 +511,38 @@ the two bad frames that pass at `localAlignMax` 3: the map gives their
 tile 3 px and exposes 13-22 px of each 44-52 px dot, under the 48 px
 speck gate. At `localAlignMax` 6 the register tightens enough that the
 background check catches one of them outright, the other stands as a
-22 px speck while no good frame of 150 has one over 9 px - a
+22 px speck while no good frame of 148 has one over 9 px - a
 `speckMaxArea` of 20 would take it with nothing lost - and the
 pre-existing print false fail goes too, for 40 ms a frame on this box
 (472 ms mean against ~430). The per-tile map and the training run are
 what shipped; `localAlignMax` and the speck gate are the node's numbers.
+At `localAlignMax` 6 and `speckMaxArea` 20, set on the flow, not as
+defaults: 148 of 148 good pass and 14 of 14 bad fail.
+
+## 2026-10-07: the audit's corrections to the measurement
+
+A review of the day's diff found the register measurement comparing raw
+grey: a photograph's paper is not 255 nor its ink 0, so every offset
+paid the lighting as a floor, the far minimum rarely beat the near one
+by half, and a residual past the near range's edge read as exactly 3 px
+- which is what the rig's "max 3.0-3.9" had been. Each tile's frame grey
+is now mapped onto the golden's by its own 10th-90th percentiles before
+the difference is taken, a near minimum on the range's edge is followed
+outward while the difference keeps falling, ties are judged against the
+minimum rather than the running best, and a tile with fewer than two
+measured neighbours needs only the ones it has. Training frames that
+registered poorly or found no label are no longer merged, a map's
+values are rounded up to nine levels so a golden keeps at most nine
+windows, the slack info is reported when only the speck check is on,
+and `msg.toneMargin` sent on a message overrides the trained slack.
+
+A second trap in the training run itself: each training frame solved
+its scale freely and the last one's was written, and on the synthetic
+rig set one frame's own scale error read as 4.3 px of register at the
+label's edge where the true residual was 1. The frames of a run after
+the first are now measured against the first one's pin, as every later
+frame will be.
+
+Retrained on the rig over the same 30 good frames at `localAlignMax` 6:
+map 2-5 px, worst residual 3.0 px, 148 of 148 good pass and 14 of 14
+bad fail at `speckMaxArea` 20, the two dots at 22 and 24 px.

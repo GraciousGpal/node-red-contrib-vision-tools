@@ -444,9 +444,8 @@
     />
     <span class="node-input-hint" style="margin-left:10px; color:#999;"
       >independent checks: missing ink (print) vs. unwanted ink
-      (background); edge margin is px of the golden's border no
-      check inspects; register slack is px the tone and speck checks let
-      a pixel sit off register</span
+      (background); edge margin is px of the golden's border no check
+      inspects</span
     >
   </div>
   <div class="form-row">
@@ -484,9 +483,8 @@
       paper-to-ink span measured nearby - a smudge, a ghost, faded print
       the ink threshold never sees. 0 = off. Register slack: a pixel's
       grey is accepted if the artwork predicts it anywhere within that
-      many px, since registration is never exact. "From training" takes
-      the slack the trained transform measured on this rig, tile by tile
-      where it measured it, and keeps the number as the fallback for an
+      many px. "From training" uses the per-tile slack the trained
+      transform measured on this rig; the number is the fallback for an
       untrained one</span
     >
   </div>
@@ -930,12 +928,10 @@
     category: "vision",
     color: "#B7950B",
     defaults: {
-      // number(true) = blank allowed. Node-RED does not backfill new
-      // defaults into node instances that were saved before the property
-      // existed, so a strict validator marks every such node "invalid
-      // properties" the moment a setting is added. The runtime clamps a
-      // missing or blank value to the same default anyway, so accepting
-      // blank here is both safe and what the user means by it.
+      // number(true) = blank allowed: a node saved before a setting existed
+      // has no value for it, and a strict validator would mark it invalid on
+      // load. The runtime falls back to the same default; oneditprepare fills
+      // it into the form.
       name: { value: "" },
       goldenPath: { value: "" },
       workingSize: { value: 1024, validate: RED.validators.number(true) },
@@ -1031,10 +1027,9 @@
       return "golden compare";
     },
     oneditprepare: function () {
-      // A node saved before a setting existed has no value for it, and the
-      // editor fills nothing in: the box renders unticked and the number
-      // blank, and saving writes those back as a choice nobody made. Give
-      // such a setting its default, as a fresh node would have.
+      // A node saved before a setting existed has no value for it; give its
+      // input the default, or saving writes back a blank or unticked box
+      // nobody chose.
       for (const name in this._def.defaults) {
         const def = this._def.defaults[name];
         if (this[name] !== undefined || def.value === undefined) continue;

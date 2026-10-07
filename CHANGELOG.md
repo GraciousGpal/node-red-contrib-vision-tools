@@ -10,28 +10,22 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 - **The tone and speck checks take their register slack from training.**
   `toneMargin` is a rig number - how far off register a frame still sits
-  after the local alignment - and no artwork can say it; the same PDF
-  wants 3 px on one rig and 6 on another. A training frame
-  (`trainTransform`) now measures it, tile by tile with a 16 px search
-  wider than the local alignment's cap, and writes the slack into the
-  transform record (`registerSlackPx`: the worst tile whose neighbours
-  moved with it plus one for the blur - a barcode shifted by one period
-  matches as well as the truth, so a tile on its own is not believed -
-  with the measurement under `register` and the same per tile under
-  `register.slack`, each tile its own residual plus one, spread one tile
-  outward). The checks apply it per tile: the rig that needs 5 px in one
-  corner of the label runs at 2 px over the rest, where one slack for
-  the whole label had swallowed a 9x11 px dot on a printed line.
-  Consecutive training frames merge, the worst each tile saw: the frame
-  that rig was first trained on sat in register at a corner where the
-  next five good parts were 3-5 px off. With
-  **from training** ticked on the node (`toneMarginAuto`, the default)
-  every pinned frame runs with that slack and the node's number is only
-  the fallback for an untrained rig; `msg.result.toneBlemish.marginPx`
-  and `marginTrained` say what a frame ran with, and a training frame
-  carries `msg.result.register`. The bench pins the same way. So a flow
-  that starts from the PDF and trains on one good frame gets the slack
-  its rig needs without anyone choosing it.
+  after the local alignment - that no artwork can say. Training frames
+  (`trainTransform`) now measure it per tile with a 16 px search and
+  write it into the transform record (`registerSlackPx` for the worst
+  tile, `register.slack` per tile); consecutive training frames merge,
+  the worst each tile saw, the frames after the first measured against
+  its pin. With **from training** ticked
+  (`toneMarginAuto`, the default) each tile runs with its own slack, so a
+  corner that needs 5 px does not blind the rest of the label at 2; the
+  node's number is the fallback for an untrained rig.
+  `msg.result.toneBlemish.marginTrained` / `marginMinPx` / `marginMaxPx`
+  say what a frame ran with, and a training frame carries
+  `msg.result.register`. A training frame that registered poorly or
+  found no label is not merged, and `msg.toneMargin` sent on a message
+  overrides the trained slack. Transform files trained before this have
+  no slack: retrain. Synthetic rig set 84.1% recall (flat 6 px: 76.2%),
+  real artwork 87.7% (81.5%), no false fail added.
 
 - **`edgeMargin` on `golden-compare`: px of the golden's border, every side,
   that no blemish check inspects.** Default 0, so nothing changes until
@@ -244,10 +238,9 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   recall from 50.8% to 60.3% at the package defaults and from 61.9% to
   74.6% at the example flow's `failThreshold` 0.1, with no new clean
   false fails and no wrong-place verdicts; `mark/smudge` 25% → 100%,
-  `misprint/faded` 0% → 100%, `overprint/ghost` 50% → 100%. Those were
-  measured with the check's first model; the final one scores the same
-  set identically, the synthetic label having no mid-grey. ~30 ms a
-  frame at `workingSize` 2100.
+  `misprint/faded` 0% → 100%, `overprint/ghost` 50% → 100%. Measured
+  before the register slack; current numbers are under the slack entry
+  above. ~30 ms a frame at `workingSize` 2100.
 - **`msg.heatmap`: every check on one picture.** Each check's regions on
   the aligned frame, boxed in its own colour with the defect pixels
   filled inside - blue extra ink, red missing ink, amber tone, green
@@ -273,7 +266,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   wrong-place verdicts; `random/dust` 25% → 100%, `random/void-spots`
   25% → 100%, `scratch/dark` 75% → 100%. ~10 ms a frame at
   `workingSize` 2100. On the line's real artwork, at the production
-  node's settings: 86.2% recall, 0 clean false fails, no wrong-place. Lowering the dilation
+  node's settings: 86.2% recall, 0 clean false fails, no wrong-place (at a 3 px slack; see the slack entry for current figures). Lowering the dilation
   tolerances instead was measured and rejected: `printTolerance` 0
   reaches 82.5% by failing 23 of 24 clean frames.
 - **A fixed rig in the synthetic set.** `synthetic-defects` and
@@ -298,9 +291,9 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   trained slack was never applied. `golden-compare`'s editor now gives
   such a setting its default, as a fresh node would have.
 
-- **The tone and speck checks failed every good part on a real rig.** Their
-  first model cut a 3 px band either side of each ink edge and held every
-  other pixel to the grey of exactly its own position; a rig that leaves
+- **The tone and speck checks failed every good part on a real rig.** The
+  check held every pixel to the grey of exactly its own position, less a
+  3 px band either side of ink; a rig that leaves
   a rule 5 px off register after the local alignment - which the binary
   checks had been tuned around with `inkMargin` 64 - painted that rule's
   far side as a tone region and its edge as a 180 px speck, on frames
@@ -312,15 +305,11 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   levels are still sampled that far clear of the other class - 3 px of
   clearance let a rule off register hand its cell frame paper as its ink
   level - with 3 px as the fallback for artwork too thin to leave any
-  pure ink at a small working size. On the rig the good frames measured
-  pass at 4 px and up, six of six at the default; a bad one still fails
-  on all four checks. The slack costs sensitivity next to ink: on the
-  perfectly registered benches the default takes the synthetic rig set
-  from 82.5% to 76.2% recall and the real artwork from 86.2% to 81.5%,
-  every case lost a speck-only detection within a few px of an edge, no
-  false fail or wrong-place verdict moved. A rig with better register
-  can set 3-4 and have them back, or raise `localAlignMax` to 6 at some
-  180 ms a frame.
+  pure ink at a small working size. On the rig, trained over 30 good
+  frames, 1 good frame of 148 fails (print, as before) and 12 of 14 bad
+  ones fail; at `localAlignMax` 6, none of 148 and 13 of 14, for about
+  40 ms a frame. The slack costs sensitivity next to ink, which
+  training's per-tile map mostly recovers (see Added).
 
 - **The worker pool no longer holds on to finished frames.** A shared
   buffer is freed only when every thread that viewed it has let go, and

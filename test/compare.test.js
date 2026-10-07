@@ -321,11 +321,9 @@ test("a grey smudge the ink threshold never sees fails the tone check, on the sm
 	assert.ok(on.timings.toneMs >= 0);
 });
 
-// Registration is never exact: on a real rig a rule sat 5 px off register
-// after the local alignment, and the first tone model booked its far
-// side as a tone region and its edge as a speck on every good part. A
-// pixel is held to the grey the artwork predicts anywhere within
-// toneMargin px, so a few px of register is not a defect.
+// A pixel is held to the grey the artwork predicts anywhere within
+// toneMargin px, so a rule a few px off register is not a tone or speck
+// defect, while a smudge still is.
 test("a bar a few px off register is not a tone defect within the slack", async () => {
 	const goldenBuf = await png(labelSvg(1200, 1600));
 	// three bars 8 px over: 5 working px at 1024, which no global fit
@@ -375,11 +373,22 @@ test("a training frame measures the register residual and the slack it needs", a
 
 	const none = await compareFrame(shifted, golden, cfg(aligned));
 	assert.strictEqual(none.register, null);
+
+	// a photograph: paper at 200, ink at 60, blurred. A raw difference pays
+	// that lighting at every offset, and a 5 px residual read as 3; the
+	// frame's grey is mapped onto the golden's per tile first
+	const camera = await sharp(labelSvg(1200, 1600, { localShift: { from: 3, to: 6, px: 8 }, paperFill: "#c8c8c8", barFill: "#3c3c3c", borderFill: "#3c3c3c" }))
+		.blur(1.5)
+		.png()
+		.toBuffer();
+	const toned = await compareFrame(camera, golden, cfg({ ...aligned, measureRegister: true }));
+	assert.ok(toned.register.maxPx >= 1.5, `camera tone measured ${toned.register.maxPx} px`);
+	assert.ok(Math.abs(toned.register.maxPx - off.register.maxPx) <= 1.5, `camera tone ${toned.register.maxPx} vs crisp ${off.register.maxPx}`);
 });
 
 // The slack is the rig's and not the same everywhere on it. With three
 // bars off register and the rest of the label true, the map allows the
-// shift where the bars are and next to nothing elsewhere - so a dot on a
+// shift where the bars are and the 2 px minimum elsewhere - so a dot on a
 // line in the true part, which one slack for the whole label would
 // swallow, is seen.
 test("a per-tile slack map allows the register where it is and sees a dot on a line where it is not", async () => {
@@ -407,8 +416,10 @@ test("a per-tile slack map allows the register where it is and sees a dot on a l
 
 	const mapped = await compareFrame(frame, golden, cfg({ ...aligned, ...checks, toneMargin: hi, toneSlackMap: map }));
 	assert.strictEqual(mapped.toneBlemish.slackMapApplied, true);
-	assert.strictEqual(mapped.toneBlemish.slackMin, lo);
-	assert.strictEqual(mapped.toneBlemish.slackMax, hi);
+	// the map's values are rounded up to the levels the check keeps windows for
+	const level = (v) => [2, 3, 4, 5, 6, 8, 10, 12, 16].find((l) => l >= v);
+	assert.strictEqual(mapped.toneBlemish.slackMin, level(lo));
+	assert.strictEqual(mapped.toneBlemish.slackMax, level(hi));
 	assert.ok(mapped.speckBlemish.count >= 1, `the map should expose the dot: ${JSON.stringify(mapped.speckBlemish.regions)}`);
 	// and the shifted bars are still not a defect
 	const clean = await compareFrame(await png(labelSvg(1200, 1600, shift)), golden, cfg({ ...aligned, ...checks, toneMargin: hi, toneSlackMap: map }));

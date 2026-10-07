@@ -262,11 +262,19 @@ test("training measures the register slack and later frames take their tone marg
 	const dir = await tmpDir();
 	const goldenPath = path.join(dir, "golden.png");
 	const xformPath = path.join(dir, "transform.json");
-	await fsp.writeFile(goldenPath, await png(labelSvg(900, 1300)));
-	const cfg = { ...NODE_CFG, goldenPath, transformFilePath: xformPath };
+	const goldenBuf = await png(labelSvg(900, 1300));
+	await fsp.writeFile(goldenPath, goldenBuf);
+	// trained on a frame with one band off register, so the map varies
+	// and a frame that ignored it would show
+	const band = { left: 0, top: 300, width: 900, height: 220 };
+	const shifted = await sharp(goldenBuf)
+		.composite([{ input: await sharp(goldenBuf).extract(band).toBuffer(), left: 8, top: band.top }])
+		.png()
+		.toBuffer();
+	const cfg = { ...NODE_CFG, goldenPath, transformFilePath: xformPath, localAlign: true, localAlignTile: 96, localAlignMax: 3 };
 
 	const train = makeNode({ ...cfg, trainTransform: true });
-	await train.run({ payload: goldenPath });
+	await train.run({ payload: shifted });
 	assert.strictEqual(train.errors.length, 0, train.errors.join("\n"));
 	const record = JSON.parse(await fsp.readFile(xformPath, "utf8"));
 	assert.ok(record.register && record.register.localised > 0, JSON.stringify(record.register));
@@ -286,7 +294,24 @@ test("training measures the register slack and later frames take their tone marg
 	assert.strictEqual(auto.sent[0].result.toneBlemish.marginTrained, true);
 	assert.strictEqual(auto.sent[0].result.toneBlemish.marginMinPx, Math.min(...map.slackPx));
 	assert.strictEqual(auto.sent[0].result.toneBlemish.marginMaxPx, record.registerSlackPx);
+	assert.ok(auto.sent[0].result.toneBlemish.marginMinPx < auto.sent[0].result.toneBlemish.marginMaxPx, "the map must vary over the label");
 	assert.strictEqual(auto.sent[0].result.register, undefined);
+
+	// a slack sent on the message overrides the trained one
+	const sent = makeNode({ ...cfg, trainTransform: false });
+	await sent.run({ payload: goldenPath, toneMargin: 7 });
+	assert.strictEqual(sent.sent[0].result.toneBlemish.marginPx, 7);
+	assert.strictEqual(sent.sent[0].result.toneBlemish.marginTrained, false);
+
+	// a map for another grid is refused with a warning, and the number applies
+	const stale = { ...record, register: { ...record.register, slack: { ...map, gridW: map.gridW + 1, slackPx: [...map.slackPx, ...new Array(map.gridH).fill(2)] } } };
+	await fsp.writeFile(xformPath, JSON.stringify(stale));
+	const refused = makeNode({ ...cfg, trainTransform: false, toneMargin: 9 });
+	await refused.run({ payload: goldenPath });
+	assert.ok(refused.warns.some((w) => /slack map does not fit/.test(w)), refused.warns.join("\n"));
+	assert.strictEqual(refused.sent[0].result.toneBlemish.marginMinPx, record.registerSlackPx);
+	assert.strictEqual(refused.sent[0].result.toneBlemish.marginMaxPx, record.registerSlackPx);
+	await fsp.writeFile(xformPath, JSON.stringify(record));
 
 	// opted out: the node's own number
 	const manual = makeNode({ ...cfg, trainTransform: false, toneMargin: 9, toneMarginAuto: false });
@@ -321,12 +346,23 @@ test("a training run keeps the worst register slack over its frames", async () =
 	assert.strictEqual(train.errors.length, 0, train.errors.join("\n"));
 	assert.strictEqual(one.register.frames, 1);
 	assert.strictEqual(two.register.frames, 2);
+	// the second frame was measured against the first one's pin
+	assert.strictEqual(two.scaleX, one.scaleX);
+	assert.strictEqual(two.scaleY, one.scaleY);
 	assert.ok(two.registerSlackPx >= one.registerSlackPx, `${two.registerSlackPx} < ${one.registerSlackPx}`);
 	assert.ok(
 		two.register.slack.slackPx.every((v, i) => v >= one.register.slack.slackPx[i]),
 		"the merged map must be at least the first frame's everywhere",
 	);
 	assert.ok(two.registerSlackPx > one.registerSlackPx, "the shifted frame must raise the slack somewhere");
+
+	// a frame that did not register is not merged: a blank sheet has no
+	// label for the search to find
+	const blank = await sharp({ create: { width: 900, height: 1300, channels: 3, background: "#fff" } }).png().toBuffer();
+	await train.run({ payload: blank });
+	const guarded = JSON.parse(await fsp.readFile(xformPath, "utf8"));
+	assert.strictEqual(guarded.register.frames, 2, "a frame with no label must not count");
+	assert.ok(train.warns.some((w) => /register measurement was not used/.test(w)), train.warns.join("\n"));
 
 	// a frame that is not training ends the run; the next training frame starts over
 	await train.run({ payload: goldenPath, trainTransform: false });

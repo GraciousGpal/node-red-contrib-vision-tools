@@ -238,10 +238,9 @@ mapped between the paper and ink levels of its neighbourhood - as a
 fraction of the span between them, through the same block stage; the
 prediction is taken anywhere within `toneMargin` px, since registration
 is never exact and a rule a few px off register is not a tone defect.
-That slack is a property of the rig, so training measures it - the
-residual the local alignment leaves, tile by tile, with a wider search -
-and writes it into the transform record, as a map, for later frames to
-run each tile at the slack its part of the label needs. It is
+That slack is a property of the rig, so training measures it per tile
+(lib/localAlign.js `measureRegister`, merged over consecutive training
+frames) and writes the map into the transform record for later frames. It is
 the only check that can see a smudge, a ghost or faded print, none of
 which crosses the ink threshold. A fourth, specks, takes the same deviation as pixel-level
 connected components and counts them, because dust and pinholes are a few
