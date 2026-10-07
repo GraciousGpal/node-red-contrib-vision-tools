@@ -916,10 +916,13 @@
     this - every stage at working size - and serves it over
     <code>GET /golden-compare/last/:id</code> (the verdict and the stage
     list) and <code>GET /golden-compare/last/:id/stage/:key</code> (one
-    image). It survives a redeploy, not a restart. The preview renders every
-    stage on every frame, the cost of <i>Output pipeline stages</i>, so it
-    is for tuning rather than production; <code>msg.previewEnabled</code>
-    overrides it per message.
+    image). It survives a redeploy, not a restart. With no viewer open the
+    preview renders only its thumbnail, a few ms a frame; the stages and
+    the per-check heat maps are rendered while a viewer is open on the
+    node (it says so with <code>POST /golden-compare/last/:id/watch</code>
+    every few seconds), and the frame it opens on is rendered in full
+    then. <code>msg.previewEnabled</code> overrides the preview per
+    message.
   </p>
 </script>
 
@@ -1078,8 +1081,12 @@
     const closeViewer = function (reopening) {
       if (!viewer) return;
       document.removeEventListener("keydown", viewer.onKey);
+      clearInterval(viewer.watching);
       viewer.root.remove();
-      if (viewer.paused && !reopening) releaseHold(viewer.nodeId);
+      if (!reopening) {
+        if (viewer.paused) releaseHold(viewer.nodeId);
+        detach(viewer.nodeId);
+      }
       viewer = null;
     };
 
@@ -1092,6 +1099,21 @@
     };
     const releaseHold = function (nodeId) {
       ajax({ url: holdUrl(nodeId), type: "DELETE" });
+    };
+    // The runtime renders the stages only while a viewer is attached:
+    // say so on open and every few seconds, and let go on close. The
+    // open also renders the frame on screen in full if it was not.
+    const watchUrl = function (nodeId) {
+      return "golden-compare/last/" + nodeId + "/watch";
+    };
+    const attach = function (nodeId, receivedAt) {
+      return ajax({
+        url: watchUrl(nodeId), type: "POST", contentType: "application/json",
+        data: JSON.stringify({ receivedAt: receivedAt || null }),
+      });
+    };
+    const detach = function (nodeId) {
+      ajax({ url: watchUrl(nodeId), type: "DELETE" });
     };
 
     const fmt = function (v, digits) {
@@ -1572,6 +1594,10 @@
       };
       document.body.appendChild(root);
       viewer = { root, onKey, show, nodeId, receivedAt: meta.receivedAt, paused, refresh };
+      // unref where timers have it (the editor's tests run this under
+      // Node), so an open viewer never keeps a process alive
+      viewer.watching = setInterval(function () { attach(nodeId); }, 5000);
+      if (viewer.watching && typeof viewer.watching.unref === "function") viewer.watching.unref();
       syncPause();
       syncOverlayUi();
       applyZoom();
@@ -1588,16 +1614,23 @@
     // whatever frame is current, not the one the thumbnail was drawn for.
     const openLast = function (nodeId) {
       if (typeof $ === "undefined" || !$ || typeof $.getJSON !== "function") return;
-      $.getJSON("golden-compare/last/" + nodeId)
-        .done(function (meta) {
-          openViewer(nodeId, meta);
-        })
-        .fail(function (xhr) {
-          const err = xhr && xhr.responseJSON && xhr.responseJSON.error;
-          if (RED.notify) {
-            RED.notify("golden-compare: " + (err || "could not load the last inspection"), "warning");
-          }
-        });
+      const load = function () {
+        $.getJSON("golden-compare/last/" + nodeId)
+          .done(function (meta) {
+            openViewer(nodeId, meta);
+          })
+          .fail(function (xhr) {
+            const err = xhr && xhr.responseJSON && xhr.responseJSON.error;
+            if (RED.notify) {
+              RED.notify("golden-compare: " + (err || "could not load the last inspection"), "warning");
+            }
+          });
+      };
+      // attached first, so the frame on screen has its stages by the
+      // time the list is read
+      const req = attach(nodeId);
+      if (req) req.always(load);
+      else load();
     };
 
     // ---- the thumbnail under the node ------------------------------------

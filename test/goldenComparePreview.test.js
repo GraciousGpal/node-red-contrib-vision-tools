@@ -210,7 +210,11 @@ function boot(node, { meta, fail, holdFail } = {}) {
 			im.onload();
 		}
 	};
-	return { group, bodyEl, publish, panel, viewer, open, key, settle, images, listeners, requests, notices, live, ajaxCalls };
+	// the hold calls and the viewer's attention calls, kept apart: a test
+	// about holds should not count the watch posted on open
+	const holds = () => ajaxCalls.filter((c) => /\/hold$/.test(c.url));
+	const watches = () => ajaxCalls.filter((c) => /\/watch$/.test(c.url));
+	return { group, bodyEl, publish, panel, viewer, open, key, settle, images, listeners, requests, notices, live, ajaxCalls, holds, watches };
 }
 
 const NODE = { id: "gc1", x: 300, y: 200, w: 120, h: 30, name: "front label" };
@@ -493,10 +497,10 @@ test("the viewer opens paused, holding the frame it was clicked on, and stays on
 	h.publish(EVENT);
 	h.open();
 	const btn = () => h.viewer().find((e) => e.id === "golden-compare-stage-pause");
-	assert.strictEqual(h.ajaxCalls.length, 1, "held on open");
-	assert.strictEqual(h.ajaxCalls[0].type, "POST");
-	assert.strictEqual(h.ajaxCalls[0].url, "golden-compare/last/gc1/hold");
-	assert.deepStrictEqual(JSON.parse(h.ajaxCalls[0].data), { receivedAt: 1700000000000 }, "names the frame it opened on");
+	assert.strictEqual(h.holds().length, 1, "held on open");
+	assert.strictEqual(h.holds()[0].type, "POST");
+	assert.strictEqual(h.holds()[0].url, "golden-compare/last/gc1/hold");
+	assert.deepStrictEqual(JSON.parse(h.holds()[0].data), { receivedAt: 1700000000000 }, "names the frame it opened on");
 	assert.strictEqual(btn().textContent, "▶ Go live");
 	assert.ok(h.viewer().find((e) => e.textContent === "paused on this frame"));
 	// a newer frame does not move it
@@ -519,14 +523,14 @@ test("go live releases the hold, catches up, and then follows each frame keeping
 	h.key("o");
 	h.live.meta = NEWER;
 	h.key("p");
-	assert.deepStrictEqual(h.ajaxCalls.map((c) => c.type), ["POST", "DELETE"]);
-	assert.strictEqual(h.ajaxCalls[1].url, "golden-compare/last/gc1/hold");
+	assert.deepStrictEqual(h.holds().map((c) => c.type), ["POST", "DELETE"]);
+	assert.strictEqual(h.holds()[1].url, "golden-compare/last/gc1/hold");
 	assert.strictEqual(h.requests.length, 2, "refetched on going live");
 	let v = h.viewer();
 	assert.ok(v.find((e) => e.textContent === "frame-8.jpg"), "caught up");
 	assert.ok(v.find((e) => e.textContent === "live · follows each frame"));
 	assert.strictEqual(v.find((e) => e.id === "golden-compare-stage-pause").textContent, "⏸ Pause");
-	assert.strictEqual(h.ajaxCalls.length, 2, "going live does not hold again");
+	assert.strictEqual(h.holds().length, 2, "going live does not hold again");
 	const img = v.find((e) => e.tag === "img");
 	assert.strictEqual(img.src, "golden-compare/last/gc1/stage/targetGray?t=1700000005000", "same stage, new frame");
 	assert.strictEqual(v.find((e) => e.id === "golden-compare-stage-overlay").checked, true, "the overlay carried over");
@@ -544,8 +548,8 @@ test("go live releases the hold, catches up, and then follows each frame keeping
 	assert.strictEqual(h.requests.length, 3);
 	// and pause holds the frame it is on now
 	h.key("p");
-	assert.strictEqual(h.ajaxCalls.length, 3);
-	assert.deepStrictEqual(JSON.parse(h.ajaxCalls[2].data), { receivedAt: THIRD.receivedAt });
+	assert.strictEqual(h.holds().length, 3);
+	assert.deepStrictEqual(JSON.parse(h.holds()[2].data), { receivedAt: THIRD.receivedAt });
 	assert.strictEqual(h.viewer().find((e) => e.id === "golden-compare-stage-pause").textContent, "▶ Go live");
 });
 
@@ -554,13 +558,16 @@ test("closing releases the hold; a hold refused because the frame has gone retri
 	h.publish(EVENT);
 	h.open();
 	h.key("Escape");
-	assert.deepStrictEqual(h.ajaxCalls.map((c) => c.type), ["POST", "DELETE"]);
+	assert.deepStrictEqual(h.holds().map((c) => c.type), ["POST", "DELETE"]);
+	// and the viewer said it was open on the way in, and gone on the way out
+	assert.deepStrictEqual(h.watches().map((c) => c.type), ["POST", "DELETE"]);
+	assert.strictEqual(h.watches()[0].url, "golden-compare/last/gc1/watch");
 	assert.strictEqual(h.viewer(), null);
 
 	const r = boot(NODE, { meta: META, holdFail: "that frame has already been replaced" });
 	r.publish(EVENT);
 	r.open();
-	assert.strictEqual(r.ajaxCalls.filter((c) => c.type === "POST").length, 4, "the open and three retries");
+	assert.strictEqual(r.holds().filter((c) => c.type === "POST").length, 4, "the open and three retries");
 	assert.strictEqual(r.requests.length, 4, "each retry opened on the latest");
 	assert.strictEqual(r.viewer().find((e) => e.id === "golden-compare-stage-pause").textContent, "⏸ Pause", "live in the end");
 	assert.deepStrictEqual(r.notices, [

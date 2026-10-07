@@ -284,6 +284,18 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Fixed
 
+- **The preview renders its stages only while a viewer is open.** With
+  nobody looking it rendered every stage and heat map on every frame -
+  the cost of *Output pipeline stages*, 60-90 ms at 3 MP - for a viewer
+  that may never open. Now a frame with the preview on and no viewer
+  renders the thumbnail's one picture and whatever the message asked for;
+  a viewer says it is open (`POST /golden-compare/last/:id/watch`, renewed
+  every few seconds, released on close), frames render in full while it
+  is, and the frame it opens on is rendered in full then from the frame
+  the node kept, so it never opens on a thumbnail alone. On the rig a
+  frame with the preview on and no viewer is where a frame without the
+  preview was.
+
 - **A frame with the preview on took 500 ms where it had taken 200.** Most
   of the difference was never inside the inspection: under `heatmapFormat`
   "raw" with the preview on, a frame carries five heat maps and a dozen

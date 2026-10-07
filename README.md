@@ -727,10 +727,14 @@ this, every stage at working size, and serves it over
 pipeline rendered it; `raw` is encoded on the way out). It survives a
 redeploy, not a restart, and a deleted node's goes with it. The viewer
 fetches each image as you step to it rather than all at once, so opening
-it costs one image, not fifteen. The preview renders every stage and both
-heat maps on every frame, whatever the output boxes say - the cost of
-*Output pipeline stages* - while the message still carries only what was
-asked for, so it is for tuning rather than production.
+it costs one image, not fifteen. With no viewer open the preview renders
+only its thumbnail's picture, a few ms a frame, so it can stay on in
+production; the stages and the per-check heat maps are rendered while a
+viewer is open on the node (it says so with
+`POST /golden-compare/last/:id/watch` every few seconds and lets go on
+close), and the frame it opens on is rendered in full then, from the
+frame the node kept. The message still carries only what the output
+boxes asked for.
 
 ## How `checkerboard-calibrate` works
 

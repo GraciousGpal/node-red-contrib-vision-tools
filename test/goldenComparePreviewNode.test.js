@@ -102,6 +102,10 @@ const hold = (h, receivedAt, id = "gc-preview-test") =>
 	callRoute(h.node, "/golden-compare/last/:id/hold", { params: { id }, body: { receivedAt } });
 const release = (h, id = "gc-preview-test") =>
 	callRoute(h.node, "DELETE /golden-compare/last/:id/hold", { params: { id } });
+const watch = (h, id = "gc-preview-test", receivedAt) =>
+	callRoute(h.node, "/golden-compare/last/:id/watch", { params: { id }, body: { receivedAt } });
+const unwatch = (h, id = "gc-preview-test") =>
+	callRoute(h.node, "DELETE /golden-compare/last/:id/watch", { params: { id } });
 
 const EXPECTED_ORDER = [
 	"goldenGray",
@@ -157,7 +161,17 @@ test("with the preview on: a thumbnail under the node, every stage served, the m
 	const thumb = await sharp(Buffer.from(data.image, "base64")).metadata();
 	assert.strictEqual(thumb.format, "jpeg");
 	assert.strictEqual(thumb.width, 120);
-	assert.deepStrictEqual(data.stages, EXPECTED_ORDER, "in pipeline order, every heat map included");
+	// no viewer open: the thumbnail's picture and what the message asked
+	// for, nothing else rendered
+	assert.deepStrictEqual(data.stages, ["heatmap", "printHeatmap"], "only the thumbnail's picture and the asked-for heat map");
+	assert.deepStrictEqual((await last(h)).body.stages.map((s) => s.key), ["heatmap", "printHeatmap"]);
+	assert.strictEqual((await stage(h, "goldenGray")).status, 404, "not rendered with no viewer open");
+
+	// a viewer opens: the frame on screen is rendered in full, once
+	const watched = await watch(h);
+	assert.strictEqual(watched.status, 200);
+	assert.deepStrictEqual(watched.body, { ok: true, rendered: true, receivedAt: data.receivedAt });
+	assert.deepStrictEqual((await watch(h)).body, { ok: true, rendered: false, receivedAt: data.receivedAt }, "once");
 
 	// the index route
 	const meta = await last(h);
@@ -190,10 +204,20 @@ test("with the preview on: a thumbnail under the node, every stage served, the m
 	assert.strictEqual(missing.status, 404, "no map loaded, no baseline stage");
 	assert.deepStrictEqual(missing.body, { ok: false, error: "no such stage" });
 	assert.strictEqual((await stage(h, "goldenGray", "nobody")).status, 404);
+
+	// while the viewer is attached the next frame renders in full; after
+	// it closes, the thumbnail alone again
+	await h.run({ golden, payload: golden, filename: "frame-2.png" });
+	assert.deepStrictEqual(h.published[1].data.stages, EXPECTED_ORDER, "a frame while a viewer is attached");
+	assert.deepStrictEqual((await unwatch(h)).body, { ok: true });
+	await h.run({ golden, payload: golden, filename: "frame-3.png" });
+	assert.deepStrictEqual(h.published[2].data.stages, ["heatmap", "printHeatmap"], "a frame after the viewer closed");
+	assert.deepStrictEqual(h.warns, []);
 });
 
 test("a raw image format is encoded on the way out, and the next frame replaces the last", async () => {
 	const h = makeNode({ previewEnabled: true, heatmapFormat: "raw" });
+	await watch(h);
 	await h.run({ golden, payload: golden });
 	assert.deepStrictEqual(h.doneErrors, []);
 	const first = (await last(h)).body.receivedAt;
@@ -231,6 +255,7 @@ test("a removed node's inspection goes with it", async () => {
 test("a held inspection survives the next frame, by its time, until released", async () => {
 	const h = makeNode({ previewEnabled: true }, "gc-hold");
 	assert.strictEqual((await hold(h, 1, "gc-hold")).status, 404, "nothing to hold yet");
+	assert.deepStrictEqual((await watch(h, "gc-hold")).body, { ok: true, rendered: false, receivedAt: null }, "nothing to render yet");
 	await h.run({ golden, payload: golden, filename: "first.png" });
 	const first = (await last(h, "gc-hold")).body;
 	// a hold naming a frame that is not the current one is refused

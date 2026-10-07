@@ -422,6 +422,18 @@ module.exports = (RED) => {
 	 */
 	const heldInspections = new Map();
 
+	/**
+	 * The viewers open on a node's preview, by node id, with when their
+	 * attention lapses: a viewer renews it every few seconds while open
+	 * and lets it go on close. The stages and the per-check heat maps are
+	 * rendered only while one is attached; the thumbnail every frame. A
+	 * viewer that opens on a frame rendered without them gets that one
+	 * frame rendered in full, once, from the frame the node kept for it.
+	 */
+	const viewers = new Map();
+	const VIEWER_TTL_MS = 15000;
+	const viewerAttached = (id) => (viewers.get(id) || 0) > Date.now();
+
 	/** The entry a route should serve: the held one when its time is
 	 * asked for, else the latest. */
 	function entryFor(id, t) {
@@ -622,6 +634,7 @@ module.exports = (RED) => {
 			if (removed) {
 				lastInspections.delete(node.id);
 				heldInspections.delete(node.id);
+				viewers.delete(node.id);
 			}
 			done();
 		});
@@ -663,9 +676,17 @@ module.exports = (RED) => {
 				// must be settled here.
 				const wantStages = cfg.debugStages;
 				const wanted = Object.fromEntries(HEATMAPS.map(([key, flag]) => [key, cfg[flag]]));
+				const attached = cfg.previewEnabled && viewerAttached(node.id);
 				if (cfg.previewEnabled) {
+					// the golden's own stages are baked once (debugStages is in
+					// its cache key); the frame's stages and the per-check heat
+					// maps are rendered only while a viewer is attached, or when
+					// the message asked for them; the thumbnail needs the one
+					// picture every frame
 					cfg.debugStages = true;
-					for (const [, flag] of HEATMAPS) cfg[flag] = true;
+					cfg.frameStages = wantStages || attached;
+					cfg.outputHeatmap = true;
+					if (attached) for (const [, flag] of HEATMAPS) cfg[flag] = true;
 				}
 				cfg.mmPerPixelNative = scaleOk ? scale.mmPerPixelNative : null;
 				// the calibration photo's own native size, so prepareGolden can
@@ -1293,7 +1314,7 @@ module.exports = (RED) => {
 					// thumbnail under the node. A preview is a diagnostic,
 					// never a reason to fail a frame that was inspected fine.
 					try {
-						await publishPreview(node, msg, result, cfg, verdictText);
+						await publishPreview(node, msg, result, cfg, verdictText, { cacheKey, cfg, frame });
 					} catch (previewError) {
 						node.warn(`golden-compare preview: ${previewError.message}`);
 					}
@@ -1365,7 +1386,8 @@ module.exports = (RED) => {
 	 * one, which is the aligned frame with no blocks on it, when nothing
 	 * did - so the picture under the node says where, not just whether.
 	 */
-	async function publishPreview(node, msg, result, cfg, verdictText) {
+	/** Every image an inspection rendered, by stage key. */
+	function previewImages(result) {
 		const images = {};
 		for (const key of Object.keys(result.stages || {})) {
 			if (result.stages[key]) images[key] = result.stages[key];
@@ -1374,6 +1396,31 @@ module.exports = (RED) => {
 			const image = pick(result);
 			if (image) images[key] = image;
 		}
+		return images;
+	}
+
+	/**
+	 * Render an entry's frame in full, once, when it was inspected with
+	 * only the thumbnail: the inspector still holds the golden and the
+	 * entry kept the frame. False when there is nothing to do or the
+	 * golden has gone (the next frame renders in full anyway).
+	 */
+	async function renderInFull(entry) {
+		if (!entry.partial || !entry.replay) return false;
+		const { cacheKey, cfg, frame } = entry.replay;
+		const full = { ...cfg, frameStages: true };
+		for (const [, flag] of HEATMAPS) full[flag] = true;
+		const reply = await inspector.inspect({ cacheKey, cfg: full, frame });
+		if (reply.needGolden) return false;
+		entry.images = previewImages(reply.result);
+		entry.partial = false;
+		entry.replay = null;
+		return true;
+	}
+
+	async function publishPreview(node, msg, result, cfg, verdictText, replay) {
+		const images = previewImages(result);
+		const partial = !cfg.frameStages;
 		const entry = {
 			receivedAt: Date.now(),
 			filename: typeof msg.filename === "string" ? msg.filename : null,
@@ -1384,6 +1431,9 @@ module.exports = (RED) => {
 			width: result.width,
 			height: result.height,
 			images,
+			// rendered without its stages; what a viewer needs to have them
+			partial,
+			replay: partial ? replay : null,
 		};
 		lastInspections.set(node.id, entry);
 		if (!RED.comms || typeof RED.comms.publish !== "function") return;
@@ -1505,6 +1555,36 @@ module.exports = (RED) => {
 		RED.auth.needsPermission("golden-compare.write"),
 		(req, res) => {
 			heldInspections.delete(req.params.id);
+			res.json({ ok: true });
+		},
+	);
+
+	// A viewer's attention: posted on open and every few seconds while
+	// open, so frames render their stages while someone looks; deleted on
+	// close. The frame the viewer opens on is rendered in full here when
+	// it was not, so the viewer never opens on a thumbnail alone.
+	RED.httpAdmin.post(
+		"/golden-compare/last/:id/watch",
+		RED.auth.needsPermission("golden-compare.write"),
+		async (req, res) => {
+			viewers.set(req.params.id, Date.now() + VIEWER_TTL_MS);
+			const entry = entryFor(req.params.id, req.body && req.body.receivedAt);
+			let rendered = false;
+			try {
+				if (entry) rendered = await renderInFull(entry);
+			} catch (err) {
+				res.status(500).json({ ok: false, error: err.message });
+				return;
+			}
+			res.json({ ok: true, rendered, receivedAt: entry ? entry.receivedAt : null });
+		},
+	);
+
+	RED.httpAdmin.delete(
+		"/golden-compare/last/:id/watch",
+		RED.auth.needsPermission("golden-compare.write"),
+		(req, res) => {
+			viewers.delete(req.params.id);
 			res.json({ ok: true });
 		},
 	);
