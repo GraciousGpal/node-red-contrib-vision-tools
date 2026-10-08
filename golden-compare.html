@@ -1,800 +1,861 @@
 <script type="text/html" data-template-name="golden-compare">
-  <div class="form-row">
-    <label for="node-input-name"><i class="fa fa-tag"></i> Name</label>
-    <input type="text" id="node-input-name" placeholder="Name" />
+  <div class="form-row golden-compare-section-header" data-section="golden" style="cursor:pointer; user-select:none; margin-top:14px; padding-bottom:4px; border-bottom:1px solid #ddd;">
+    <i class="fa fa-caret-down golden-compare-section-caret" style="width:12px;"></i>
+    <span class="golden-compare-section-title" style="font-weight:bold;">Golden and profile</span>
   </div>
-  <div class="form-row">
-    <label for="node-input-goldenPath"
-      ><i class="fa fa-image"></i> Golden image path</label
-    >
-    <input
-      type="text"
-      id="node-input-goldenPath"
-      placeholder="/data/golden/reference.png (container path)"
-    />
-    <span class="node-input-hint" style="margin-left:10px; color:#999;"
-      >or send <code>msg.golden</code> (path/Buffer) per message</span
-    >
-  </div>
-  <div class="form-row">
-    <label for="node-input-workingSize"
-      ><i class="fa fa-arrows-alt"></i> Working size</label
-    >
-    <input
-      type="number"
-      id="node-input-workingSize"
-      min="64"
-      max="4096"
-      style="width:90px;"
-    />
-    <span class="node-input-hint" style="margin-left:10px; color:#999;"
-      >long edge, px - compare resolution, not the source resolution</span
-    >
-  </div>
-  <div class="form-row">
-    <label for="node-input-threshold"
-      ><i class="fa fa-adjust"></i> Threshold</label
-    >
-    <input
-      type="number"
-      id="node-input-threshold"
-      min="0"
-      max="255"
-      style="width:80px;"
-    />
-    <label for="node-input-alignSearch" style="margin-left:24px;"
-      >Align search</label
-    >
-    <input
-      type="number"
-      id="node-input-alignSearch"
-      min="0"
-      max="200"
-      style="width:70px;"
-    />
-    <span class="node-input-hint" style="margin-left:10px; color:#999;"
-      >px, working resolution - extra translation slack</span
-    >
-  </div>
-  <div class="form-row">
-    <label for="node-input-thresholdMode"
-      ><i class="fa fa-sliders"></i> Ink level</label
-    >
-    <select id="node-input-thresholdMode" style="width:150px;">
-      <option value="fixed">Fixed level</option>
-      <option value="otsu">Otsu (per image)</option>
-      <option value="sauvola">Sauvola (per pixel)</option>
-    </select>
-    <label for="node-input-sauvolaRadius" style="margin-left:24px;"
-      >Sauvola radius</label
-    >
-    <input
-      type="number"
-      id="node-input-sauvolaRadius"
-      min="2"
-      max="200"
-      style="width:70px;"
-    />
-    <input
-      type="number"
-      id="node-input-sauvolaK"
-      min="0.01"
-      max="1"
-      step="0.05"
-      style="width:70px; margin-left:6px;"
-    />
-    <span class="node-input-hint" style="margin-left:10px; color:#999;"
-      >otsu/sauvola re-derive the level per image, so exposure drift stops
-      mattering; radius/k apply to sauvola only</span
-    >
-  </div>
-  <div class="form-row">
-    <label for="node-input-inkMargin"
-      ><i class="fa fa-adjust"></i> Ink margin</label
-    >
-    <input
-      type="number"
-      id="node-input-inkMargin"
-      min="0"
-      max="128"
-      style="width:70px;"
-    />
-    <span class="node-input-hint" style="margin-left:10px; color:#999;"
-      >grey levels: pixels that cleared the ink level by less than this are ink
-      for alignment but can't raise a defect - stops a screened tint that prints
-      heavier than the artwork reporting itself as a blemish. 0 disables</span
-    >
-  </div>
-  <div class="form-row">
-    <label for="node-input-profileDir"
-      ><i class="fa fa-folder-open-o"></i> Profiles</label
-    >
-    <input
-      type="text"
-      id="node-input-profileDir"
-      placeholder="/data/golden/profiles"
-    />
-    <span class="node-input-hint" style="margin-left:10px; color:#999;"
-      >one file per golden, named after its source file (or
-      <code>msg.profile</code>), holding its trained transform, nuisance map
-      and barcode regions. Set, it replaces the two paths below, which are
-      then only read once to import a matching record</span
-    >
-  </div>
-  <div class="form-row" id="golden-compare-barcode-regions-row">
-    <label for="node-input-barcodeRegions" style="width:auto;"
-      ><input
-        type="checkbox"
-        id="node-input-barcodeRegions"
-        style="width:auto; vertical-align:top;"
+  <div class="golden-compare-section-body" data-section="golden">
+    <div class="form-row">
+      <label for="node-input-name"><i class="fa fa-tag"></i> Name</label>
+      <input type="text" id="node-input-name" placeholder="Name" />
+    </div>
+    <div class="form-row">
+      <label for="node-input-goldenPath"
+        ><i class="fa fa-image"></i> Golden image path</label
+      >
+      <input
+        type="text"
+        id="node-input-goldenPath"
+        placeholder="/data/golden/reference.png (container path)"
       />
-      Find the golden's barcodes and keep them in its profile</label
-    >
-    <span
-      class="node-input-hint"
-      id="golden-compare-barcode-regions-hint"
-      style="margin-left:10px; color:#999;"
-      >read once per golden version, after the frame that found it missing
-      is sent; <code>barcode-locate</code> decodes only there. Needs
-      <i>Profiles</i> set</span
-    >
-  </div>
-  <div class="form-row">
-    <label for="node-input-transformFilePath"
-      ><i class="fa fa-crosshairs"></i> Trained transform</label
-    >
-    <input
-      type="text"
-      id="node-input-transformFilePath"
-      placeholder="/data/golden/transform.json"
-    />
-  </div>
-  <div class="form-row">
-    <label for="node-input-nuisancePath"
-      ><i class="fa fa-map-o"></i> Nuisance map</label
-    >
-    <input
-      type="text"
-      id="node-input-nuisancePath"
-      placeholder="/data/golden/nuisance.json"
-    />
-  </div>
-  <div class="form-row">
-    <label for="node-input-noveltyThreshold">Novelty threshold</label>
-    <input type="number" step="0.01" min="0" max="1" id="node-input-noveltyThreshold" />
-    <span class="node-input-hint" style="margin-left:10px; color:#999;"
-      >fail when a block exceeds its trained baseline by this much. 0 disables</span
-    >
-  </div>
-  <div class="form-row">
-    <label for="node-input-trainNuisance" style="width:auto;"
-      ><input
-        type="checkbox"
-        id="node-input-trainNuisance"
-        style="width:auto; vertical-align:top;"
+      <span class="node-input-hint" style="margin-left:10px; color:#999;"
+        >or send <code>msg.golden</code> (path/Buffer) per message</span
+      >
+    </div>
+    <div class="form-row">
+      <label for="node-input-workingSize"
+        ><i class="fa fa-arrows-alt"></i> Working size</label
+      >
+      <input
+        type="number"
+        id="node-input-workingSize"
+        min="64"
+        max="4096"
+        style="width:90px;"
       />
-      Train the nuisance map from incoming frames</label
-    >
-    <span class="node-input-hint" style="margin-left:10px; color:#999;"
-      >every frame must be known-good; the map is rewritten as each arrives, so
-      turn this off when the run looks settled</span
-    >
-  </div>
-  <div class="form-row">
-    <label for="node-input-trainTransform" style="width:auto;"
-      ><input
-        type="checkbox"
-        id="node-input-trainTransform"
-        style="width:auto; vertical-align:top;"
+      <span class="node-input-hint" style="margin-left:10px; color:#999;"
+        >long edge, px - compare resolution, not the source resolution</span
+      >
+    </div>
+    <div class="form-row">
+      <label for="node-input-profileDir"
+        ><i class="fa fa-folder-open-o"></i> Profiles</label
+      >
+      <input
+        type="text"
+        id="node-input-profileDir"
+        placeholder="/data/golden/profiles"
       />
-      Train the transform from the next frame</label
-    >
-    <span class="node-input-hint" style="margin-left:10px; color:#999;"
-      >measures magnification and press stretch once and writes them to the file
-      above; later frames reuse them and solve only position and angle. It also
-      measures how far off register the frame still sits after the local
-      alignment and writes that down as the register slack the tone and speck
-      checks take - the worst over the frames trained in a row, so feed it a
-      handful of good parts before unticking. Send
-      <code>msg.golden</code> with <code>msg.payload</code> to train from any
-      two images. Untick when trained, or drive it per message with
-      <code>msg.trainTransform</code></span
-    >
+      <span class="node-input-hint" style="margin-left:10px; color:#999;"
+        >one file per golden, named after its source file (or
+        <code>msg.profile</code>), holding its trained transform, nuisance map
+        and barcode regions. Set, it replaces the two paths below, which are
+        then only read once to import a matching record</span
+      >
+    </div>
+    <div class="form-row" id="golden-compare-barcode-regions-row">
+      <label for="node-input-barcodeRegions" style="width:auto;"
+        ><input
+          type="checkbox"
+          id="node-input-barcodeRegions"
+          style="width:auto; vertical-align:top;"
+        />
+        Find the golden's barcodes and keep them in its profile</label
+      >
+      <span
+        class="node-input-hint"
+        id="golden-compare-barcode-regions-hint"
+        style="margin-left:10px; color:#999;"
+        >read once per golden version, after the frame that found it missing
+        is sent; <code>barcode-locate</code> decodes only there. Needs
+        <i>Profiles</i> set</span
+      >
+    </div>
+    <div class="form-row">
+      <label for="node-input-trainTransform" style="width:auto;"
+        ><input
+          type="checkbox"
+          id="node-input-trainTransform"
+          style="width:auto; vertical-align:top;"
+        />
+        Train the transform from the next frame</label
+      >
+      <span class="node-input-hint" style="margin-left:10px; color:#999;"
+        >measures magnification and press stretch once and writes them to the
+        profile (or the Trained transform file under Legacy files); later frames reuse them and solve only position and angle. It also
+        measures how far off register the frame still sits after the local
+        alignment and writes that down as the register slack the tone and speck
+        checks take - the worst over the frames trained in a row, so feed it a
+        handful of good parts before unticking. Send
+        <code>msg.golden</code> with <code>msg.payload</code> to train from any
+        two images. Untick when trained, or drive it per message with
+        <code>msg.trainTransform</code></span
+      >
+    </div>
+    <div class="form-row">
+      <label for="node-input-trainNuisance" style="width:auto;"
+        ><input
+          type="checkbox"
+          id="node-input-trainNuisance"
+          style="width:auto; vertical-align:top;"
+        />
+        Train the nuisance map from incoming frames</label
+      >
+      <span class="node-input-hint" style="margin-left:10px; color:#999;"
+        >every frame must be known-good; the map is rewritten as each arrives, so
+        turn this off when the run looks settled</span
+      >
+    </div>
+    <div class="form-row golden-compare-section-header" data-section="legacy" style="cursor:pointer; user-select:none; margin-top:8px; margin-left:20px;">
+      <i class="fa fa-caret-down golden-compare-section-caret" style="width:12px;"></i>
+      <span class="golden-compare-section-title" style="font-weight:bold; font-size:0.9em;">Legacy files</span>
+      <span class="node-input-hint" style="margin-left:10px; color:#999;"
+        >superseded by Profiles; still used when no profile directory is set</span
+      >
+    </div>
+    <div class="golden-compare-section-body" data-section="legacy">
+      <div class="form-row">
+        <label for="node-input-transformFilePath"
+          ><i class="fa fa-crosshairs"></i> Trained transform</label
+        >
+        <input
+          type="text"
+          id="node-input-transformFilePath"
+          placeholder="/data/golden/transform.json"
+        />
+      </div>
+      <div class="form-row">
+        <label for="node-input-nuisancePath"
+          ><i class="fa fa-map-o"></i> Nuisance map</label
+        >
+        <input
+          type="text"
+          id="node-input-nuisancePath"
+          placeholder="/data/golden/nuisance.json"
+        />
+      </div>
+    </div>
   </div>
-  <div class="form-row">
-    <label for="node-input-mismatchScore"
-      ><i class="fa fa-question-circle"></i> Mismatch score</label
-    >
-    <input
-      type="number"
-      id="node-input-mismatchScore"
-      min="0"
-      max="1"
-      step="0.01"
-      style="width:70px;"
-    />
-    <span class="node-input-hint" style="margin-left:10px; color:#999;"
-      >warn "this looks like a different label" when the alignment residual
-      reaches this <em>and</em> both blemish checks are saturated. Comparing one
-      product's artwork against another's photo reports a thousand regions and a
-      6% defect ratio, which reads as a catastrophic print rather than the wrong
-      golden. 0 disables</span
-    >
+  <div class="form-row golden-compare-section-header" data-section="ink" style="cursor:pointer; user-select:none; margin-top:14px; padding-bottom:4px; border-bottom:1px solid #ddd;">
+    <i class="fa fa-caret-down golden-compare-section-caret" style="width:12px;"></i>
+    <span class="golden-compare-section-title" style="font-weight:bold;">Ink</span>
   </div>
-  <div class="form-row">
-    <label for="node-input-minCoverage"
-      ><i class="fa fa-eye-slash"></i> Min ink coverage</label
-    >
-    <input
-      type="number"
-      id="node-input-minCoverage"
-      min="0"
-      max="1"
-      step="0.05"
-      style="width:70px;"
-    />
-    <span class="node-input-hint" style="margin-left:10px; color:#999;"
-      >fail as "label missing" when less than this fraction of the golden's
-      ink is in the frame. Every other check asks what is wrong with the label
-      and assumes there is one; a blank tray answers them all "nothing" and
-      passes. A badly printed part still covers 0.9+. 0 disables</span
-    >
-  </div>
-  <div class="form-row">
-    <label for="node-input-workers"
-      ><i class="fa fa-tasks"></i> Worker threads</label
-    >
-    <input
-      type="number"
-      id="node-input-workers"
-      min="0"
-      max="64"
-      style="width:70px;"
-    />
-    <span class="node-input-hint" style="margin-left:10px; color:#999;"
-      >the per-pixel stages (warp, tile refinement, threshold, diff) are split
-      across a persistent pool. 0 picks one per core up to 16; 1 keeps everything
-      on the main thread. Results are identical either way - only the time
-      changes. Both summed-area tables run here too, and the alignment polish
-      keeps improving to about twelve workers on a 16-core host</span
-    >
-  </div>
-  <div class="form-row">
-    <label for="node-input-nativeFastAlign" style="width:auto;"
-      ><input
-        type="checkbox"
-        id="node-input-nativeFastAlign"
-        style="width:auto; vertical-align:top;"
+  <div class="golden-compare-section-body" data-section="ink">
+    <div class="form-row">
+      <label for="node-input-threshold"
+        ><i class="fa fa-adjust"></i> Threshold</label
+      >
+      <input
+        type="number"
+        id="node-input-threshold"
+        min="0"
+        max="255"
+        style="width:80px;"
       />
-      Experimental OpenCV fast alignment</label
-    >
-    <span class="node-input-hint" style="margin-left:10px; color:#999;"
-      >lets OpenCV solve and warp the full affine alignment, bypassing the JS
-      tables, sweeps, polish, and global warp. Much faster, but deliberately
-      allowed to change the transform and inspection result. Implausible
-      angle/scale or a poor score automatically falls back to JS</span
-    >
-  </div>
-  <div class="form-row">
-    <label for="node-input-nativeAlignSeed" style="width:auto;"
-      ><input
-        type="checkbox"
-        id="node-input-nativeAlignSeed"
-        style="width:auto; vertical-align:top;"
+    </div>
+    <div class="form-row">
+      <label for="node-input-thresholdMode"
+        ><i class="fa fa-sliders"></i> Ink level</label
+      >
+      <select id="node-input-thresholdMode" style="width:150px;">
+        <option value="fixed">Fixed level</option>
+        <option value="otsu">Otsu (per image)</option>
+        <option value="sauvola">Sauvola (per pixel)</option>
+      </select>
+      <label for="node-input-sauvolaRadius" style="margin-left:24px;"
+        >Sauvola radius</label
+      >
+      <input
+        type="number"
+        id="node-input-sauvolaRadius"
+        min="2"
+        max="200"
+        style="width:70px;"
       />
-      Native alignment seed (prototype)</label
-    >
-    <span class="node-input-hint" style="margin-left:10px; color:#999;"
-      >starts the pinned search from an ORB+ECC alignment measured by the
-      optional OpenCV engine instead of the staged sweeps. Only the angle and
-      placement come from the seed - the trained magnifications, the pixel
-      polish and the score are unchanged, and a seed outside the physical
-      bounds is discarded in favour of the sweeps. Inert without the engine
-      or a trained transform</span
-    >
-  </div>
-  <div class="form-row">
-    <label for="node-input-localAlign" style="width:auto;"
-      ><input
-        type="checkbox"
-        id="node-input-localAlign"
-        style="width:auto; vertical-align:top;"
+      <input
+        type="number"
+        id="node-input-sauvolaK"
+        min="0.01"
+        max="1"
+        step="0.05"
+        style="width:70px; margin-left:6px;"
       />
-      Refine alignment per tile</label
-    >
-    <label for="node-input-localAlignTile" style="margin-left:24px; width:auto;"
-      >tile</label
-    >
-    <input
-      type="number"
-      id="node-input-localAlignTile"
-      min="16"
-      max="512"
-      style="width:70px; margin-left:6px;"
-    />
-    <label for="node-input-localAlignMax" style="margin-left:12px; width:auto;"
-      >max px</label
-    >
-    <input
-      type="number"
-      id="node-input-localAlignMax"
-      min="1"
-      max="16"
-      style="width:60px; margin-left:6px;"
-    />
-    <span class="node-input-hint" style="margin-left:10px; color:#999;"
-      >a label on a formed tray is not flat, so parts of it sit a few pixels off
-      however good the global fit is. Each tile takes up its own offset, capped
-      at "max px" so a tile can never slide far enough to hide a fault</span
-    >
-  </div>
-  <div class="form-row">
-    <label for="node-input-alignCandidates"
-      ><i class="fa fa-code-fork"></i> Align candidates</label
-    >
-    <input
-      type="number"
-      id="node-input-alignCandidates"
-      min="1"
-      max="16"
-      style="width:70px;"
-    />
-    <span class="node-input-hint" style="margin-left:10px; color:#999;"
-      >how many scale hypotheses survive the coarse search to be judged on real
-      pixel disagreement. 1 is the old greedy behaviour, where one bad coarse
-      guess misaligns the whole frame and cannot be recovered</span
-    >
-  </div>
-  <div class="form-row">
-    <label for="node-input-scaleSearchMin"
-      ><i class="fa fa-search-plus"></i> Scale search</label
-    >
-    <input
-      type="number"
-      id="node-input-scaleSearchMin"
-      min="0.1"
-      max="10"
-      step="0.05"
-      style="width:70px;"
-    />
-    <input
-      type="number"
-      id="node-input-scaleSearchMax"
-      min="0.1"
-      max="10"
-      step="0.05"
-      style="width:70px; margin-left:6px;"
-    />
-    <label for="node-input-scaleSearchSteps" style="margin-left:24px;"
-      >Steps</label
-    >
-    <input
-      type="number"
-      id="node-input-scaleSearchSteps"
-      min="1"
-      max="61"
-      style="width:70px;"
-    />
-    <span class="node-input-hint" style="margin-left:10px; color:#999;"
-      >min/max magnification of golden within the frame; set both to 1 to pin
-      the scale</span
-    >
-  </div>
-  <div class="form-row">
-    <label for="node-input-maxAspect"
-      ><i class="fa fa-arrows-v"></i> Stretch search</label
-    >
-    <input
-      type="number"
-      id="node-input-maxAspect"
-      min="0"
-      max="0.5"
-      step="0.01"
-      style="width:70px;"
-    />
-    <label for="node-input-aspectSteps" style="margin-left:24px;">Steps</label>
-    <input
-      type="number"
-      id="node-input-aspectSteps"
-      min="1"
-      max="21"
-      style="width:70px;"
-    />
-    <span class="node-input-hint" style="margin-left:10px; color:#999;"
-      >how far the print may be stretched along one axis vs the artwork (0.06 =
-      6%); 0 assumes the two axes share a scale</span
-    >
-  </div>
-  <div class="form-row">
-    <label for="node-input-maxAngleDeg"
-      ><i class="fa fa-rotate-right"></i> Angle search</label
-    >
-    <input
-      type="number"
-      id="node-input-maxAngleDeg"
-      min="0"
-      max="30"
-      step="0.5"
-      style="width:70px;"
-    />
-    <label for="node-input-angleSteps" style="margin-left:24px;">Steps</label>
-    <input
-      type="number"
-      id="node-input-angleSteps"
-      min="1"
-      max="21"
-      style="width:70px;"
-    />
-    <label for="node-input-positionToleranceAngleDeg" style="margin-left:24px;"
-      >Angle tolerance</label
-    >
-    <input
-      type="number"
-      id="node-input-positionToleranceAngleDeg"
-      min="0"
-      max="30"
-      step="0.1"
-      style="width:70px;"
-    />
-    <span class="node-input-hint" style="margin-left:10px; color:#999;"
-      >degrees searched either way, and how far off square still passes</span
-    >
-  </div>
-  <div class="form-row">
-    <label><i class="fa fa-tint"></i> Blemish tolerance (px)</label>
-    <label for="node-input-printTolerance" style="width:auto; margin-right:4px;"
-      >Print</label
-    >
-    <input
-      type="number"
-      id="node-input-printTolerance"
-      min="0"
-      max="50"
-      style="width:60px;"
-    />
-    <label
-      for="node-input-backgroundTolerance"
-      style="width:auto; margin-left:16px; margin-right:4px;"
-      >Background</label
-    >
-    <input
-      type="number"
-      id="node-input-backgroundTolerance"
-      min="0"
-      max="50"
-      style="width:60px;"
-    />
-    <label
-      for="node-input-edgeMargin"
-      style="width:auto; margin-left:16px; margin-right:4px;"
-      >Edge margin</label
-    >
-    <input
-      type="number"
-      id="node-input-edgeMargin"
-      min="0"
-      max="1024"
-      style="width:60px;"
-    />
-    <span class="node-input-hint" style="margin-left:10px; color:#999;"
-      >independent checks: missing ink (print) vs. unwanted ink
-      (background); edge margin is px of the golden's border no check
-      inspects</span
-    >
-  </div>
-  <div class="form-row">
-    <label for="node-input-toneThreshold"><i class="fa fa-adjust"></i> Tone</label>
-    <input
-      type="number"
-      id="node-input-toneThreshold"
-      min="0"
-      max="1"
-      step="0.05"
-      style="width:70px;"
-    />
-    <label
-      for="node-input-toneMargin"
-      style="width:auto; margin-left:16px; margin-right:4px;"
-      >Register slack</label
-    >
-    <input
-      type="number"
-      id="node-input-toneMargin"
-      min="0"
-      max="50"
-      style="width:60px;"
-    />
-    <label for="node-input-toneMarginAuto" style="width:auto; margin-left:8px;"
-      ><input
-        type="checkbox"
-        id="node-input-toneMarginAuto"
-        style="width:auto; vertical-align:top;"
+      <span class="node-input-hint" style="margin-left:10px; color:#999;"
+        >otsu/sauvola re-derive the level per image, so exposure drift stops
+        mattering; radius/k apply to sauvola only</span
+      >
+    </div>
+    <div class="form-row">
+      <label for="node-input-inkMargin"
+        ><i class="fa fa-adjust"></i> Ink margin</label
+      >
+      <input
+        type="number"
+        id="node-input-inkMargin"
+        min="0"
+        max="128"
+        style="width:70px;"
       />
-      from training</label
-    >
-    <span class="node-input-hint" style="margin-left:10px; color:#999;"
-      >a third check on grey: how far a pixel has moved along the
-      paper-to-ink span measured nearby - a smudge, a ghost, faded print
-      the ink threshold never sees. 0 = off. Register slack: a pixel's
-      grey is accepted if the artwork predicts it anywhere within that
-      many px. "From training" uses the per-tile slack the trained
-      transform measured on this rig; the number is the fallback for an
-      untrained one</span
-    >
+      <span class="node-input-hint" style="margin-left:10px; color:#999;"
+        >grey levels: pixels that cleared the ink level by less than this are ink
+        for alignment but can't raise a defect - stops a screened tint that prints
+        heavier than the artwork reporting itself as a blemish. 0 disables</span
+      >
+    </div>
   </div>
-  <div class="form-row">
-    <label for="node-input-speckThreshold"><i class="fa fa-braille"></i> Specks</label>
-    <input
-      type="number"
-      id="node-input-speckThreshold"
-      min="0"
-      max="1"
-      step="0.05"
-      style="width:70px;"
-    />
-    <label for="node-input-speckMinArea" style="width:auto; margin-left:16px; margin-right:4px;"
-      >min px</label
-    >
-    <input type="number" id="node-input-speckMinArea" min="1" max="100000" style="width:60px;" />
-    <label for="node-input-speckMaxCount" style="width:auto; margin-left:16px; margin-right:4px;"
-      >fail at</label
-    >
-    <input type="number" id="node-input-speckMaxCount" min="0" max="1000000" style="width:70px;" />
-    <label for="node-input-speckMaxArea" style="width:auto; margin-left:16px; margin-right:4px;"
-      >or one of</label
-    >
-    <input type="number" id="node-input-speckMaxArea" min="0" max="10000000" style="width:70px;" />
-    <span class="node-input-hint" style="margin-left:10px; color:#999;"
-      >a fourth check for dust and pinholes: specks are connected runs of
-      pixels past this tone level, at least min px each; the part fails
-      at that many specks, or at one speck of that many px. 0 = off / no
-      gate</span
-    >
+  <div class="form-row golden-compare-section-header" data-section="alignment" style="cursor:pointer; user-select:none; margin-top:14px; padding-bottom:4px; border-bottom:1px solid #ddd;">
+    <i class="fa fa-caret-down golden-compare-section-caret" style="width:12px;"></i>
+    <span class="golden-compare-section-title" style="font-weight:bold;">Alignment</span>
   </div>
-  <div class="form-row">
-    <label for="node-input-scaleFilePath"
-      ><i class="fa fa-crosshairs"></i> Scale file path</label
-    >
-    <input
-      type="text"
-      id="node-input-scaleFilePath"
-      placeholder="/data/golden/calibration.json (optional)"
-    />
-    <span class="node-input-hint" style="margin-left:10px; color:#999;"
-      >from <code>checkerboard-calibrate</code> - enables mm position tolerances
-      below</span
-    >
+  <div class="golden-compare-section-body" data-section="alignment">
+    <div class="form-row">
+      <label for="node-input-alignSearch"
+        ><i class="fa fa-expand"></i> Align search</label
+      >
+      <input
+        type="number"
+        id="node-input-alignSearch"
+        min="0"
+        max="200"
+        style="width:70px;"
+      />
+      <span class="node-input-hint" style="margin-left:10px; color:#999;"
+        >px, working resolution - extra translation slack</span
+      >
+    </div>
+    <div class="form-row">
+      <label for="node-input-localAlign" style="width:auto;"
+        ><input
+          type="checkbox"
+          id="node-input-localAlign"
+          style="width:auto; vertical-align:top;"
+        />
+        Refine alignment per tile</label
+      >
+      <label for="node-input-localAlignTile" style="margin-left:24px; width:auto;"
+        >tile</label
+      >
+      <input
+        type="number"
+        id="node-input-localAlignTile"
+        min="16"
+        max="512"
+        style="width:70px; margin-left:6px;"
+      />
+      <label for="node-input-localAlignMax" style="margin-left:12px; width:auto;"
+        >max px</label
+      >
+      <input
+        type="number"
+        id="node-input-localAlignMax"
+        min="1"
+        max="16"
+        style="width:60px; margin-left:6px;"
+      />
+      <span class="node-input-hint" style="margin-left:10px; color:#999;"
+        >a label on a formed tray is not flat, so parts of it sit a few pixels off
+        however good the global fit is. Each tile takes up its own offset, capped
+        at "max px" so a tile can never slide far enough to hide a fault</span
+      >
+    </div>
+    <div class="form-row">
+      <label for="node-input-mismatchScore"
+        ><i class="fa fa-question-circle"></i> Mismatch score</label
+      >
+      <input
+        type="number"
+        id="node-input-mismatchScore"
+        min="0"
+        max="1"
+        step="0.01"
+        style="width:70px;"
+      />
+      <span class="node-input-hint" style="margin-left:10px; color:#999;"
+        >warn "this looks like a different label" when the alignment residual
+        reaches this <em>and</em> both blemish checks are saturated. Comparing one
+        product's artwork against another's photo reports a thousand regions and a
+        6% defect ratio, which reads as a catastrophic print rather than the wrong
+        golden. 0 disables</span
+      >
+    </div>
+    <div class="form-row">
+      <label for="node-input-minCoverage"
+        ><i class="fa fa-eye-slash"></i> Min ink coverage</label
+      >
+      <input
+        type="number"
+        id="node-input-minCoverage"
+        min="0"
+        max="1"
+        step="0.05"
+        style="width:70px;"
+      />
+      <span class="node-input-hint" style="margin-left:10px; color:#999;"
+        >fail as "label missing" when less than this fraction of the golden's
+        ink is in the frame. Every other check asks what is wrong with the label
+        and assumes there is one; a blank tray answers them all "nothing" and
+        passes. A badly printed part still covers 0.9+. 0 disables</span
+      >
+    </div>
+    <div class="form-row golden-compare-section-header" data-section="advanced" style="cursor:pointer; user-select:none; margin-top:8px; margin-left:20px;">
+      <i class="fa fa-caret-down golden-compare-section-caret" style="width:12px;"></i>
+      <span class="golden-compare-section-title" style="font-weight:bold; font-size:0.9em;">Advanced</span>
+      <span class="node-input-hint" style="margin-left:10px; color:#999;"
+        >search ranges, candidates, worker threads and the OpenCV engine</span
+      >
+    </div>
+    <div class="golden-compare-section-body" data-section="advanced">
+      <div class="form-row">
+        <label for="node-input-scaleSearchMin"
+          ><i class="fa fa-search-plus"></i> Scale search</label
+        >
+        <input
+          type="number"
+          id="node-input-scaleSearchMin"
+          min="0.1"
+          max="10"
+          step="0.05"
+          style="width:70px;"
+        />
+        <input
+          type="number"
+          id="node-input-scaleSearchMax"
+          min="0.1"
+          max="10"
+          step="0.05"
+          style="width:70px; margin-left:6px;"
+        />
+        <label for="node-input-scaleSearchSteps" style="margin-left:24px;"
+          >Steps</label
+        >
+        <input
+          type="number"
+          id="node-input-scaleSearchSteps"
+          min="1"
+          max="61"
+          style="width:70px;"
+        />
+        <span class="node-input-hint" style="margin-left:10px; color:#999;"
+          >min/max magnification of golden within the frame; set both to 1 to pin
+          the scale</span
+        >
+      </div>
+      <div class="form-row">
+        <label for="node-input-maxAspect"
+          ><i class="fa fa-arrows-v"></i> Stretch search</label
+        >
+        <input
+          type="number"
+          id="node-input-maxAspect"
+          min="0"
+          max="0.5"
+          step="0.01"
+          style="width:70px;"
+        />
+        <label for="node-input-aspectSteps" style="margin-left:24px;">Steps</label>
+        <input
+          type="number"
+          id="node-input-aspectSteps"
+          min="1"
+          max="21"
+          style="width:70px;"
+        />
+        <span class="node-input-hint" style="margin-left:10px; color:#999;"
+          >how far the print may be stretched along one axis vs the artwork (0.06 =
+          6%); 0 assumes the two axes share a scale</span
+        >
+      </div>
+      <div class="form-row">
+        <label for="node-input-maxAngleDeg"
+          ><i class="fa fa-rotate-right"></i> Angle search</label
+        >
+        <input
+          type="number"
+          id="node-input-maxAngleDeg"
+          min="0"
+          max="30"
+          step="0.5"
+          style="width:70px;"
+        />
+        <label for="node-input-angleSteps" style="margin-left:24px;">Steps</label>
+        <input
+          type="number"
+          id="node-input-angleSteps"
+          min="1"
+          max="21"
+          style="width:70px;"
+        />
+        <span class="node-input-hint" style="margin-left:10px; color:#999;"
+          >degrees searched either way</span
+        >
+      </div>
+      <div class="form-row">
+        <label for="node-input-alignCandidates"
+          ><i class="fa fa-code-fork"></i> Align candidates</label
+        >
+        <input
+          type="number"
+          id="node-input-alignCandidates"
+          min="1"
+          max="16"
+          style="width:70px;"
+        />
+        <span class="node-input-hint" style="margin-left:10px; color:#999;"
+          >how many scale hypotheses survive the coarse search to be judged on real
+          pixel disagreement. 1 is the old greedy behaviour, where one bad coarse
+          guess misaligns the whole frame and cannot be recovered</span
+        >
+      </div>
+      <div class="form-row">
+        <label for="node-input-workers"
+          ><i class="fa fa-tasks"></i> Worker threads</label
+        >
+        <input
+          type="number"
+          id="node-input-workers"
+          min="0"
+          max="64"
+          style="width:70px;"
+        />
+        <span class="node-input-hint" style="margin-left:10px; color:#999;"
+          >the per-pixel stages (warp, tile refinement, threshold, diff) are split
+          across a persistent pool. 0 picks one per core up to 16; 1 keeps everything
+          on the main thread. Results are identical either way - only the time
+          changes. Both summed-area tables run here too, and the alignment polish
+          keeps improving to about twelve workers on a 16-core host</span
+        >
+      </div>
+      <div class="form-row">
+        <label for="node-input-nativeFastAlign" style="width:auto;"
+          ><input
+            type="checkbox"
+            id="node-input-nativeFastAlign"
+            style="width:auto; vertical-align:top;"
+          />
+          Experimental OpenCV fast alignment</label
+        >
+        <span class="node-input-hint" style="margin-left:10px; color:#999;"
+          >lets OpenCV solve and warp the full affine alignment, bypassing the JS
+          tables, sweeps, polish, and global warp. Much faster, but deliberately
+          allowed to change the transform and inspection result. Implausible
+          angle/scale or a poor score automatically falls back to JS</span
+        >
+      </div>
+      <div class="form-row">
+        <label for="node-input-nativeAlignSeed" style="width:auto;"
+          ><input
+            type="checkbox"
+            id="node-input-nativeAlignSeed"
+            style="width:auto; vertical-align:top;"
+          />
+          Native alignment seed (prototype)</label
+        >
+        <span class="node-input-hint" style="margin-left:10px; color:#999;"
+          >starts the pinned search from an ORB+ECC alignment measured by the
+          optional OpenCV engine instead of the staged sweeps. Only the angle and
+          placement come from the seed - the trained magnifications, the pixel
+          polish and the score are unchanged, and a seed outside the physical
+          bounds is discarded in favour of the sweeps. Inert without the engine
+          or a trained transform</span
+        >
+      </div>
+    </div>
   </div>
-  <div class="form-row">
-    <label><i class="fa fa-arrows"></i> Position tolerance</label>
-    <label
-      for="node-input-positionToleranceXMm"
-      style="width:auto; margin-right:4px;"
-      >X [mm]</label
-    >
-    <input
-      type="number"
-      id="node-input-positionToleranceXMm"
-      min="0"
-      step="0.1"
-      style="width:60px;"
-    />
-    <label
-      for="node-input-positionToleranceYMm"
-      style="width:auto; margin-left:16px; margin-right:4px;"
-      >Y [mm]</label
-    >
-    <input
-      type="number"
-      id="node-input-positionToleranceYMm"
-      min="0"
-      step="0.1"
-      style="width:60px;"
-    />
+  <div class="form-row golden-compare-section-header" data-section="position" style="cursor:pointer; user-select:none; margin-top:14px; padding-bottom:4px; border-bottom:1px solid #ddd;">
+    <i class="fa fa-caret-down golden-compare-section-caret" style="width:12px;"></i>
+    <span class="golden-compare-section-title" style="font-weight:bold;">Position</span>
   </div>
-  <div class="form-row">
-    <label>&nbsp;</label>
-    <label
-      for="node-input-positionToleranceXPx"
-      style="width:auto; margin-right:4px;"
-      >X [px]</label
-    >
-    <input
-      type="number"
-      id="node-input-positionToleranceXPx"
-      min="0"
-      style="width:60px;"
-    />
-    <label
-      for="node-input-positionToleranceYPx"
-      style="width:auto; margin-left:16px; margin-right:4px;"
-      >Y [px]</label
-    >
-    <input
-      type="number"
-      id="node-input-positionToleranceYPx"
-      min="0"
-      style="width:60px;"
-    />
-    <span class="node-input-hint" style="margin-left:10px; color:#999;"
-      >px fallback, used when no scale file is configured/found</span
-    >
+  <div class="golden-compare-section-body" data-section="position">
+    <div class="form-row">
+      <label for="node-input-scaleFilePath"
+        ><i class="fa fa-crosshairs"></i> Scale file path</label
+      >
+      <input
+        type="text"
+        id="node-input-scaleFilePath"
+        placeholder="/data/golden/calibration.json (optional)"
+      />
+      <span class="node-input-hint" style="margin-left:10px; color:#999;"
+        >from <code>checkerboard-calibrate</code> - enables mm position tolerances
+        below</span
+      >
+    </div>
+    <div class="form-row">
+      <label><i class="fa fa-arrows"></i> Position tolerance</label>
+      <label
+        for="node-input-positionToleranceXMm"
+        style="width:auto; margin-right:4px;"
+        >X [mm]</label
+      >
+      <input
+        type="number"
+        id="node-input-positionToleranceXMm"
+        min="0"
+        step="0.1"
+        style="width:60px;"
+      />
+      <label
+        for="node-input-positionToleranceYMm"
+        style="width:auto; margin-left:16px; margin-right:4px;"
+        >Y [mm]</label
+      >
+      <input
+        type="number"
+        id="node-input-positionToleranceYMm"
+        min="0"
+        step="0.1"
+        style="width:60px;"
+      />
+    </div>
+    <div class="form-row">
+      <label>&nbsp;</label>
+      <label
+        for="node-input-positionToleranceXPx"
+        style="width:auto; margin-right:4px;"
+        >X [px]</label
+      >
+      <input
+        type="number"
+        id="node-input-positionToleranceXPx"
+        min="0"
+        style="width:60px;"
+      />
+      <label
+        for="node-input-positionToleranceYPx"
+        style="width:auto; margin-left:16px; margin-right:4px;"
+        >Y [px]</label
+      >
+      <input
+        type="number"
+        id="node-input-positionToleranceYPx"
+        min="0"
+        style="width:60px;"
+      />
+      <span class="node-input-hint" style="margin-left:10px; color:#999;"
+        >px fallback, used when no scale file is configured/found</span
+      >
+    </div>
+    <div class="form-row">
+      <label for="node-input-positionToleranceAngleDeg"
+        ><i class="fa fa-rotate-right"></i> Angle tolerance</label
+      >
+      <input
+        type="number"
+        id="node-input-positionToleranceAngleDeg"
+        min="0"
+        max="30"
+        step="0.1"
+        style="width:70px;"
+      />
+      <span class="node-input-hint" style="margin-left:10px; color:#999;"
+        >degrees - how far off square still passes</span
+      >
+    </div>
   </div>
-  <div class="form-row">
-    <label for="node-input-blockSize"
-      ><i class="fa fa-th"></i> Heat map block</label
-    >
-    <input
-      type="number"
-      id="node-input-blockSize"
-      min="4"
-      max="256"
-      style="width:70px;"
-    />
-    <label for="node-input-blockThreshold" style="margin-left:24px;"
-      >Block threshold</label
-    >
-    <input
-      type="number"
-      id="node-input-blockThreshold"
-      min="0"
-      max="1"
-      step="0.01"
-      style="width:70px;"
-    />
+  <div class="form-row golden-compare-section-header" data-section="blemish" style="cursor:pointer; user-select:none; margin-top:14px; padding-bottom:4px; border-bottom:1px solid #ddd;">
+    <i class="fa fa-caret-down golden-compare-section-caret" style="width:12px;"></i>
+    <span class="golden-compare-section-title" style="font-weight:bold;">Blemish checks</span>
   </div>
-  <div class="form-row">
-    <label for="node-input-failThreshold"
-      ><i class="fa fa-exclamation-triangle"></i> Fail threshold</label
-    >
-    <input
-      type="number"
-      id="node-input-failThreshold"
-      min="0"
-      max="1"
-      step="0.01"
-      style="width:70px;"
-    />
-    <label for="node-input-failRatio" style="margin-left:24px;"
-      >Fail ratio</label
-    >
-    <input
-      type="number"
-      id="node-input-failRatio"
-      min="0"
-      max="1"
-      step="0.001"
-      style="width:80px;"
-    />
-    <span class="node-input-hint" style="margin-left:10px; color:#999;"
-      >applies to both print and background checks</span
-    >
+  <div class="golden-compare-section-body" data-section="blemish">
+    <div class="form-row">
+      <label><i class="fa fa-tint"></i> Blemish tolerance (px)</label>
+      <label for="node-input-printTolerance" style="width:auto; margin-right:4px;"
+        >Print</label
+      >
+      <input
+        type="number"
+        id="node-input-printTolerance"
+        min="0"
+        max="50"
+        style="width:60px;"
+      />
+      <label
+        for="node-input-backgroundTolerance"
+        style="width:auto; margin-left:16px; margin-right:4px;"
+        >Background</label
+      >
+      <input
+        type="number"
+        id="node-input-backgroundTolerance"
+        min="0"
+        max="50"
+        style="width:60px;"
+      />
+      <label
+        for="node-input-edgeMargin"
+        style="width:auto; margin-left:16px; margin-right:4px;"
+        >Edge margin</label
+      >
+      <input
+        type="number"
+        id="node-input-edgeMargin"
+        min="0"
+        max="1024"
+        style="width:60px;"
+      />
+      <span class="node-input-hint" style="margin-left:10px; color:#999;"
+        >independent checks: missing ink (print) vs. unwanted ink
+        (background); edge margin is px of the golden's border no check
+        inspects</span
+      >
+    </div>
+    <div class="form-row">
+      <label for="node-input-blockSize"
+        ><i class="fa fa-th"></i> Heat map block</label
+      >
+      <input
+        type="number"
+        id="node-input-blockSize"
+        min="4"
+        max="256"
+        style="width:70px;"
+      />
+      <label for="node-input-blockThreshold" style="margin-left:24px;"
+        >Block threshold</label
+      >
+      <input
+        type="number"
+        id="node-input-blockThreshold"
+        min="0"
+        max="1"
+        step="0.01"
+        style="width:70px;"
+      />
+    </div>
+    <div class="form-row">
+      <label for="node-input-failThreshold"
+        ><i class="fa fa-exclamation-triangle"></i> Fail threshold</label
+      >
+      <input
+        type="number"
+        id="node-input-failThreshold"
+        min="0"
+        max="1"
+        step="0.01"
+        style="width:70px;"
+      />
+      <label for="node-input-failRatio" style="margin-left:24px;"
+        >Fail ratio</label
+      >
+      <input
+        type="number"
+        id="node-input-failRatio"
+        min="0"
+        max="1"
+        step="0.001"
+        style="width:80px;"
+      />
+      <span class="node-input-hint" style="margin-left:10px; color:#999;"
+        >applies to both print and background checks</span
+      >
+    </div>
+    <div class="form-row">
+      <label for="node-input-printMissingFraction"
+        ><i class="fa fa-font"></i> Missing ink</label
+      >
+      <input
+        type="number"
+        id="node-input-printMissingFraction"
+        min="0"
+        max="1"
+        step="0.05"
+        style="width:70px;"
+      />
+      <span class="node-input-hint" style="margin-left:10px; color:#999;"
+        >print fails when a block lost this fraction of the ink the golden has
+        there - catches a dropped word of thin type that never fills a block;
+        0 = off</span
+      >
+    </div>
+    <div class="form-row">
+      <label for="node-input-noveltyThreshold">Novelty threshold</label>
+      <input type="number" step="0.01" min="0" max="1" id="node-input-noveltyThreshold" style="width:70px;" />
+      <span class="node-input-hint" style="margin-left:10px; color:#999;"
+        >fail when a block exceeds its trained baseline by this much. 0 disables</span
+      >
+    </div>
+    <div class="form-row">
+      <label for="node-input-toneThreshold"><i class="fa fa-adjust"></i> Tone</label>
+      <input
+        type="number"
+        id="node-input-toneThreshold"
+        min="0"
+        max="1"
+        step="0.05"
+        style="width:70px;"
+      />
+      <label
+        for="node-input-toneMargin"
+        style="width:auto; margin-left:16px; margin-right:4px;"
+        >Register slack</label
+      >
+      <input
+        type="number"
+        id="node-input-toneMargin"
+        min="0"
+        max="50"
+        style="width:60px;"
+      />
+      <label for="node-input-toneMarginAuto" style="width:auto; margin-left:8px;"
+        ><input
+          type="checkbox"
+          id="node-input-toneMarginAuto"
+          style="width:auto; vertical-align:top;"
+        />
+        from training</label
+      >
+      <span class="node-input-hint" style="margin-left:10px; color:#999;"
+        >a third check on grey: how far a pixel has moved along the
+        paper-to-ink span measured nearby - a smudge, a ghost, faded print
+        the ink threshold never sees. 0 = off. Register slack: a pixel's
+        grey is accepted if the artwork predicts it anywhere within that
+        many px. "From training" uses the per-tile slack the trained
+        transform measured on this rig; the number is the fallback for an
+        untrained one</span
+      >
+    </div>
+    <div class="form-row">
+      <label for="node-input-speckThreshold"><i class="fa fa-braille"></i> Specks</label>
+      <input
+        type="number"
+        id="node-input-speckThreshold"
+        min="0"
+        max="1"
+        step="0.05"
+        style="width:70px;"
+      />
+      <label for="node-input-speckMinArea" style="width:auto; margin-left:16px; margin-right:4px;"
+        >min px</label
+      >
+      <input type="number" id="node-input-speckMinArea" min="1" max="100000" style="width:60px;" />
+      <label for="node-input-speckMaxCount" style="width:auto; margin-left:16px; margin-right:4px;"
+        >fail at</label
+      >
+      <input type="number" id="node-input-speckMaxCount" min="0" max="1000000" style="width:70px;" />
+      <label for="node-input-speckMaxArea" style="width:auto; margin-left:16px; margin-right:4px;"
+        >or one of</label
+      >
+      <input type="number" id="node-input-speckMaxArea" min="0" max="10000000" style="width:70px;" />
+      <span class="node-input-hint" style="margin-left:10px; color:#999;"
+        >a fourth check for dust and pinholes: specks are connected runs of
+        pixels past this tone level, at least min px each; the part fails
+        at that many specks, or at one speck of that many px. 0 = off / no
+        gate</span
+      >
+    </div>
   </div>
-  <div class="form-row">
-    <label for="node-input-printMissingFraction"
-      ><i class="fa fa-font"></i> Missing ink</label
-    >
-    <input
-      type="number"
-      id="node-input-printMissingFraction"
-      min="0"
-      max="1"
-      step="0.05"
-      style="width:70px;"
-    />
-    <span class="node-input-hint" style="margin-left:10px; color:#999;"
-      >print fails when a block lost this fraction of the ink the golden has
-      there - catches a dropped word of thin type that never fills a block;
-      0 = off</span
-    >
+  <div class="form-row golden-compare-section-header" data-section="output" style="cursor:pointer; user-select:none; margin-top:14px; padding-bottom:4px; border-bottom:1px solid #ddd;">
+    <i class="fa fa-caret-down golden-compare-section-caret" style="width:12px;"></i>
+    <span class="golden-compare-section-title" style="font-weight:bold;">Output and preview</span>
   </div>
-  <div class="form-row">
-    <label for="node-input-outputHeatmap"
-      ><i class="fa fa-picture-o"></i> Output heat maps</label
-    >
-    <input
-      type="checkbox"
-      id="node-input-outputHeatmap"
-      style="display:inline-block; width:auto; vertical-align:middle;"
-    />
-    <span style="margin-left:4px;"><b>every check</b></span>
-    <input
-      type="checkbox"
-      id="node-input-outputPrintHeatmap"
-      style="display:inline-block; width:auto; vertical-align:middle; margin-left:16px;"
-    />
-    <span style="margin-left:4px;">print</span>
-    <input
-      type="checkbox"
-      id="node-input-outputBackgroundHeatmap"
-      style="display:inline-block; width:auto; vertical-align:middle; margin-left:16px;"
-    />
-    <span style="margin-left:4px;">background</span>
-    <input
-      type="checkbox"
-      id="node-input-outputToneHeatmap"
-      style="display:inline-block; width:auto; vertical-align:middle; margin-left:16px;"
-    />
-    <span style="margin-left:4px;">tone</span>
-    <input
-      type="checkbox"
-      id="node-input-outputSpeckHeatmap"
-      style="display:inline-block; width:auto; vertical-align:middle; margin-left:16px;"
-    />
-    <span style="margin-left:4px;">specks</span>
-    <span class="node-input-hint" style="margin-left:10px; color:#999;"
-      ><code>msg.heatmap</code> is every check's regions on the aligned
-      frame in one picture (blue extra ink, red missing ink, amber tone,
-      green specks); the others are one check each, per block</span
-    >
-  </div>
-  <div class="form-row">
-    <label for="node-input-heatmapFormat"
-      ><i class="fa fa-file-image-o"></i> Image format</label
-    >
-    <select id="node-input-heatmapFormat" style="width:90px;">
-      <option value="jpg">jpg</option>
-      <option value="png">png</option>
-      <option value="raw">raw</option>
-    </select>
-    <span style="margin:0 6px 0 12px;">quality</span>
-    <input
-      type="number"
-      id="node-input-heatmapQuality"
-      min="1"
-      max="100"
-      style="width:70px;"
-    />
-    <span class="node-input-hint" style="margin-left:10px; color:#999;"
-      >heat maps and pipeline stages. At working size: jpg ~22ms/350KB, png
-      (lossless, zlib level 1) ~25ms/3.7MB, raw 0ms/9.4MB as a
-      <code>{ data, width, height, channels }</code> object for a flow that
-      resizes before displaying; quality applies to jpg only</span
-    >
-  </div>
-  <div class="form-row">
-    <label for="node-input-debugStages"
-      ><i class="fa fa-eye"></i> Output pipeline stages</label
-    >
-    <input
-      type="checkbox"
-      id="node-input-debugStages"
-      style="display:inline-block; width:auto; vertical-align:middle;"
-    />
-    <span class="node-input-hint" style="margin-left:10px; color:#999;"
-      >adds <code>msg.stages</code> for debugging a bad match - leave off in
-      production</span
-    >
-  </div>
-  <div class="form-row">
-    <label for="node-input-previewEnabled"
-      ><i class="fa fa-eye"></i> Preview</label
-    >
-    <input
-      type="checkbox"
-      id="node-input-previewEnabled"
-      style="display:inline-block; width:auto; vertical-align:middle;"
-    />
-    <label for="node-input-previewEnabled" style="width:auto; margin-left:5px;"
-      >Show the last frame under the node; click it to step through every
-      stage of the inspection</label
-    >
-  </div>
-  <div class="form-row" id="golden-compare-preview-width-row">
-    <label for="node-input-previewWidth"
-      ><i class="fa fa-arrows-h"></i> Preview width</label
-    >
-    <input
-      type="number"
-      id="node-input-previewWidth"
-      min="80"
-      max="600"
-      style="width:80px;"
-    />
-    <span class="node-input-hint" style="margin-left:10px; color:#999;"
-      >px; the stages and per-check heat maps are rendered only while a
-      viewer is open</span
-    >
+  <div class="golden-compare-section-body" data-section="output">
+    <div class="form-row">
+      <label for="node-input-outputHeatmap"
+        ><i class="fa fa-picture-o"></i> Output heat maps</label
+      >
+      <input
+        type="checkbox"
+        id="node-input-outputHeatmap"
+        style="display:inline-block; width:auto; vertical-align:middle;"
+      />
+      <span style="margin-left:4px;"><b>every check</b></span>
+      <input
+        type="checkbox"
+        id="node-input-outputPrintHeatmap"
+        style="display:inline-block; width:auto; vertical-align:middle; margin-left:16px;"
+      />
+      <span style="margin-left:4px;">print</span>
+      <input
+        type="checkbox"
+        id="node-input-outputBackgroundHeatmap"
+        style="display:inline-block; width:auto; vertical-align:middle; margin-left:16px;"
+      />
+      <span style="margin-left:4px;">background</span>
+      <input
+        type="checkbox"
+        id="node-input-outputToneHeatmap"
+        style="display:inline-block; width:auto; vertical-align:middle; margin-left:16px;"
+      />
+      <span style="margin-left:4px;">tone</span>
+      <input
+        type="checkbox"
+        id="node-input-outputSpeckHeatmap"
+        style="display:inline-block; width:auto; vertical-align:middle; margin-left:16px;"
+      />
+      <span style="margin-left:4px;">specks</span>
+      <span class="node-input-hint" style="margin-left:10px; color:#999;"
+        ><code>msg.heatmap</code> is every check's regions on the aligned
+        frame in one picture (blue extra ink, red missing ink, amber tone,
+        green specks); the others are one check each, per block</span
+      >
+    </div>
+    <div class="form-row">
+      <label for="node-input-heatmapFormat"
+        ><i class="fa fa-file-image-o"></i> Image format</label
+      >
+      <select id="node-input-heatmapFormat" style="width:90px;">
+        <option value="jpg">jpg</option>
+        <option value="png">png</option>
+        <option value="raw">raw</option>
+      </select>
+      <span style="margin:0 6px 0 12px;">quality</span>
+      <input
+        type="number"
+        id="node-input-heatmapQuality"
+        min="1"
+        max="100"
+        style="width:70px;"
+      />
+      <span class="node-input-hint" style="margin-left:10px; color:#999;"
+        >heat maps and pipeline stages. At working size: jpg ~22ms/350KB, png
+        (lossless, zlib level 1) ~25ms/3.7MB, raw 0ms/9.4MB as a
+        <code>{ data, width, height, channels }</code> object for a flow that
+        resizes before displaying; quality applies to jpg only</span
+      >
+    </div>
+    <div class="form-row">
+      <label for="node-input-debugStages"
+        ><i class="fa fa-eye"></i> Output pipeline stages</label
+      >
+      <input
+        type="checkbox"
+        id="node-input-debugStages"
+        style="display:inline-block; width:auto; vertical-align:middle;"
+      />
+      <span class="node-input-hint" style="margin-left:10px; color:#999;"
+        >adds <code>msg.stages</code> for debugging a bad match - leave off in
+        production</span
+      >
+    </div>
+    <div class="form-row">
+      <label for="node-input-previewEnabled"
+        ><i class="fa fa-eye"></i> Preview</label
+      >
+      <input
+        type="checkbox"
+        id="node-input-previewEnabled"
+        style="display:inline-block; width:auto; vertical-align:middle;"
+      />
+      <label for="node-input-previewEnabled" style="width:auto; margin-left:5px;"
+        >Show the last frame under the node; click it to step through every
+        stage of the inspection</label
+      >
+    </div>
+    <div class="form-row" id="golden-compare-preview-width-row">
+      <label for="node-input-previewWidth"
+        ><i class="fa fa-arrows-h"></i> Preview width</label
+      >
+      <input
+        type="number"
+        id="node-input-previewWidth"
+        min="80"
+        max="600"
+        style="width:80px;"
+      />
+      <span class="node-input-hint" style="margin-left:10px; color:#999;"
+        >px; the stages and per-check heat maps are rendered only while a
+        viewer is open</span
+      >
+    </div>
   </div>
 </script>
 
@@ -1191,6 +1252,76 @@
       };
       profileDirInput.addEventListener("input", updateBarcodeRow);
       updateBarcodeRow();
+      // ---- collapsible sections. Every row stays in the dialog, only
+      // hidden, so the help text's row names still find their field. The
+      // lookups go by class and data-section rather than new ids, scoped to
+      // this dialog's form.
+      const form = previewCheckbox.closest("form") || document;
+      const SECTIONS_KEY = "golden-compare.sections";
+      // what a browser that never touched a header sees: the superseded
+      // file paths and the search tuning stay out of the way
+      const SHUT_BY_DEFAULT = { legacy: true, advanced: true };
+      let sectionState = {};
+      try {
+        // a private window can throw on localStorage access
+        sectionState = JSON.parse(window.localStorage.getItem(SECTIONS_KEY) || "{}") || {};
+      } catch (err) {
+        sectionState = {};
+      }
+      const sectionPart = function (kind, name) {
+        return form.querySelector(
+          ".golden-compare-section-" + kind + '[data-section="' + name + '"]',
+        );
+      };
+      const setSectionOpen = function (header, open) {
+        const body = sectionPart("body", header.dataset.section);
+        if (!body) return;
+        body.style.display = open ? "" : "none";
+        const caret = header.querySelector(".golden-compare-section-caret");
+        if (caret) {
+          caret.classList.toggle("fa-caret-down", open);
+          caret.classList.toggle("fa-caret-right", !open);
+        }
+      };
+      form.querySelectorAll(".golden-compare-section-header").forEach(function (header) {
+        const name = header.dataset.section;
+        setSectionOpen(
+          header,
+          name in sectionState ? !!sectionState[name] : !SHUT_BY_DEFAULT[name],
+        );
+        header.addEventListener("click", function () {
+          const body = sectionPart("body", name);
+          const open = !!body && body.style.display === "none";
+          setSectionOpen(header, open);
+          sectionState[name] = open;
+          try {
+            window.localStorage.setItem(SECTIONS_KEY, JSON.stringify(sectionState));
+          } catch (err) {
+            // not remembered, still toggled
+          }
+        });
+      });
+      // A red field inside a shut section would be invisible. Node-RED marks
+      // fields invalid only after oneditprepare returns (and again after each
+      // change), so look on the next tick, and open every enclosing body -
+      // Legacy files sits inside Golden and profile. Not remembered: the
+      // operator's own choice is what is stored.
+      const revealInvalid = function () {
+        form.querySelectorAll(".input-error").forEach(function (field) {
+          let body = field.closest(".golden-compare-section-body");
+          while (body) {
+            const header = sectionPart("header", body.dataset.section);
+            if (header) setSectionOpen(header, true);
+            body = body.parentElement
+              ? body.parentElement.closest(".golden-compare-section-body")
+              : null;
+          }
+        });
+      };
+      setTimeout(revealInvalid, 0);
+      form.addEventListener("change", function () {
+        setTimeout(revealInvalid, 0);
+      });
     },
   });
 

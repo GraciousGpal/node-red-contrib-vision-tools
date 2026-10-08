@@ -406,6 +406,17 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Changed
 
+- **The `golden-compare` edit dialog is grouped into six collapsible
+  sections** — Golden and profile, Ink, Alignment, Position, Blemish
+  checks, Output and preview — with the two legacy file paths under
+  *Legacy files* and the search sweeps, candidates, worker threads and
+  OpenCV prototypes under *Advanced*, both folded by default. 63 fields in
+  one flat list had become hard to scan once profiles arrived. No setting
+  is added, renamed or re-defaulted; the open/closed state is remembered
+  per browser, and a section holding an invalid field opens itself when
+  the dialog is reopened. The angle tolerance now sits under Position,
+  apart from the angle sweep it used to share a row with.
+
 - **The trained transform record records the frame it was measured on.**
   `frameWidth`/`frameHeight` (the frame at working size),
   `frameNativeWidth`/`frameNativeHeight` (the frame as `golden-compare`
