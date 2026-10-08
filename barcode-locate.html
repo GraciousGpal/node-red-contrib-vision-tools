@@ -12,6 +12,41 @@
     </select>
   </div>
 
+  <div class="form-row">
+    <label for="node-input-regionSource"><i class="fa fa-map-marker"></i> Regions from</label>
+    <select id="node-input-regionSource" style="width:70%;">
+      <option value="list">The list below</option>
+      <option value="profile">The golden's profile (barcodes found on the artwork)</option>
+    </select>
+  </div>
+  <div class="form-row node-input-profile-row">
+    <label for="node-input-profilePath"><i class="fa fa-file-o"></i> Profile file</label>
+    <input type="text" id="node-input-profilePath" placeholder="/data/golden/profiles/demo_good_60.json" />
+  </div>
+  <div class="form-row node-input-profile-row">
+    <label for="node-input-profileDir"><i class="fa fa-folder-o"></i> Profile dir</label>
+    <input type="text" id="node-input-profileDir" placeholder="/data/golden/profiles" />
+  </div>
+  <div class="form-row node-input-profile-row">
+    <label for="node-input-scaleFilePath"><i class="fa fa-th"></i> Calibration</label>
+    <input type="text" id="node-input-scaleFilePath" placeholder="only when the payload is NOT rectified" />
+  </div>
+  <div class="form-row node-input-profile-row">
+    <label for="node-input-regionPad"><i class="fa fa-arrows-alt"></i> Region pad</label>
+    <input type="text" id="node-input-regionPad" style="width:60px;" />
+    <span style="margin:0 6px 0 4px;">of the longer edge, at least</span>
+    <input type="text" id="node-input-regionPadMinPx" style="width:60px;" />
+    <span class="node-input-hint" style="margin-left:6px; color:#999;">golden px - see Help</span>
+  </div>
+  <div class="form-row node-input-profile-row">
+    <span class="node-input-hint" style="margin-left:110px; color:#999;">
+      the file is <code>msg.result.profile.path</code> when golden-compare ran
+      upstream, else <code>msg.profile</code> as a name in Profile dir, else
+      Profile file. Regions come from the golden's profile;
+      <code>msg.regions</code> still overrides.
+    </span>
+  </div>
+
   <div class="form-row node-input-region-container-row">
     <label><i class="fa fa-crop"></i> Regions</label>
     <span class="node-input-hint" style="color:#999;">
@@ -103,15 +138,94 @@
     lens, or mounting changes.
   </p>
 
+  <h3>Regions from the golden's profile</h3>
+  <p>
+    With <i>Regions from</i> set to <i>the golden's profile</i>, nobody
+    measures regions. <code>golden-compare</code> keeps one
+    <b>profile</b> file per golden (its <i>Profile directory</i>): the
+    trained transform - where the artwork sits in the frame it inspects -
+    and, with its <i>Barcode regions</i> option on, the barcodes it found
+    on the artwork itself. This node reads both and maps each barcode's
+    box from the artwork into the image it is given. A new product needs
+    no new regions, and a moved camera needs only the transform retrained.
+  </p>
+  <p>The profile file is, first match wins:</p>
+  <ol>
+    <li><code>msg.result.profile.path</code> - what <code>golden-compare</code> resolved, when it ran upstream;</li>
+    <li><code>msg.profile</code> - a profile <i>name</i> (never a path), looked up in <i>Profile dir</i>;</li>
+    <li><i>Profile file</i> - a fixed file, for a rig that only ever runs one product.</li>
+  </ol>
+  <p><code>msg.regions</code> on the message still overrides all of it.</p>
+  <p>Two wirings work:</p>
+  <ul>
+    <li>
+      <b>A:</b> <code>golden-compare</code> &rarr; a change node that puts the
+      <b>native camera frame</b> back on <code>msg.payload</code> &rarr; this
+      node, which then takes <code>msg.result.profile.path</code> from the
+      compare's result.
+    </li>
+    <li>
+      <b>B:</b> a change node setting <code>msg.profile</code> on the native
+      frame &rarr; this node, with <i>Profile dir</i> set to the compare's
+      profile directory.
+    </li>
+  </ul>
+  <p>
+    <b>Decode the native camera frame, not the frame the compare saw.</b>
+    The compare usually inspects a halved, rectified frame; at that
+    resolution a typical Code128 is ~2.3 px per module. Measured on the
+    demo rig (149 photos): regions decoded on the halved rectified frame
+    read both codes in only 23/149 and returned one confidently wrong
+    string; the same regions on the native 3000x3700 frame read the exact
+    artwork text in 149/149 with no wrong reads, 152 ms median against
+    385 ms for the whole frame. The node warns when the payload is no
+    larger than the frame the compare was trained on.
+  </p>
+  <p>
+    <b>Calibration</b> (<i>scaleFilePath</i>): set it <b>if and only if</b>
+    the payload has <b>not</b> been through <code>perspective-rectify</code>
+    but the compare's frame had - the node then undoes the rectification
+    for the regions. A rectified payload with a calibration set is
+    un-rectified twice and the regions land in the wrong place (warned when
+    <code>msg.rectify</code> says so). A calibration of another aspect ratio
+    than the payload gives no regions, with a warning; the full-image
+    fallback still runs.
+  </p>
+  <p>
+    <b>Region pad</b> grows each box on every side by
+    <code>max(regionPad &times; its longer edge, regionPadMinPx)</code>, in
+    the golden's working pixels. The proportional part covers the code's
+    own quiet zone; the floor is what covers the part's movement, because a
+    pad proportional to a small code cannot - a 50 px DataMatrix would get
+    10 px while the compare passes parts 64 px off nominal. Set
+    <i>regionPadMinPx</i> to at least the compare's larger position
+    tolerance (<code>positionToleranceYPx</code>) plus its register slack.
+  </p>
+  <p>
+    Profile problems never fail the message: a missing file, a profile with
+    no barcodes yet, barcodes and transform from two different goldens, a
+    profile for another golden than the one the compare just used, a
+    transform trained before the frame size was recorded - each is warned
+    once per profile file and leaves the message with no profile regions,
+    so in the default mode the full-image scan still runs. A transform with
+    no recorded placement is used as if the part sat centred, with a
+    warning. Mapped regions are cached; a message costs one file stat.
+  </p>
+
   <h3>Input</h3>
   <p>
     <code>msg.payload</code> - the image: Buffer / Uint8Array, a file path
     string, or an object with <code>data</code>/<code>buffer</code>/<code>path</code>.
+    Bare pixels work as <code>golden-compare</code> takes them: an object
+    <code>{ data, width, height, channels }</code>, or the bytes with
+    <code>msg.rawInfo = { width, height, channels }</code>.
   </p>
   <p>
     Optional per-message overrides: <code>msg.regions</code> (array of
     <code>{ label, x, y, width, height }</code>, replaces the configured
-    list for this message) and <code>msg.mode</code>.
+    list - or the profile's regions - for this message),
+    <code>msg.mode</code>, and <code>msg.profile</code> (a profile name, see
+    above).
   </p>
 
   <h3>Output</h3>
@@ -120,7 +234,16 @@
     <li><code>msg.text</code> - the decoded content</li>
     <li><code>msg.format</code> - e.g. <code>"Code128"</code>, <code>"DataMatrix"</code></li>
     <li><code>msg.roi</code> - <code>{ x, y, width, height }</code> of the region scanned (full-image coordinates)</li>
+    <li><code>msg.symbol</code> - <code>{ x, y, width, height }</code> of the code itself (full-image coordinates)</li>
     <li><code>msg.regionLabel</code> - the region's configured label, or <code>null</code> for a full-image find</li>
+    <li><code>msg.regionSource</code> - where the regions came from: <code>"list"</code>, <code>"profile"</code> or <code>"msg"</code></li>
+    <li>
+      <code>msg.expectedText</code> - with profile regions, the text the
+      golden's artwork has for the code in that place (<code>null</code>
+      otherwise); <code>msg.textMatches</code> - whether
+      <code>msg.text</code> equals it (<code>null</code> when there is
+      nothing to compare). A mismatch is also warned, once per profile.
+    </li>
     <li><code>msg.source</code> - <code>"region"</code> or <code>"fullImage"</code></li>
     <li><code>msg.decodeMs</code> - time for that specific region/scan (not the whole node's runtime)</li>
     <li><code>msg.timings</code> - <code>{ regionsMs, fullImageMs }</code>, whichever ran</li>
@@ -128,7 +251,15 @@
   </ul>
   <p>
     If nothing is found anywhere, one message is sent with
-    <code>msg.text = null</code>, <code>msg.barcodeCount = 0</code>.
+    <code>msg.text = null</code>, <code>msg.barcodeCount = 0</code>, and
+    <code>msg.symbol</code>, <code>msg.expectedText</code>,
+    <code>msg.textMatches</code> all <code>null</code>.
+  </p>
+  <p>
+    One code read through two overlapping regions is reported once, under
+    the first region's label (same text, same format, touching boxes).
+    Overlapping hand-drawn regions used to report it twice, so
+    <code>msg.barcodeCount</code> can be lower than before.
   </p>
 
   <h3>Notes</h3>
@@ -152,6 +283,12 @@
     one-time warmup cost for zxing-wasm's WASM module - handled internally
     so it doesn't land on whichever message happens to arrive first.
   </p>
+  <p>
+    <b>Works offline.</b> zxing-wasm on its own downloads its WASM binary
+    from a CDN on the first decode after every start, which fails on a rig
+    without internet; this node loads the binary shipped inside the package
+    instead and never touches the network.
+  </p>
 </script>
 
 <script type="text/javascript">
@@ -162,6 +299,12 @@
       name: { value: "" },
       mode: { value: "regionsThenAuto" },
       regions: { value: [] },
+      regionSource: { value: "list" },
+      profilePath: { value: "" },
+      profileDir: { value: "" },
+      scaleFilePath: { value: "" },
+      regionPad: { value: 0.2, validate: RED.validators.number(true) },
+      regionPadMinPx: { value: 64, validate: RED.validators.number(true) },
       Code128: { value: true },
       DataMatrix: { value: true },
       QRCode: { value: true },
@@ -242,6 +385,18 @@
       for (let i = 0; i < regions.length; i++) {
         list.editableList("addItem", regions[i]);
       }
+
+      // In profile mode the list is not used (msg.regions still is), so
+      // hide it rather than let someone edit regions that are ignored. The
+      // rows are kept, not cleared: switching back restores them.
+      const source = $("#node-input-regionSource");
+      function showSource() {
+        const profile = source.val() === "profile";
+        $(".node-input-region-container-row").toggle(!profile);
+        $(".node-input-profile-row").toggle(profile);
+      }
+      source.on("change", showSource);
+      showSource();
     },
     oneditsave: function () {
       const items = $("#node-input-region-container").editableList("items");

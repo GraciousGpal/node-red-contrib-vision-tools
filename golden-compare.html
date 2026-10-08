@@ -106,6 +106,40 @@
     >
   </div>
   <div class="form-row">
+    <label for="node-input-profileDir"
+      ><i class="fa fa-folder-open-o"></i> Profiles</label
+    >
+    <input
+      type="text"
+      id="node-input-profileDir"
+      placeholder="/data/golden/profiles"
+    />
+    <span class="node-input-hint" style="margin-left:10px; color:#999;"
+      >one file per golden, named after its source file (or
+      <code>msg.profile</code>), holding its trained transform, nuisance map
+      and barcode regions. Set, it replaces the two paths below, which are
+      then only read once to import a matching record</span
+    >
+  </div>
+  <div class="form-row" id="golden-compare-barcode-regions-row">
+    <label for="node-input-barcodeRegions" style="width:auto;"
+      ><input
+        type="checkbox"
+        id="node-input-barcodeRegions"
+        style="width:auto; vertical-align:top;"
+      />
+      Find the golden's barcodes and keep them in its profile</label
+    >
+    <span
+      class="node-input-hint"
+      id="golden-compare-barcode-regions-hint"
+      style="margin-left:10px; color:#999;"
+      >read once per golden version, after the frame that found it missing
+      is sent; <code>barcode-locate</code> decodes only there. Needs
+      <i>Profiles</i> set</span
+    >
+  </div>
+  <div class="form-row">
     <label for="node-input-transformFilePath"
       ><i class="fa fa-crosshairs"></i> Trained transform</label
     >
@@ -806,7 +840,9 @@
     <code>msg.printTolerance</code>, <code>msg.heatmapFormat</code>
     (<code>jpg</code> / <code>png</code> / <code>raw</code>),
     <code>msg.trainTransform</code>, <code>msg.nativeAlignSeed</code>, and so
-    on.
+    on. With <i>Profiles</i> set, <code>msg.profile</code> names the golden's
+    profile and <code>msg.deriveBarcodes: true</code> re-reads its barcodes
+    (see below).
   </p>
 
   <h3>Output</h3>
@@ -834,6 +870,15 @@
       and a <code>reason</code>
       (region coordinates in the working-resolution image, same size as the heat
       maps)
+    </li>
+    <li>
+      <code>msg.result.profile</code> — only with <i>Profiles</i> set:
+      <code>{ id, namedBy, path, contentKey, transform, nuisance, barcodes }</code>
+      - the profile this frame used, how it was named
+      (<code>profile</code> / <code>source</code> / <code>content</code>),
+      whether a trained transform and nuisance map from it applied, and the
+      number of barcode regions it holds for this golden (<code>null</code>
+      until they are read)
     </li>
     <li>
       <code>msg.heatmap</code> — every check's regions on the aligned frame in one picture: blue extra ink, red missing ink, amber tone, green specks (only if <i>every check</i> is on)
@@ -871,6 +916,80 @@
     node's <i>Working size</i>) and checks it against the mm tolerances. Without
     it, the px tolerances are used instead - position is still checked, just not
     in physical units.
+  </p>
+
+  <h3>Profiles</h3>
+  <p>
+    Without <i>Profiles</i>, the trained transform and the nuisance map each
+    live in one file per node, tied to one golden: a node that runs a second
+    artwork refuses both and searches unpinned, and training the second
+    overwrites the first. With <i>Profiles</i> set to a directory, every
+    golden gets its own file there holding everything trained or derived
+    for it - the transform with its register slack, the nuisance map, the
+    barcode regions - and the node picks the file from the golden.
+  </p>
+  <p>
+    The file is named, in order: <code>msg.profile</code> (a name, never a
+    path); else the golden's source file - <i>Golden image path</i> when it
+    is the golden in use, else a path in <code>msg.golden</code>,
+    <code>msg.images[0].path</code>, <code>msg.filename</code> when it names
+    an artwork document (<code>.pdf</code>, <code>.ai</code>, <code>.eps</code>,
+    <code>.svg</code> - <code>file in</code> sets it and
+    <code>pdf-to-image</code> passes it through), <code>msg.goldenKey</code>,
+    then <i>Golden image path</i> - without its
+    extension, with <code>-p&lt;page&gt;</code> for a PDF page above 1; else the
+    first 16 hex digits of the golden's content hash.
+    <code>/data/Inspection/pdf/Demo_Good_60.pdf</code> becomes
+    <code>demo_good_60.json</code>. Names are lower-cased and anything outside
+    <code>a-z 0-9 . _ -</code> becomes <code>_</code>. A camera frame's
+    <code>msg.filename</code> (a <code>.jpg</code>, <code>.png</code>, ...)
+    never names a profile, so a golden riding on the frame's message is not
+    filed under each frame's name.
+  </p>
+  <p>
+    The name chooses the file; the golden's content hash is the check. Every
+    record in it carries the hash it was trained on and is refused, with a
+    warning, when the golden's bytes differ - a revised artwork saved under
+    the same file name, or two PDFs of one name in different folders. Retrain
+    and the record is overwritten in place; or give each its own
+    <code>msg.profile</code>. A golden that arrives as bare bytes with no name
+    is filed under its hash, so the same artwork as a PNG one day and a RAW
+    render the next lands in two profiles: let <code>msg.filename</code>
+    through, or set <code>msg.profile</code>. The hash is computed once per
+    golden version per deploy.
+  </p>
+  <p>
+    Training with <i>Profiles</i> set writes the profile only. When a profile
+    has no transform or nuisance map yet and <i>Trained transform</i> /
+    <i>Nuisance map</i> point at a file trained on this same golden, that
+    file is imported into the profile once (logged); a file trained on
+    another golden is passed over quietly. The legacy files are never
+    changed. Several nodes in one Node-RED may share a directory; separate
+    Node-RED processes should not.
+  </p>
+  <p>
+    A transform trained by this version also records the frame it was
+    measured on (<code>frameWidth</code>/<code>frameHeight</code> at working
+    size, <code>frameNativeWidth</code>/<code>frameNativeHeight</code> as
+    received) and where the golden sat in it (<code>placement: { ox, oy,
+    angleDeg }</code>), which is what lets <code>barcode-locate</code> carry a
+    box from the artwork onto the camera frame.
+  </p>
+
+  <h3>Barcode regions</h3>
+  <p>
+    With <i>Profiles</i> set and the barcode box ticked, the node reads every
+    barcode on the golden once per golden version and stores each one's box
+    (golden native px, with its format and text) in the profile's
+    <code>barcodes</code> section. It runs after the frame that found the
+    section missing or derived from other artwork has been sent, so that
+    frame is not delayed, and one at a time per golden. A golden with no
+    barcode stores an empty list and warns once; a failure warns once and
+    never fails the frame. <code>msg.deriveBarcodes: true</code> re-reads them
+    on demand. <code>barcode-locate</code>, set to take its regions from the
+    profile, maps these boxes onto the native camera frame and decodes only
+    there - reliable where decoding the halved frame this node compares is
+    not.
   </p>
 
   <h3>Notes</h3>
@@ -952,6 +1071,8 @@
       localAlign: { value: true },
       localAlignTile: { value: 96, validate: RED.validators.number(true) },
       localAlignMax: { value: 3, validate: RED.validators.number(true) },
+      profileDir: { value: "" },
+      barcodeRegions: { value: false },
       transformFilePath: { value: "" },
       trainTransform: { value: false },
       // A real default, not just a placeholder: ticking "Train the nuisance
@@ -960,13 +1081,16 @@
       nuisancePath: {
         value: "/data/golden/nuisance.json",
         // Training with nowhere to write is the case that failed silently at
-        // deploy time. Flag it in the editor instead.
+        // deploy time. Flag it in the editor instead. A profile directory is
+        // somewhere to write too. Keep this a braced function: the defaults
+        // test skips it only in that shape.
         validate: function (v) {
           // `this` is the node under validation. Node-RED does not
           // guarantee it on every call path, so an unknown state is
           // treated as valid rather than blocking a deploy wrongly.
           var training = this && this.trainNuisance;
-          return !training || String(v == null ? "" : v).trim() !== "";
+          var profiles = this && String(this.profileDir == null ? "" : this.profileDir).trim() !== "";
+          return !training || profiles || String(v == null ? "" : v).trim() !== "";
         },
       },
       trainNuisance: { value: false },
@@ -1049,6 +1173,24 @@
       };
       previewCheckbox.addEventListener("change", updatePreviewVisibility);
       updatePreviewVisibility();
+      // barcode regions are kept in the golden's profile, so without a
+      // profile directory the box does nothing: grey it and say why
+      const profileDirInput = document.getElementById("node-input-profileDir");
+      const barcodeRow = document.getElementById("golden-compare-barcode-regions-row");
+      const barcodeHint = document.getElementById("golden-compare-barcode-regions-hint");
+      const barcodeHintOn = barcodeHint.innerHTML;
+      const updateBarcodeRow = function () {
+        const off = profileDirInput.value.trim() === "";
+        barcodeRow.style.opacity = off ? "0.5" : "";
+        if (off) {
+          barcodeHint.textContent =
+            "does nothing until Profiles is set above - the regions are kept in the golden's profile";
+        } else {
+          barcodeHint.innerHTML = barcodeHintOn;
+        }
+      };
+      profileDirInput.addEventListener("input", updateBarcodeRow);
+      updateBarcodeRow();
     },
   });
 

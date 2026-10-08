@@ -22,7 +22,10 @@ in [CHANGELOG.md](CHANGELOG.md).
   rotation as well as translation, then refines what is left per tile, so
   the golden can be the label's PDF artwork rather than a capture off the
   same camera — including raw pixels handed straight over by
-  `pdf-to-image`. The per-pixel stages run on a worker pool.
+  `pdf-to-image`. The per-pixel stages run on a worker pool. With a
+  profile directory set, each golden keeps its own trained state in one
+  file named after its source file, so a rig switching products keeps
+  every product's training.
 - **`checkerboard-calibrate`** — photograph a printed checkerboard of
   known pitch, measure the pixel pitch, and save or compare the resulting
   mm/px scale. Run once at commissioning and again after camera or
@@ -45,6 +48,9 @@ in [CHANGELOG.md](CHANGELOG.md).
   touched.
 - **`barcode-locate`** — finds and decodes 1D and 2D barcodes, optionally
   restricted to pre-defined pixel regions with a whole-image fallback.
+  The regions can come from the artwork itself: the barcodes
+  `golden-compare` found on the golden, mapped onto the camera frame
+  through its trained transform. Works offline.
 - **`synthetic-defects`** — a test bench, not a production node: takes a
   golden and emits camera-like frames of it with known defects painted in,
   one message at a time, each carrying the golden it was made from and the
@@ -609,6 +615,160 @@ label — the case this inspection exists for — is exactly where features
 are poorest. Validate against a real set of rejects for your golden before
 trusting it.
 
+### Profiles: one file per golden
+
+Without **Profiles**, the trained transform (`transformFilePath`) and the
+nuisance map (`nuisancePath`) each live in one file per node. Both are
+tied to one golden by its content hash and refused when the golden
+changes, which is right, but it means a node that runs a second artwork
+searches unpinned with no nuisance map every time the product changes,
+and training the second artwork overwrites the first.
+
+Set **Profiles** (`profileDir`, e.g. `/data/golden/profiles`) and every
+golden gets its own `<id>.json` there, holding everything trained or
+derived for it: `transform` (with its register slack), `nuisance`, and
+`barcodes` (below). The node picks the file from the golden on every
+message, so a rig switching products keeps each one's training.
+
+**How the file is named.** The first rule that applies wins:
+
+1. `msg.profile` — a *name*, never a path.
+2. The golden's source file. That is **Golden image path** when it is the
+   golden in use (no `msg.golden`); otherwise, in order, a path in
+   `msg.golden` (a string or `{ path }`), `msg.images[0].path`,
+   `msg.filename` **only when it ends in `.pdf`, `.ai`, `.eps` or `.svg`**
+   (any case; set by `file in` and passed through by `pdf-to-image`),
+   `msg.goldenKey` (its basename if it looks like a path, else the key
+   itself), and last **Golden image path**. The file's stem is used,
+   without the extension; when the golden came on the message and
+   `msg.images[0].page` (or `msg.page`) is above 1, `-p<page>` is appended,
+   because page 1 and page 17 of one artwork PDF are different labels.
+   `/data/Inspection/pdf/Demo_Good_60.pdf` becomes `demo_good_60.json`.
+   A camera frame's `msg.filename` never names a profile: when the golden
+   rides on the frame's message, a `file in` reading the frame sets
+   `msg.filename` to the frame's `.jpg`/`.png`, and every frame would get
+   its own profile, with training landing where no later frame looks.
+3. Only when there is no name at all: the first 16 hex digits of the
+   golden's content hash, plus `-WxHxC` for raw pixels
+   (`a1b2c3d4e5f60718-2950x4250x4`).
+
+Every id is lower-cased, anything outside `a-z 0-9 . _ -` becomes `_`,
+leading dots are stripped, it is capped at 64 characters, and Windows
+reserved names (`con`, `aux`, `com1`…) get a `_` prefix.
+
+**The name chooses the file; the hash is the check.** Every section in it
+carries the golden's content key and is compared strictly, on every read.
+So a revised artwork saved under the same file name lands on the same
+profile and has its sections refused, with a warning that names the
+profile, until it is retrained:
+
+```text
+profile demo_good_60: trained transform was measured against different golden content (…) - retrain it; searching for the transform instead
+```
+
+The barcode section is re-derived automatically, and retraining overwrites
+the section in place. Two different PDFs with one name in different
+folders collide the same way; give each its own `msg.profile`.
+
+**The trap in the fallback.** A golden that arrives as bare bytes with no
+name (no path, no artwork `msg.filename`) is filed under its hash, and the hash is
+of the bytes. The same artwork delivered as a PNG one day and as a RAW
+render the next is two different byte streams, so it lands in two
+profiles and the second starts untrained. Let `msg.filename` through to
+the node, or set `msg.profile`.
+
+**Migrating from `transformFilePath` / `nuisancePath`.** With **Profiles**
+set the profile is the source of truth, and training writes the profile
+only. When a profile has no `transform` (or `nuisance`) yet and the
+matching legacy path points at a file that validates for this same golden
+(content key compared strictly), that file is imported into the profile
+once, with one log line:
+
+```text
+profile demo_good_60: imported the transform from /data/golden/transform.json -> /data/golden/profiles/demo_good_60.json
+```
+
+A legacy file trained on another golden is passed over **quietly**: at
+most one log line per golden and file version, never a warning, never a
+`pinRefused`, and it is not re-read per frame. The editor's default
+`/data/golden/nuisance.json` is usually exactly that case. The legacy files
+are never modified. If writing an imported record into the profile fails,
+the frame still uses the record (it is this golden's), the node warns once
+per file version ("… retrying on later frames"), and later frames try the
+import again rather than running unpinned in silence.
+
+**One Node-RED per directory.** Writes to one profile are serialised inside
+one Node-RED process — transform training, nuisance training and barcode
+derivation can all land on the same file within a frame — so several nodes
+in one Node-RED can share a directory. Separate Node-RED processes sharing
+a directory are not serialised against each other; give each its own.
+
+**What it costs.** In profile mode every message needs the golden's content
+key, since that is what each section is checked against. It is memoised
+per golden version (keyed by the cheap golden key, raw geometry and byte
+length, 16 goldens per node), so a **Golden image path** golden is read
+and hashed once per file version per deploy, and a rig alternating two
+products does not re-hash on every switch. A `msg.golden` buffer is hashed
+per message, as it already was. Each message also costs one `fs.stat` of
+the profile; it is re-read only when its mtime or size moved.
+
+**What applied:** `msg.result.profile`, present only with **Profiles** set:
+
+```js
+profile: { id, namedBy: "profile" | "source" | "content", path, contentKey, transform, nuisance, barcodes }
+```
+
+`transform` / `nuisance` say whether this frame pinned from, applied, or
+trained-and-wrote that section. `barcodes` is the region count of a
+`barcodes` section derived from this golden's content, otherwise `null`
+(not derived yet, or derived from other artwork); on the frame that
+triggers a derivation it is still `null`, because the derivation runs
+after that frame is sent. `path` is what `barcode-locate` reads its
+regions from.
+
+**The trained transform records the frame it was measured on.** In the
+profile and in a legacy file alike, a transform trained by this version
+gains:
+
+```text
+frameWidth, frameHeight              the frame at working size
+frameNativeWidth, frameNativeHeight  the frame as golden-compare received it
+placement: { ox, oy, angleDeg }      where the golden sat in the run's last written training frame (working px)
+```
+
+The scales alone map golden px to frame px only up to an offset; these are
+what let `barcode-locate` carry a box from the artwork onto the native
+camera frame. A transform trained before this version lacks them, and
+`barcode-locate` asks for a retrain.
+
+**Barcode regions** (`barcodeRegions`, default off, no `msg.` override;
+does nothing without **Profiles**). With it ticked the node reads the
+golden's barcodes — whole image, the default formats, `tryHarder` and
+`tryRotate` on — and stores each symbol's box in golden native px,
+unpadded, with its format, text and a `label` of `"<format> <text>"` (at
+most 60 characters):
+
+```js
+barcodes: { source: "golden", derivedAt, goldenContentKey, nativeWidth, nativeHeight,
+            regions: [{ label, format, text, x, y, width, height }] }
+```
+
+It runs when the section is missing or was derived from another content
+key, or on `msg.deriveBarcodes: true` (which works with **Profiles** set
+even with the box unticked, and warns once without them). It starts after
+the triggering frame has been sent and is never awaited by it — a 12 MP
+render through zxing is hundreds of ms that frame should not carry — and
+there is one derivation per profile and golden version at a time, shared
+by every `golden-compare` node in the process, so neither the frames that
+arrive meanwhile nor a redeploy mid-derivation start a second zxing run.
+The status reads `locating barcodes on golden…` while it runs and goes
+back to the last verdict when it finishes, unless a frame has set a
+status since; the log line gives the count and the ms. A golden with no barcode stores `regions: []`, so it is
+not re-read every frame, and warns once; a failure warns once, is not
+retried for that golden version unless `msg.deriveBarcodes` asks, and
+never fails the frame. `golden-compare` loads zxing-wasm only when this
+is on.
+
 ### Output
 
 - `msg.payload` — `true`/`false` overall pass
@@ -635,6 +795,11 @@ trusting it.
   ARCHITECTURE.md, "The blemish floor, and the nuisance map that lowers
   it". The map is a background-channel check: the print channel is never
   gated by it.
+
+  `msg.result.profile` — only with **Profiles** set:
+  `{ id, namedBy, path, contentKey, transform, nuisance, barcodes }`, the
+  profile this frame used and what it held for this golden; see
+  **Profiles** above.
 
   `stretchPercent` — how far the two axis magnifications differ — is
   reported but deliberately **not** gated. Some stretch is just what the
@@ -1259,21 +1424,152 @@ the whole-image scan as a safety net — a repositioned label, a mis-measured
 region — without paying for it on every normal run. `"Regions only"` and
 `"Full image only"` are also available.
 
+### Regions from the golden's profile
+
+Hand-measured regions have to be measured for every product and again
+whenever the camera moves. With **Regions from** = *the golden's profile*
+(`regionSource: "profile"`) nobody measures them. `golden-compare`, with
+**Profiles** and **Barcode regions** set, keeps two things in each
+golden's profile: the trained transform (where the artwork sits in the
+frame it inspects) and the barcodes it found on the artwork. This node
+reads both and maps each barcode's box from the artwork into the image
+it is given. A new product needs no new regions; a moved camera needs
+only the transform retrained.
+
+**Which profile**, first match wins:
+
+1. `msg.result.profile.path` — what `golden-compare` resolved, when it ran
+   upstream.
+2. `msg.profile` — a profile *name* (never a path), looked up in this
+   node's **Profile dir** (`profileDir`). Without a **Profile dir** it is
+   warned once and ignored.
+3. **Profile file** (`profilePath`) — one fixed file, for a single-product
+   rig.
+
+`msg.regions` overrides all of it. With nothing resolvable the node warns
+once and has no regions; in the default mode the full-image fallback
+still runs.
+
+**Two wirings:**
+
+```text
+A: golden-compare → change: msg.payload = the native camera frame → barcode-locate   (takes msg.result.profile.path)
+B: change: msg.profile = "demo_good_60", on the native frame → barcode-locate         (Profile dir = golden-compare's)
+```
+
+**Decode the native camera frame, not the frame the compare saw.** Measured
+on the demo rig, 149 photos, 2026-10-08: the derived boxes, mapped through
+the trained transform, land on both Code128 symbols in **149/149**.
+Decoding only those regions on the native 3000x3700 frame reads the
+artwork's exact text in **149/149** with 0 wrong reads, **152 ms** median
+against **385 ms** for the whole frame. On the halved rectified 1500x1850
+frame `golden-compare` sees (~2.3 px/module) only **23/149** read both
+codes, and one returned a confidently wrong string. That is why wiring A
+puts the native frame back on `msg.payload`. The node warns, once per
+profile version, when the payload is no wider than the frame the compare
+received (`transform.frameNativeWidth`) or, with a calibration, narrower
+than the calibration photo; it maps the regions anyway. The warning says
+so itself: when `golden-compare` already inspects the native camera frame,
+it is expected.
+
+**`regionPad` (0.2) and `regionPadMinPx` (64).** Each box grows on every
+side by `max(regionPad × its longer edge, regionPadMinPx)`, in golden
+working px, so the pad scales with the artwork like the box does. The
+proportional part covers the code's quiet zone. The floor covers the
+part moving, which a proportional pad cannot: a 50 px DataMatrix would
+get 10 px while the compare passes parts 64 px off nominal. Set
+`regionPadMinPx` to at least the compare's larger position tolerance
+(`positionToleranceYPx`) plus its register slack.
+
+**Calibration (`scaleFilePath`): set it if and only if the payload has
+not been through `perspective-rectify` but the compare's frame had.** The
+node then takes the regions back through the inverse of the rectification
+homography, rescaled to the payload. A rectified payload with a
+calibration set is un-rectified twice; the node warns once when
+`msg.rectify.applied` and the payload is the size `perspective-rectify`
+wrote. A calibration that is missing, unreadable, without a homography,
+or of another aspect ratio (more than 0.5% off) gives one warning and no
+regions.
+
+**Guards.** Each is warned once per profile path and kind, and the ones
+that read the profile also per file version — a profile fixed and then
+broken again (its mtime or size changed) is warned again; the
+rectified-twice warning below is once per profile path — and none fails
+the message; "no regions" still leaves the full-image fallback in the
+default mode:
+
+- the profile is missing or unreadable, or has no `barcodes` or no
+  `transform` section — no regions. A path that cannot even be stat'ed
+  (EACCES, EPERM, a bad path a flow built) is the same: one warning, no
+  regions, never an error;
+- the `barcodes` section and the `transform` were made from different
+  golden content ("holds barcodes of one golden and a transform of
+  another; retrain or re-derive") — no regions;
+- `msg.result.profile.contentKey` is present and differs from the content
+  key of the profile's `barcodes` section — no regions. The section's own
+  key, not the file's `golden.contentKey`: every section write updates the
+  golden record, so after nuisance training for a revised artwork the file
+  names the new artwork while its barcodes are still the old one's;
+- the transform has no `frameWidth`/`frameHeight`/`frameNativeWidth`/
+  `frameNativeHeight`, i.e. it was trained before this version — no
+  regions, "retrain the transform with this version";
+- the transform has no `placement` — regions placed as if the part sat
+  centred, with a warning; a wide margin with an off-centre part puts them
+  off by up to that margin;
+- the payload's aspect ratio differs from the compare's frame by more
+  than 1% (a crop, or another camera) — warning, mapping proceeds;
+- the native-resolution and rectified-twice warnings above.
+
+**What it costs.** Mapped regions are cached per profile path and its
+mtime and size, payload size, calibration and its mtime and size, and
+pad. A message costs one `fs.stat` of the profile (plus one of the
+calibration when set) and a header read of the payload for its size, 1–3
+ms, none for raw pixels. In **Full image only** the profile is not read.
+
 ### Input
 
 `msg.payload` — a Buffer/Uint8Array/ArrayBuffer, a file path string, or an
-object with `data`/`buffer`/`path`. Optional per-message overrides:
-`msg.regions`, `msg.mode`.
+object with `data`/`buffer`/`path`; or bare pixels, as
+`{ data, width, height, channels }` or bytes plus `msg.rawInfo`, by the
+same rules as `golden-compare`. Optional per-message overrides:
+`msg.regions`, `msg.mode`, `msg.profile` (a profile name).
 
 ### Output
 
 One message per barcode found, in the order regions were scanned (then the
 full-image fallback, if it ran): `msg.text`, `msg.format`, `msg.roi`,
-`msg.regionLabel`, `msg.source` (`"region"` or `"fullImage"`),
+`msg.symbol`, `msg.regionLabel`, `msg.regionSource`, `msg.source`
+(`"region"` or `"fullImage"`), `msg.expectedText`, `msg.textMatches`,
 `msg.barcodeIndex`, `msg.barcodeCount`, `msg.decodeMs`, `msg.timings`,
 and `msg.payload` set to a preview crop of that barcode's region. If
-nothing is found at all, one message with `msg.text = null` and
-`msg.barcodeCount = 0`.
+nothing is found at all, one message with `msg.text = null`,
+`msg.barcodeCount = 0`, and `symbol`, `expectedText` and `textMatches`
+`null`.
+
+- `msg.roi` is the region the code was searched in; `msg.symbol` is the
+  code's own box, from zxing's corner points, in full-image px.
+- `msg.regionSource` — where the regions came from: `"list"`,
+  `"profile"` or `"msg"`.
+- `msg.expectedText` — with profile regions, the artwork's text for the
+  code at that place, else `null`. The candidates are the profile regions
+  that contain the symbol's centre (a full-image find counts too); none →
+  `null`. Among them the node takes one whose text equals the decoded
+  text, else the one of the same format whose centre is nearest the
+  symbol's, else the nearest of any format. Two adjacent tall codes padded
+  at 0.2 overlap, so a symbol's centre can sit inside both regions; taking
+  the first region flagged good reads as mismatches. `msg.textMatches` is
+  `msg.text === msg.expectedText`, `null` when there is nothing to compare.
+  A mismatch is also warned, once per profile and (expected, read) pair,
+  so a different wrong read is reported again.
+- **One code is reported once.** A code read through two overlapping
+  regions — padded regions around codes that sit close together, or
+  hand-drawn ones that overlap — comes back once, under the first region's
+  label: same text, same format and symbol boxes that touch at all. zxing's
+  box for a linear code covers only the rows that decoded, so the same
+  code read through two regions can give boxes of different heights, which
+  is why the test is "touch" and not an overlap ratio. This applies to the
+  configured list too, so a flow with overlapping regions can see
+  `msg.barcodeCount` drop.
 
 ### Notes
 
@@ -1285,6 +1581,12 @@ nothing is found at all, one message with `msg.text = null` and
   for recall — see the in-editor help.
 - The first decode after a redeploy pays zxing-wasm's one-time WASM warmup.
   `lib/locate.js` absorbs that so it never lands on a user-visible message.
+- **It works offline.** zxing-wasm 3.1.3, left to itself, downloads its
+  `.wasm` from the jsdelivr CDN on the first decode of every process; on a
+  rig without internet that decode aborts ("both async and sync fetching
+  of the wasm failed"), so the first barcode-locate after every Node-RED
+  restart failed. The node now loads the binary shipped inside the
+  package and never touches the network.
 
 ## Notes
 
@@ -1422,7 +1724,7 @@ nothing is found at all, one message with `msg.text = null` and
 
 ## Tests
 
-`npm test` (Node 18+, no test framework needed — `node --test`), 567
+`npm test` (Node 18+, no test framework needed — `node --test`), 646
 tests. Fixtures are generated with `sharp` rather than read from
 `data/sample_images`, so the suite runs anywhere; the real QC photos are
 gitignored. Coverage spans the lib pipeline (`compare`, `align`, `warp`,

@@ -110,6 +110,8 @@
         "localAlign": true,
         "localAlignTile": 96,
         "localAlignMax": 3,
+        "profileDir": "",
+        "barcodeRegions": false,
         "transformFilePath": "/data/golden/synth-transform.json",
         "trainTransform": false,
         "nuisancePath": "/data/golden/nuisance.json",

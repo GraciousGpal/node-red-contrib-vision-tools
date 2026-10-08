@@ -8,6 +8,81 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Added
 
+- **Per-golden profiles on `golden-compare` (`profileDir`, `msg.profile`).**
+  The trained transform and the nuisance map each lived in one file per
+  node, tied to one golden, so a node running a second artwork refused
+  both and searched unpinned, and training the second overwrote the
+  first. With a profile directory set, every golden gets one file holding
+  its trained transform (with register slack), its nuisance map and its
+  barcode regions, named after the golden's source file
+  (`/data/Inspection/pdf/Demo_Good_60.pdf` → `demo_good_60.json`,
+  `-p<page>` past page 1; `msg.profile` names it explicitly; a golden with
+  no name falls back to its content hash). For a golden sent as bytes,
+  `msg.filename` counts only when it names an artwork document (`.pdf`,
+  `.ai`, `.eps`, `.svg`): when the golden rides on the frame's message,
+  `file in` sets it to the camera frame's `.jpg`/`.png`, which would have
+  given every frame its own profile. The name chooses the file and
+  the content hash is the check: every section is validated strictly
+  against the golden's content, so a revised artwork under the same name
+  has its sections refused with a warning naming the profile until it is
+  retrained. Matching `transformFilePath` / `nuisancePath` files are
+  imported once (a failed write of the import still pins that frame,
+  warns once per file version and is retried on later frames); another
+  golden's file is passed over with at most one log line, and legacy
+  files are never written. Writes to one profile
+  are serialised within a process and renamed into place.
+  `msg.result.profile` (`{ id, namedBy, path, contentKey, transform,
+  nuisance, barcodes }`) says which profile applied and what it held.
+  Without `profileDir` nothing changes.
+
+- **Barcode regions derived from the artwork.** `golden-compare`'s
+  `barcodeRegions` reads the golden's barcodes once per golden version
+  into its profile (golden native px, with format and text), after the
+  triggering frame has been sent; `msg.deriveBarcodes` forces a re-read.
+  One derivation per profile and golden version runs at a time across
+  every `golden-compare` node in the process, so a redeploy
+  mid-derivation joins it instead of starting a second zxing run.
+  `barcode-locate`'s new **Regions from** = *the golden's profile*
+  (`regionSource: "profile"`, with `profilePath`, `profileDir`,
+  `scaleFilePath`, `regionPad`, `regionPadMinPx`) maps those boxes into
+  its payload through the trained transform, and through the inverse
+  rectification when the payload is un-rectified, so no region is
+  measured by hand and a moved camera needs only a retrained transform.
+  Probe on the demo rig, 149 photos: the mapped boxes land on both
+  Code128s in 149/149, and decoding only them on the native 3000x3700
+  frame reads the artwork's text in 149/149 with 0 wrong reads, 152 ms
+  median against 385 ms for the whole frame. On the halved 1500x1850
+  frame the compare sees, only 23/149 read both codes and one read a
+  confidently wrong string, so the node warns when its payload is no
+  larger than that. The pad is `max(regionPad × longer edge,
+  regionPadMinPx)` (0.2, 64 px): a proportional pad alone would give a 50
+  px DataMatrix 10 px while the compare passes parts 64 px off nominal.
+  Results carry `msg.regionSource`, and from profile regions
+  `msg.expectedText` (the artwork's text there) and `msg.textMatches`.
+  Of the profile regions containing the symbol's centre, the one whose
+  text equals the decoded text wins, then the nearest of the same format,
+  then the nearest of any: two adjacent tall codes padded at 0.2 overlap,
+  and taking the first region flagged good reads as mismatches.
+  Every inconsistency (barcodes and transform from different goldens,
+  barcodes of another golden than the one `golden-compare` just inspected
+  against, a transform trained before this version, a calibration of
+  another aspect, a profile path that cannot even be stat'ed) is warned
+  once per profile version and leaves the message with no profile
+  regions, never an error. A text mismatch is warned once per (expected,
+  read) pair.
+
+- **`barcode-locate` works offline.** zxing-wasm 3.1.3 fetched its `.wasm`
+  from jsdelivr on first use; with the network blocked the first decode
+  aborted ("both async and sync fetching of the wasm failed"), so on a rig
+  without internet the first decode after every restart failed.
+  `lib/locate.js` now hands zxing the binary shipped inside the package at
+  load time. A test stubs `fetch` and `http(s)` to throw before the first
+  decode.
+
+- **`barcode-locate` takes raw pixels**: `{ data, width, height, channels }`
+  or bytes plus `msg.rawInfo`, as `golden-compare` does
+  (`lib/nodeInput.js` gained `rawGeometry` / `assertRawFits`).
+
 - **The tone and speck checks take their register slack from training.**
   How far off register a frame still sits after the local alignment
   belongs to the rig, not the artwork. A training frame
@@ -330,6 +405,66 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   on the tray (a homography removes 18% of it), not the camera.
 
 ### Changed
+
+- **The trained transform record records the frame it was measured on.**
+  `frameWidth`/`frameHeight` (the frame at working size),
+  `frameNativeWidth`/`frameNativeHeight` (the frame as `golden-compare`
+  received it) and `placement { ox, oy, angleDeg }` (where the golden sat
+  in the run's last written training frame), in a profile and in a legacy
+  `transformFilePath` file alike. The scales alone map golden px to frame
+  px only up to an offset; these are what let `barcode-locate` carry a box
+  from the artwork onto the camera frame. Older records still pin as
+  before; `barcode-locate` asks for them to be retrained.
+
+- **`barcode-locate`: every result carries `msg.symbol`, and one code is
+  reported once — in list mode too.** `msg.symbol` is the code's own box
+  from zxing's corner points, in full-image px, next to `msg.roi` (the
+  region searched). A code read through overlapping regions (same text,
+  same format, symbol boxes that touch at all) is kept once, under the
+  first region's label; "touch" rather than an overlap ratio because
+  zxing's box for a linear code covers only the rows that decoded. This
+  applies to hand-drawn regions as well, so a flow whose regions overlap
+  now gets one result per symbol and can see `msg.barcodeCount` drop. The
+  none-found message carries `symbol`, `expectedText` and `textMatches` as
+  `null`.
+
+- **`compareFrame`'s result gains `targetNative: { width, height }`**, the
+  frame's size before the working-size resize.
+
+- **The record validators are split out of the file readers.**
+  `validateTransformRecord` (lib/transformFile.js) and
+  `validateNuisanceRecord` (lib/nuisanceMap.js) check an already-parsed
+  record, so a legacy file and a profile section go through the same
+  rules; `readTransformFile` / `readNuisanceMap` are the file read in
+  front of them. Both take `strictContentKey`, which compares the golden's
+  content key on every read rather than only when the cheap keys
+  disagree: under a named golden a new render keeps the name, and a record
+  measured on the old bytes was accepted unchecked. Off by default, so a
+  read without it behaves as before; profiles turn it on. A record that is
+  not a JSON object (`null`, an array) is refused with a reason instead
+  of throwing.
+
+- **`golden-compare`'s content-key memo holds 16 goldens and includes the
+  golden's byte length.** It was one slot, so a rig alternating two
+  goldens re-hashed on every switch. The fingerprint of a path golden now
+  reports its byte length too, so a named path golden's cache key gains
+  `len:<size>`: one re-prepare after upgrade, and a new render under the
+  same name is no longer served from cache when its size changed.
+
+- **With profiles, nuisance training keeps one accumulator per profile
+  and golden version** (4 at most) instead of one per node, so a training
+  run that interleaves two goldens no longer folds both into one map, and
+  a revised artwork under the same name starts a new one. Without
+  profiles it keeps the single accumulator it always had.
+
+- The training errors now read "training needs a profile directory or a
+  Trained transform path to write to" (and the same for the nuisance map).
+
+- **Tests for the barcode code fail rather than skip without zxing-wasm's
+  writer.** `test/locate.test.js` and `test/goldenCompareProfile.test.js`
+  write their barcodes with `zxing-wasm/writer`; zxing-wasm is a hard
+  dependency, so a writer that cannot load fails those tests with the load
+  error instead of skipping them.
 
 - **A frame costs what it did before the tone and speck checks.** The
   inspector worker moves a frame's raw images to the main thread instead

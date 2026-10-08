@@ -72,8 +72,8 @@ authoritative list.
 
 | file | role |
 | --- | --- |
-| `golden-compare.js` | Node-RED wiring: config and clamping, `msg` overrides, golden cache key, transform and nuisance-map training, logging; hands frames to `lib/inspector.js`. Keeps each node's last inspection (the thumbnail's picture every frame; every stage and heat map while a viewer is open) for the editor's stage viewer and serves it over admin routes (last, stage, hold, watch) |
-| `lib/nodeInput.js` | input handling shared by every node: bounded `clampInt`/`clampFloat`/`pickMode` settings and the size-capped image loader for `msg.payload` / `msg.golden` (bytes, a path, or an object carrying `data`/`buffer`/`path`) |
+| `golden-compare.js` | Node-RED wiring: config and clamping, `msg` overrides, golden cache key, the golden's profile (resolution, cached reads, legacy import, barcode derivation after send), transform and nuisance-map training, logging; hands frames to `lib/inspector.js`. Keeps each node's last inspection (the thumbnail's picture every frame; every stage and heat map while a viewer is open) for the editor's stage viewer and serves it over admin routes (last, stage, hold, watch) |
+| `lib/nodeInput.js` | input handling shared by every node: bounded `clampInt`/`clampFloat`/`pickMode` settings, the size-capped image loader for `msg.payload` / `msg.golden` (bytes, a path, or an object carrying `data`/`buffer`/`path`), and `rawGeometry`/`assertRawFits` for bare pixels (`barcode-locate` uses them; `golden-compare` still has its own copies) |
 | `lib/inspector.js` | main-thread client for the inspection pipeline: one unref()'d worker per process, spawned on first use; runs the core inline when worker threads or `SharedArrayBuffer` are unavailable |
 | `lib/inspectorCore.js` | the pipeline behind one request/response surface (`prepare`, `inspect`, `calibrate`, `rectify`) plus the bounded prepared-golden store; same code on the worker and inline, no file I/O |
 | `lib/inspectorWorker.js` | worker side of the inspector: message plumbing around `inspectorCore`, replies matched to requests by id, a frame's raw images moved to the main thread rather than copied |
@@ -90,7 +90,9 @@ authoritative list.
 | `lib/pool.js` | persistent worker-thread pool for the per-pixel stages: created once and never torn down, dispatches settled by id, `shouldParallelise` gate |
 | `lib/poolWorker.js` | worker side of the pool: the row/column-range kernels, asserted byte-identical to their serial reference implementations |
 | `lib/shared.js` | `SharedArrayBuffer`-backed allocators for the buffers the pool operates on; plain buffers and `HAS_SAB === false` when it is unavailable |
-| `lib/transformFile.js` | trained-transform persistence and its validity guards (golden identity, working size); reuses `lib/scaleFile.js`'s path and number helpers |
+| `lib/transformFile.js` | trained-transform persistence and its validity guards (golden identity, working size); `validateTransformRecord` holds the checks so a legacy file and a profile's `transform` section go through the same rules, `strictContentKey` compares the content key on every read; reuses `lib/scaleFile.js`'s path and number helpers |
+| `lib/profileStore.js` | per-golden profile files (`<dir>/<id>.json`): `profileIdFor` names one from `msg.profile`, the golden's source-file stem or its content hash; `readProfile` returns the stat that matches the content; `writeProfileSection` merges one section under a per-path lock, writes a temp file and renames it over |
+| `lib/goldenRegions.js` | pure mapping of a profile's barcode boxes (golden native px) into a payload through the trained transform and, optionally, the inverse rectification: `mapProfileRegions`, `nominalPlacement`, `goldenToFrameAffine`. No I/O; `barcode-locate.js` reads the profile and the calibration |
 | `lib/scaleFile.js` | mm/px calibration file, shared with `checkerboard-calibrate` and `perspective-rectify`; validates the homography when one is stored; exports `pathExists`/`isFinitePositive` for `transformFile` |
 | `lib/checkerboard.js` | checkerboard detection for mm/px calibration, and the plane homography from the same centroids (`measurePerspective`) |
 | `checkerboard-calibrate.js` | Node-RED wiring: measures the checkerboard photo on the inspector, compares mm/px against the saved baseline, `msg.save` persists the new scale and homography |
@@ -105,9 +107,9 @@ authoritative list.
 | `lib/cvjs.js` | the cpp-bridge op surface on `@techstark/opencv-js`: colorConvert, resize, filter (otsu/edge), crop, rotate — raw in, raw out |
 | `lib/cvjsAlign.js` | `imageAlign` on opencv.js: ORB + RANSAC affine, ECC refinement, one warp into the reference frame |
 | `lib/nativeSeed.js` | optional OpenCV-solved alignment: `seedTransform` gives the JS search a starting point, `alignFrame` returns the already-warped golden-sized frame; both return null on failure so the JS path stays the fallback |
-| `barcode-locate.js` | Node-RED wiring for the barcode-locate node: scans pre-defined regions, then the full image if nothing is found; one message per barcode, `msg.regions`/`msg.mode` overrides |
-| `lib/locate.js` | barcode location and decode on zxing-wasm (zxing-cpp as WASM): decodes the union bounding box of the regions via sharp's extract-on-load, whole-frame fallback; plain functions over Buffers |
-| `lib/nuisanceMap.js` | trained per-block baseline of what "clean" looks like, so a recurring registration artifact stops masking a real blemish |
+| `barcode-locate.js` | Node-RED wiring for the barcode-locate node: scans pre-defined regions, then the full image if nothing is found; one message per barcode, `msg.regions`/`msg.mode` overrides. Regions come from the list or from the golden's profile (resolved from `msg.result.profile.path`, `msg.profile` or `profilePath`, mapped by `lib/goldenRegions.js`, cached per profile and payload size), and each result carries `expectedText`/`textMatches` against the artwork |
+| `lib/locate.js` | barcode location and decode on zxing-wasm (zxing-cpp as WASM): decodes the union bounding box of the regions via sharp's extract-on-load, whole-frame fallback; plain functions over Buffers or raw pixels (`options.raw`). Loads the package's own `.wasm` at require time so it never fetches from the CDN; every result carries `symbol` (zxing's corner bbox, full-image px), and one code read through overlapping regions is kept once |
+| `lib/nuisanceMap.js` | trained per-block baseline of what "clean" looks like, so a recurring registration artifact stops masking a real blemish; `validateNuisanceRecord` checks a parsed record (legacy file or profile section) with the same `strictContentKey` as the transform |
 | `synthetic-defects.js` | Node-RED wiring for the synthetic-defects node: emits a frame set one message at a time with its golden and ground truth attached, and previews each frame under the node with its ground-truth boxes mapped into frame space; a test bench for `golden-compare`, not a production node |
 | `lib/synth/` | the synthetic frame generator, shipped in the package so the node can use it: `prng.js` (one seeded stream), `label.js` (the drawn golden), `defects.js` (the defect library, ground truth measured by diffing), `capture.js` (the camera model), `cases.js` (the case plan and a lazy async generator over it). `bench/synth/generate.js` writes a set to disk over the same `cases.js`, so the CLI and the node emit identical frames |
 
@@ -369,8 +371,14 @@ Three traps, all guarded:
     trained record therefore also carries `goldenContentKey`, a hash of
     the golden's bytes, consulted only when the cheap keys disagree.
     Reading the golden to hash it is exactly what the cheap key exists to
-    avoid, so it happens on a mismatch and is memoised per file version —
-    never on the hot path.
+    avoid, so it is memoised per golden version (cheap key + raw geometry
+    + byte length, 16 per node) — once per golden version per deploy.
+    Without a profile directory it still runs only on a cheap-key
+    mismatch or when training; with one, every message needs the content
+    key, because every profile section is validated strictly against it
+    (see **Profiles**). That is why the memo holds several goldens rather
+    than one slot: a rig alternating A/B used to re-hash on every switch,
+    and under a named key a new render kept the old content key.
     A cache hit costs one `open`+`fstat` and no read; the handle stays
     open so a miss reads through the same handle it stat'ed, which is the
     swap-between-stat-and-read race the single-handle read exists to
@@ -391,6 +399,216 @@ Three traps, all guarded:
   read past the end of an undersized buffer rather than reporting the
   numbers were wrong; libvips now catches that, but the node fails
   cleanly with the real numbers instead of relying on it.
+
+## Profiles
+
+Trained state is tied to a golden but used to be stored per node: one
+`transformFilePath`, one `nuisancePath`. Both records carry the golden's
+content key and refuse themselves when the golden changes, so a node that
+ran two artworks held training for at most one, and every new kind of
+training (register slack, then barcode regions) would have been another
+per-node file. `lib/profileStore.js` makes the golden the unit of storage:
+`<profileDir>/<id>.json`, one file per golden, with independent sections
+(`transform`, `nuisance`, `barcodes`) next to a `golden` record (content
+key, last cheap key, label, source path, page, how it was named, native
+size).
+
+**The name chooses the file; the content key is the identity.** The id is
+`msg.profile`, else the stem of the golden's source file (`-p<page>` past
+page 1), else the first 16 hex of the content key (`-WxHxC` for raw) —
+sanitised by `sanitizeProfileName` (lower-case, `[a-z0-9._-]`, 64
+characters, Windows reserved names prefixed). A name is what an operator
+recognises in a directory listing, but it is not proof: a revised artwork
+saved under the same file name lands on the same profile. So each section
+keeps its own identity fields and goes through the same validators a
+legacy file does — `validateTransformRecord` / `validateNuisanceRecord`,
+split out of the file readers for this — with `strictContentKey: true`.
+Without it the content key is compared only when the cheap keys disagree,
+and a matching cheap key is taken on trust; under a named golden
+(`key:<n>`) a new render keeps the name, so a record measured on the old
+bytes used to be accepted unchecked. The default stays false, so a legacy
+file read without a profile behaves exactly as before.
+
+**Resolution, once per message.** `golden-compare` resolves the profile
+after `ensureGolden()` and before the transform read, and does not
+resolve it again on the eviction retry: the golden's identity cannot
+change between the two inspect calls. `profileSource()` picks the source
+name — `goldenPath` when it is the golden in use; when `msg.golden`
+overrides it, the message's own names first (a flow switching products
+through `msg.golden` on a node with a default `goldenPath` would otherwise
+train product B into product A's file) and `goldenPath` last. For a
+golden that arrives as bytes the order is a path in `msg.golden`,
+`msg.images[0].path`, `msg.filename` only when it names an artwork
+document (`ARTWORK_EXT`: `.pdf`, `.ai`, `.eps`, `.svg`, any case),
+`msg.goldenKey`, `goldenPath`. The extension test is there because the
+golden can ride on the frame's message: a `file in` reading the *camera
+frame* sets `msg.filename` to the frame's `.jpg`/`.png`, and trusting it
+gave every frame its own profile, with training landing where no later
+frame looks. A render is never made from a camera file.
+
+**Caching by (mtimeMs, size).** `node.profileCache` maps path to
+`{ profile, stat }`, 16 entries, revalidated with one `fs.stat` per
+message. Not mtime alone: two writes inside the filesystem's timestamp
+resolution keep the same mtime, and a rewritten section nearly always
+changes the size. `readProfile` and `writeProfileSection` both return the
+stat that matches the content they return, so the node's own writes
+replace the cache entry directly and it never reads its own write back
+stale.
+
+**Write serialisation.** Node-RED runs input handlers concurrently, and
+transform training, nuisance training and barcode derivation can all
+write one file within a frame's time; a plain read-modify-write lets the
+last writer erase the section the other just wrote. A module-level
+`Map<absolutePath, Promise>` chain orders every write to a path, and each
+writer re-reads the file inside the lock so it merges onto the previous
+write. Each write goes to `<file>.tmp-<pid>-<random>` and is renamed over
+the target, so a reader never sees half a document; on Windows the
+rename is retried on EPERM/EACCES/EBUSY (up to 5 times, 20–100 ms apart)
+because any open handle on the target blocks it, and the temp file is
+removed on final failure. This covers one process only — separate
+Node-RED processes sharing a directory are not serialised.
+
+**Refusal versus silence.** A refused profile section warns and sets
+`pinRefused` exactly as a refused legacy file does: it is this golden's
+profile and it is wrong, which is a real problem. A legacy file that does
+not validate is not: with a profile directory set, `importLegacy` reads
+`transformFilePath` / `nuisancePath` only when the profile lacks that
+section, imports a file that validates for this golden (strictly) with one
+log line, and passes over one that does not — usually another product's
+training or the editor's default `/data/golden/nuisance.json` — with at
+most one log line. `node.legacyChecked` remembers each (profile, section,
+file) against the content key, the working and block size the message
+runs at, and the file's mtime and size, so a file that does not apply is
+not re-read per frame. A failed *write* of an imported record is not
+remembered as checked: the frame still uses the record (it is this
+golden's), the failure is warned once per file version ("retrying on
+later frames"), and the next frame tries again — remembered, every later
+frame would have run unpinned in silence until the legacy file happened
+to change. Legacy files are never written once a profile directory is
+set.
+
+**One nuisance accumulator per golden version.** `node.nuisanceAcc` is a
+Map keyed `profile:<id>|<contentKey>`, 4 entries, so a training run that
+interleaves two goldens keeps two maps (a single per-node accumulator
+folded both into one), and a revised artwork under the same name starts a
+new map rather than merging into the old artwork's. Without profiles it
+uses the one key `legacy`, the single slot it always had: keying by golden
+key there would restart the map every frame for a flow that rewrites its
+golden file.
+
+**Barcode derivation runs after `send()`.** The `barcodes` section is
+filled by reading the golden through `lib/locate.js` in whole-image mode.
+A 12 MP render through zxing is hundreds of ms, so it starts after the
+triggering frame has been sent and is never awaited by it; the frames
+that arrive meanwhile run normally. An in-flight map (keyed by profile
+path + content key, removed on settle) keeps them from each starting a
+second zxing run. It lives at module scope, shared by every
+`golden-compare` node in the process: per node it was not enough, because
+a redeploy builds a new node while the old one's run on a 12 MP golden is
+still going (`close()` does not wait for it), and the new node would start
+a second one beside it. When a derivation finishes it puts the last
+verdict back on the status only if `node.frameSeq` has not moved since it
+started, so it never overwrites a newer frame's status. And
+`node.derivationFailed` keeps a failure from being
+retried every frame for that golden version. The decision is made against
+the cache rather than the frame's snapshot, because a derivation that
+finished while the frame ran has already filed its section there.
+`ensureGolden` never keeps the golden's bytes, so the derivation uses the
+bytes the content-key memo miss read in that message when there are any,
+and re-reads the golden otherwise; a re-read path golden is re-hashed, and
+boxes found on bytes that no longer match the content key are discarded
+rather than filed under it, and the content-key memo entry that produced
+the stale key is dropped (a named golden rewritten at the same byte length
+keeps its memo key, so it would never be re-hashed otherwise). `lib/locate.js` is required lazily, inside the
+derivation and through the module object, so zxing-wasm and its warm-up
+load only for a node with `barcodeRegions` on, and a test can count the
+calls by patching the export. An artwork with no barcode is written as
+`regions: []`, so it is read once per version, not every frame.
+
+**What the transform record gained for it.** The scales map golden px to
+frame px only up to an offset, and the working sizes alone do not say
+how big the frame the compare received was. So a trained transform now
+records `frameWidth`/`frameHeight` (`compareFrame`'s `targetWorking`),
+`frameNativeWidth`/`frameNativeHeight` (its new `targetNative`, the frame
+before the working-size resize) and `placement { ox, oy, angleDeg }` (the
+run's last written training frame). The validators ignore unknown
+fields, so older records still load; they simply cannot be mapped.
+
+## Barcode regions from the artwork
+
+`barcode-locate` with `regionSource: "profile"` reads a profile's
+`barcodes` and `transform` sections and `lib/goldenRegions.js` carries
+each box into the payload. It is pure maths; the node does the I/O,
+caches the mapped regions per (profile path, mtimeMs, size, payload WxH,
+calibration path and its mtimeMs and size, pad, padMinPx), and turns the
+module's returned warnings into warn-once messages, keyed by profile
+path, problem and the profile's (and calibration's) mtime and size, so a
+profile fixed and then broken again is warned again. Nothing about a
+profile fails the message: even a path that cannot be stat'ed is one
+warning and no regions, and the full-image fallback still runs. The
+identity held against `msg.result.profile.contentKey` is the `barcodes`
+section's own `goldenContentKey`, not the file's `golden.contentKey`:
+every section write merges the golden record, so after nuisance training
+for a revised artwork B the file says B while its barcodes and transform
+are still A's, and A's boxes would be mapped onto B's frames.
+
+Per corner of each
+box, starting in golden native px:
+
+1. **golden native → golden working:** × `goldenWidth / goldenNative.width`
+   (the compare works on a resized golden). The pad,
+   `max(pad · max(w, h), padMinPx)` on every side, is added here so it
+   scales with the artwork like the box does.
+2. **golden working → frame working**, through the compare's own model
+   (lib/align.js): `tx = ox + cos·mx·gx − sin·my·gy`,
+   `ty = oy + sin·mx·gx + cos·my·gy`, with `transform.placement`, or
+   without one the nominal placement
+   `((frameWidth − scaleX·goldenWidth)/2, (frameHeight − scaleY·goldenHeight)/2, 0)`
+   — the pinned search's starting point and the position check's zero,
+   off by however far the part sat from centre (warned).
+3. **frame working → frame native** (the frame the compare received):
+   × `frameNativeWidth / frameWidth`. The working size rounds each axis on
+   its own, so the width ratio for both axes is under 1 px out.
+4. **frame native → payload:** × `payload.width / frameNativeWidth`.
+5. **→ the un-rectified camera frame**, only with a calibration (the
+   payload has not been through `perspective-rectify`, the compare's frame
+   had): `applyHomography(invertHomography(rescaleHomography(H, calibNative, payload)), x, y)`.
+   Scale first, then un-rectify: `rescaleHomography` is exactly the
+   conjugation by that scale, so the chain holds whether the flow resized
+   then rectified or the reverse. It throws above a 0.5% aspect
+   difference; the node catches that into a warning and no regions.
+6. Axis-aligned bbox of the four corners, edges rounded once, clamped to
+   the payload; a box with no area is dropped.
+
+A transform without the frame fields cannot be mapped at all and throws
+(the node turns it into a "retrain the transform with this version"
+warning); everything else that leaves the mapping usable — nominal
+placement, a payload whose aspect differs from the compare's frame by more
+than 1% — comes back in `warnings`.
+
+**Why decoding happens at native resolution.** The compare's frame is
+sized for inspecting print, not for reading a barcode. Measured on the demo rig (149 photos, 2026-10-08): on the
+halved rectified 1500x1850 frame the compare sees, about 2.3 px per
+module, only 23/149 read both Code128s and one returned a confidently
+wrong string. The same mapped regions on the native 3000x3700 frame read
+the artwork's text in 149/149, 0 wrong reads, 152 ms median against 385
+ms for the whole frame. With the pinned transform the recovered offset
+moved about 1 px across all 149 frames, which is why regions fixed per
+golden and padded are enough, rather than a per-frame mapping from
+`msg.result.transform`. So the regions go to the native frame, and the
+node warns when the payload is no larger than the frame the compare
+received.
+
+The profile also gives the decode something to check against: each
+region carries the text found on the artwork, and a symbol whose centre
+falls in a profile region gets `expectedText` and `textMatches`
+(`expectedFor()` in `barcode-locate.js`). Padded regions around adjacent
+tall codes overlap (at `regionPad` 0.2 a symbol's centre can sit inside
+both), so "the first region containing the centre" flagged good reads as
+mismatches on the rig. Among the regions containing the centre it prefers
+one whose text equals the decoded text, then the nearest (region centre to
+symbol centre) of the same format, then the nearest of any format; no
+region containing the centre gives `null`.
 
 ## Resolution
 

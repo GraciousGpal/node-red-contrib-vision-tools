@@ -12,18 +12,23 @@
  * carry their geometry on the object, msg.rawInfo, or msg.images[].
  * Per-message overrides: msg.golden (path/Buffer - swaps and re-caches
  * the golden reference), msg.goldenKey / msg.goldenRawInfo for it, and
- * every setting in SETTINGS below, by the same name.
+ * every setting in SETTINGS below, by the same name. With a profile
+ * directory set, msg.profile names the golden's profile file (see
+ * lib/profileStore.js) and msg.deriveBarcodes re-reads its barcodes.
  */
 
 const crypto = require("crypto");
+const fsp = require("fs").promises;
 const inspector = require("./lib/inspector.js");
 const { toShared, accountShared } = require("./lib/shared.js");
 const { readScaleFile } = require("./lib/scaleFile.js");
 const { formatMs: fmtMs } = require("./lib/formatMs.js");
 const {
 	readTransformFile,
+	validateTransformRecord,
 	writeTransformFile,
 } = require("./lib/transformFile.js");
+const profileStore = require("./lib/profileStore.js");
 const { mergeRegister, slackLevel } = require("./lib/localAlign.js");
 const nuisance = require("./lib/nuisanceMap.js");
 const {
@@ -35,6 +40,16 @@ const {
 	openRegularFile,
 	readRegularFile,
 } = require("./lib/nodeInput.js");
+
+/**
+ * Barcode derivations in flight, by profile path + content key, for
+ * every node of this type - at module scope, so even a re-registered
+ * type shares it. Per node it was not enough: a redeploy
+ * builds a new node while the old one's zxing run on a 12 MP golden is
+ * still going (close() does not wait for it), and the new node would
+ * start a second one beside it. The promise is shared instead.
+ */
+const derivations = new Map();
 
 module.exports = (RED) => {
 	/**
@@ -166,6 +181,12 @@ module.exports = (RED) => {
 		// 0 disables the gate outright. The measured window on the reference
 		// run is 0.27-0.32; lib/nuisanceMap.js says why it is that narrow.
 		noveltyThreshold: { value: 0.3, float: [0, 1], fixed: true },
+		// Read the golden's barcodes once per golden version and keep their
+		// boxes in its profile, for barcode-locate to decode only there.
+		// Needs a profile directory; no message override, because
+		// msg.deriveBarcodes is the explicit one-off and a per-message flag
+		// would re-run zxing on a 12 MP render whenever a flow left it set.
+		barcodeRegions: { value: false, fixed: true },
 		// PROTOTYPES, default off - see lib/nativeSeed.js. The seed replaces
 		// the staged sweeps with a native ORB+ECC alignment when the optional
 		// @rosepetal/node-red-contrib-image-tools engine is installed, and is
@@ -319,6 +340,9 @@ module.exports = (RED) => {
 		if (!open) throw new Error(at.missing);
 		return {
 			key: named || `path:${at.path}:${open.mtimeMs}:${open.size}`,
+			// the content-key memo is keyed on it: under a named key a new
+			// render of the file keeps the name, and nearly always not the size
+			byteLength: open.size,
 			handle: open.handle,
 			close: () => open.handle.close(),
 		};
@@ -626,6 +650,251 @@ module.exports = (RED) => {
 		};
 	}
 
+	/** Insert or refresh `key`, then drop the oldest entries past `max`: a
+	 * Map iterates in insertion order, so delete-then-set makes it LRU-ish. */
+	function boundedSet(map, key, value, max) {
+		map.delete(key);
+		map.set(key, value);
+		while (map.size > max) map.delete(map.keys().next().value);
+		return value;
+	}
+
+	/**
+	 * The golden's source file, for naming its profile: the file a rig
+	 * recognises in a directory listing. On the rig a `file in` node reads
+	 * the artwork PDF and pdf-to-image passes msg.filename through, so the
+	 * name is nearly always there even when the golden itself is bare
+	 * pixels.
+	 *
+	 * The configured goldenPath names the profile when it is the golden in
+	 * use. When msg.golden overrides it, the message's own names come
+	 * first - a flow that switches products through msg.golden on a node
+	 * with a default goldenPath would otherwise train product B into
+	 * product A's file - and goldenPath is the last name tried, which keeps
+	 * the documented "train from msg.golden, run from goldenPath" flow on
+	 * one profile when the trained bytes carry no name of their own.
+	 *
+	 * msg.filename is trusted for a bytes golden only when it names an
+	 * artwork document. When the golden rides on the frame's message, a
+	 * `file in` reading the *camera frame* sets msg.filename to the frame's
+	 * path, and every frame would get its own profile (frame_0001.json, ...)
+	 * with training landing where no later frame looks. A render is never
+	 * made from a .jpg/.png/.bmp camera file, so those names are passed over.
+	 *
+	 * The page is the message's only when the golden came on the message:
+	 * a goldenPath file has no page, and msg.images may then describe the
+	 * frame.
+	 */
+	const ARTWORK_EXT = /\.(pdf|ai|eps|svg)$/i;
+	function profileSource(node, msg) {
+		if (msg.golden == null) return { source: node.goldenPath || null, page: null };
+		const g = msg.golden;
+		const image0 = Array.isArray(msg.images) && msg.images[0] && typeof msg.images[0] === "object" ? msg.images[0] : null;
+		const page = image0 && image0.page != null ? image0.page : msg.page != null ? msg.page : null;
+		const usable = (s) => (typeof s === "string" && s.trim() !== "" ? s : null);
+		const artwork = (s) => (usable(s) && ARTWORK_EXT.test(s.trim()) ? s : null);
+		const source =
+			usable(typeof g === "string" ? g : null) ||
+			usable(g && typeof g === "object" && !isBytes(g) ? g.path : null) ||
+			usable(image0 && image0.path) ||
+			artwork(msg.filename) ||
+			// a path-like key gives its basename and a bare name is used as
+			// it is; profileStore.sourceStem does both
+			usable(msg.goldenKey) ||
+			usable(node.goldenPath);
+		const pageNo = page == null || page === "" ? NaN : Number(page);
+		return { source, page: Number.isFinite(pageNo) ? pageNo : null };
+	}
+
+	/**
+	 * A profile through the node's cache: one fs.stat per message, and a
+	 * read only when (mtimeMs, size) moved - another node's write, an
+	 * operator's edit. null when there is no file, or one that cannot be
+	 * read; the latter is warned once per file version and the frame runs
+	 * as if the profile held nothing (a training write will then refuse to
+	 * overwrite it, which is the error that should reach the operator).
+	 */
+	async function loadProfile(node, file) {
+		let st;
+		try {
+			st = await fsp.stat(file);
+		} catch (err) {
+			node.profileCache.delete(file);
+			if (err && err.code === "ENOENT") return null;
+			warnProfileOnce(node, file, "stat", `profile ${file} is not readable: ${err.message}`);
+			return null;
+		}
+		const hit = node.profileCache.get(file);
+		if (hit && hit.stat.mtimeMs === st.mtimeMs && hit.stat.size === st.size) {
+			return boundedSet(node.profileCache, file, hit, 16);
+		}
+		const read = await profileStore.readProfile(file);
+		if (!read || read.error) {
+			node.profileCache.delete(file);
+			if (read) {
+				warnProfileOnce(
+					node,
+					file,
+					`${st.mtimeMs}:${st.size}`,
+					`${read.error}; running without its trained sections`,
+				);
+			}
+			return null;
+		}
+		return boundedSet(node.profileCache, file, read, 16);
+	}
+
+	function warnProfileOnce(node, file, stamp, text) {
+		if (node.profileWarned.get(file) === stamp) return;
+		boundedSet(node.profileWarned, file, stamp, 16);
+		node.warn(text);
+	}
+
+	/**
+	 * Bring a legacy per-node file into a profile that lacks the section.
+	 * The legacy path is very often not this golden's at all - another
+	 * product's training, or the editor's default nuisance path - and that
+	 * is not a fault: such a file is passed over with at most one log line,
+	 * never a warning or a refused pin. Each (profile, section, file
+	 * version, golden) is looked at once, so a file that does not apply is
+	 * not re-read on every frame. Returns the validated record when it was
+	 * imported, else null.
+	 */
+	async function importLegacy(node, profile, section, legacyPath, identity, check) {
+		let st;
+		try {
+			st = await fsp.stat(legacyPath);
+		} catch {
+			return null;
+		}
+		const memoKey = `${profile.path}|${section}|${legacyPath}`;
+		// identity: the working size and block size this message runs at,
+		// which a msg override can change for one frame
+		const stamp = `${profile.contentKey}|${identity}|${st.mtimeMs}|${st.size}`;
+		if (node.legacyChecked.get(memoKey) === stamp) return null;
+		boundedSet(node.legacyChecked, memoKey, stamp, 32);
+		const found = await check();
+		if (!found) return null;
+		if (found.error) {
+			node.log(`profile ${profile.id}: not importing ${legacyPath} - ${found.error}`);
+			return null;
+		}
+		try {
+			const written = await profileStore.writeProfileSection(profile.path, section, found.record, profile.golden);
+			profile.current = boundedSet(node.profileCache, profile.path, written, 16);
+			node.log(`profile ${profile.id}: imported the ${section} from ${legacyPath} -> ${profile.path}`);
+		} catch (err) {
+			// The record is still this golden's, so this frame uses it, and
+			// the next frame tries again: remembered as checked, every later
+			// frame would run unpinned (or without its map) in silence until
+			// the legacy file happened to change. Said once per file version.
+			node.legacyChecked.delete(memoKey);
+			warnProfileOnce(
+				node,
+				profile.path,
+				`import|${memoKey}|${stamp}`,
+				`profile ${profile.id}: could not import the ${section} from ${legacyPath}: ${err.message}; retrying on later frames`,
+			);
+		}
+		return found;
+	}
+
+	/**
+	 * Read the golden's barcodes and store their boxes as the profile's
+	 * `barcodes` section, for barcode-locate to decode only there. Boxes
+	 * are in the golden's native px, unpadded: the padding is the reader's
+	 * choice, made against its own position tolerance.
+	 *
+	 * On the demo label this is what made native-resolution decoding
+	 * reliable: the boxes mapped through the trained transform landed on
+	 * both codes in 149/149 rig photos and read the artwork's text in all
+	 * of them, 152 ms median against 385 ms for the whole frame.
+	 *
+	 * Started after the triggering frame is sent and never awaited by it.
+	 * One per (profile, golden version) at a time; a failure warns once and
+	 * is not retried for that golden version unless msg.deriveBarcodes asks.
+	 */
+	function deriveBarcodes(node, { profile, goldenSource, goldenKey, raw, bytes, contentMemoKey }) {
+		const key = `${profile.path}|${profile.contentKey}`;
+		if (derivations.has(key)) return derivations.get(key);
+		// the frame count when this started: the verdict is put back on the
+		// node afterwards only if no frame has set a status since
+		const frameAtStart = node.frameSeq;
+		const derive = async () => {
+			const started = performance.now();
+			node.status({ fill: "blue", shape: "ring", text: "locating barcodes on golden…" });
+			try {
+				const buffer = bytes || (await loadImage(goldenSource, "golden reference")).buffer;
+				assertRawFits(buffer, raw, "golden reference");
+				// a path golden is re-read here, and may have been replaced
+				// since the frame hashed it: boxes found on other bytes must
+				// not be filed under this content key
+				if (!bytes && !goldenKey.startsWith("buf:")) {
+					const suffix = raw ? `:${raw.width}x${raw.height}x${raw.channels}` : "";
+					if (`sha1:${sha1(buffer)}${suffix}` !== profile.contentKey) {
+						// and the memo that produced the old key must go: a named
+						// golden rewritten at the same byte length keeps its memo
+						// key, so without this it would never be re-hashed
+						if (contentMemoKey) node.contentKeys.delete(contentMemoKey);
+						node.log(`profile ${profile.id}: the golden changed while its barcodes were being read; the next frame retries`);
+						return;
+					}
+				}
+				// Lazily, and through the module object: zxing-wasm and its
+				// warm-up load only for a node that asks for regions, and a
+				// test can count the calls by patching the export.
+				const locate = require("./lib/locate.js");
+				const found = await locate.locateBarcodes(buffer, {
+					mode: "autoOnly",
+					raw: raw || undefined,
+				});
+				const regions = found.results.filter((r) => r.symbol).map((r) => ({
+					label: `${r.format} ${r.text}`.slice(0, 60),
+					format: r.format,
+					text: r.text,
+					x: r.symbol.x,
+					y: r.symbol.y,
+					width: r.symbol.width,
+					height: r.symbol.height,
+				}));
+				const record = {
+					source: "golden",
+					derivedAt: new Date().toISOString(),
+					goldenContentKey: profile.contentKey,
+					nativeWidth: found.imageWidth,
+					nativeHeight: found.imageHeight,
+					regions,
+				};
+				// written even when empty, so an artwork with no barcode is
+				// read once per version rather than on every frame
+				const written = await profileStore.writeProfileSection(profile.path, "barcodes", record, profile.golden);
+				boundedSet(node.profileCache, profile.path, written, 16);
+				node.derivationFailed.delete(key);
+				const ms = Math.round(performance.now() - started);
+				if (regions.length === 0) {
+					node.warn(
+						`profile ${profile.id}: no barcode found on the golden (${found.imageWidth}x${found.imageHeight}); ` +
+							"barcode-locate gets no regions from this profile",
+					);
+				}
+				node.log(
+					`profile ${profile.id}: ${regions.length} barcode(s) located on the golden in ${ms} ms -> ${profile.path}`,
+				);
+			} catch (err) {
+				boundedSet(node.derivationFailed, key, true, 16);
+				node.warn(`profile ${profile.id}: reading the golden's barcodes failed: ${err.message}`);
+			}
+		};
+		// derive() never rejects; finally() runs on a later tick, so `run`
+		// is assigned by then even when derive fails synchronously
+		const run = derive().finally(() => {
+			if (derivations.get(key) === run) derivations.delete(key);
+			if (node.lastVerdictStatus && node.frameSeq === frameAtStart) node.status(node.lastVerdictStatus);
+		});
+		derivations.set(key, run);
+		return run;
+	}
+
 	function GoldenCompareNode(config) {
 		RED.nodes.createNode(this, config);
 		const node = this;
@@ -637,9 +906,35 @@ module.exports = (RED) => {
 		node.scaleFilePath = String(config.scaleFilePath || "").trim();
 		node.transformFilePath = String(config.transformFilePath || "").trim();
 		node.nuisancePath = String(config.nuisancePath || "").trim();
+		// One profile file per golden under this directory, holding every
+		// trained or derived record for it (lib/profileStore.js). Empty keeps
+		// the per-node transformFilePath / nuisancePath exactly as before.
+		node.profileDir = String(config.profileDir || "").trim();
 		// Accumulates across frames for the life of the node, so a training
-		// run is "send the good frames through", not a single message.
-		node.nuisanceAcc = null;
+		// run is "send the good frames through", not a single message. One
+		// per golden (profile id, else golden key): a rig alternating
+		// artworks A and B under training used to fold both into one map.
+		node.nuisanceAcc = new Map();
+		// golden key + raw geometry + byte length -> content key. Bounded,
+		// not a single slot: a rig alternating goldens re-read and re-hashed
+		// the artwork on every switch.
+		node.contentKeys = new Map();
+		// profile path -> { profile, stat }, revalidated by one fs.stat per
+		// message against (mtimeMs, size), and replaced directly by this
+		// node's own writes so it never reads back stale
+		node.profileCache = new Map();
+		// profile path + content key -> the barcode derivation in flight, so
+		// frames arriving before the first finishes do not each run zxing
+		node.derivations = derivations;
+		// frames this node has started, so a derivation finishing late does
+		// not paint an old verdict over a newer frame's status
+		node.frameSeq = 0;
+		// what has been said once, so a per-golden condition is not repeated
+		// on every frame: legacy files checked for import (by profile, path
+		// and file version), unreadable profiles, failed derivations
+		node.legacyChecked = new Map();
+		node.profileWarned = new Map();
+		node.derivationFailed = new Map();
 		// { key, promise }: the prepared golden, keyed by its fingerprint plus
 		// every setting baked into it (the cacheKey list in ensureGolden is
 		// the authoritative one), so a change to either triggers exactly one
@@ -665,6 +960,7 @@ module.exports = (RED) => {
 					node.send.apply(node, arguments);
 				};
 			const totalStart = performance.now();
+			node.frameSeq++;
 			try {
 				const goldenSource = msg.golden == null ? node.goldenPath : msg.golden;
 				if (!goldenSource) {
@@ -723,6 +1019,7 @@ module.exports = (RED) => {
 				// store is bounded, so an entry can be evicted between preparing
 				// it and using it, and the retry below re-runs this.
 				let goldenKey;
+				let goldenByteLength;
 				let goldenMeta;
 				let cacheKey;
 				const ensureGolden = async () => {
@@ -735,6 +1032,7 @@ module.exports = (RED) => {
 					// its format is persisted and must not drift - see the cache key
 					// note below
 					goldenKey = fingerprint.key;
+					goldenByteLength = fingerprint.byteLength;
 					try {
 						// only a golden sent on the message can be raw; one loaded from
 						// goldenPath is a file, and files carry their own geometry
@@ -827,27 +1125,39 @@ module.exports = (RED) => {
 
 				// The golden's content identity, tying a trained transform to the
 				// image rather than to how it was delivered. Lazy and memoised:
-				// needed when training, and otherwise only to settle a cheap-key
-				// mismatch that would refuse a good record on every frame. Raw
+				// without a profile directory it is needed when training, and
+				// otherwise only to settle a cheap-key mismatch that would refuse
+				// a good record on every frame; with one, every message, since
+				// sections are checked against it strictly - so the memo holds
+				// several goldens and the hash runs once per golden version. Raw
 				// geometry rides along because the same bytes decode into a
 				// different image under a different width/height/channels.
+				const rawSuffix = () =>
+					cfg.raw ? `:${cfg.raw.width}x${cfg.raw.height}x${cfg.raw.channels}` : "";
+				// the bytes a memo miss read, kept for this message only: a
+				// barcode derivation needs them too, and should not read the
+				// artwork twice in one frame
+				let goldenBytes = null;
+				const contentMemoKey = () =>
+					`${goldenKey}${rawSuffix()}:${goldenByteLength == null ? "" : goldenByteLength}`;
 				const goldenContentKey = async () => {
-					const suffix = cfg.raw
-						? `:${cfg.raw.width}x${cfg.raw.height}x${cfg.raw.channels}`
-						: "";
+					const suffix = rawSuffix();
 					if (goldenKey.startsWith("buf:")) {
 						return `sha1:${goldenKey.slice(4)}${suffix}`;
 					}
 					// the suffix is part of the memo key too: a named golden
 					// (msg.goldenKey) keeps its name across a change of raw
-					// geometry, and the same bytes are a different image then
-					const memo = node.goldenContentKey;
-					const memoKey = `${goldenKey}${suffix}`;
-					if (memo && memo.key === memoKey) return memo.contentKey;
+					// geometry, and the same bytes are a different image then.
+					// So is the byte length, the one thing a named key can be
+					// cross-checked against without a read: a new render under
+					// an unchanged name nearly always changes it.
+					const memoKey = contentMemoKey();
+					const memo = node.contentKeys.get(memoKey);
+					if (memo) return boundedSet(node.contentKeys, memoKey, memo, 16);
 					const { buffer } = await loadImage(goldenSource, "golden reference");
+					goldenBytes = buffer;
 					const contentKey = `sha1:${sha1(buffer)}${suffix}`;
-					node.goldenContentKey = { key: memoKey, contentKey };
-					return contentKey;
+					return boundedSet(node.contentKeys, memoKey, contentKey, 16);
 				};
 
 				// The golden is never upscaled, so a source smaller than
@@ -928,59 +1238,152 @@ module.exports = (RED) => {
 				let trainedScore = null;
 				let trainedSlack = null;
 				let pinRefused = null;
-				if (!training && node.transformFilePath) {
-					const trained = await readTransformFile(node.transformFilePath, {
+				const trainingNuisance = cfg.trainNuisance;
+				// read now: msg goes downstream at send(), and the derivation
+				// that runs after it must not see what a later node did to it
+				const deriveAsked = msg.deriveBarcodes === true;
+
+				// The golden's profile, resolved once per message, here, and not
+				// again on the eviction retry below: the golden's identity
+				// cannot change between the two inspect calls, and a second
+				// resolution would be a second stat and hash for nothing.
+				let profile = null;
+				if (node.profileDir) {
+					const contentKey = await goldenContentKey();
+					const { source, page } = profileSource(node, msg);
+					const { id, namedBy } = profileStore.profileIdFor({
+						name: msg.profile,
+						source,
+						page,
+						contentKey,
+					});
+					const file = profileStore.profilePath(node.profileDir, id);
+					const label =
+						(typeof msg.profile === "string" && msg.profile.trim()) ||
+						named ||
+						node.goldenPath ||
+						null;
+					profile = {
+						id,
+						namedBy,
+						path: file,
+						contentKey,
+						// merged into the file's golden record on every write
+						golden: {
+							contentKey,
+							key: goldenKey,
+							label,
+							source: source || null,
+							page,
+							namedBy,
+							nativeWidth: goldenMeta.nativeWidth,
+							nativeHeight: goldenMeta.nativeHeight,
+						},
+						// { profile, stat } or null: no file yet, or one that
+						// cannot be read (warned once in loadProfile)
+						current: await loadProfile(node, file),
+						// whether this message pinned from / wrote each section
+						transform: false,
+						nuisance: false,
+					};
+				}
+				const section = (name) =>
+					profile && profile.current ? profile.current.profile[name] : undefined;
+
+				// With a profile the section is checked strictly against the
+				// golden's content: the profile was chosen by the golden's
+				// *name*, and a revised artwork saved under the same file name
+				// lands on the same profile. A refused section is a real
+				// problem and says so; a legacy file that is not this golden's
+				// (another product's, or the editor's default path) is not, and
+				// is passed over quietly - see importLegacy.
+				let trained = null;
+				if (!training && profile) {
+					const expect = {
+						goldenKey,
+						goldenContentKey: profile.contentKey,
+						workingSize: cfg.workingSize,
+						strictContentKey: true,
+					};
+					if (section("transform") !== undefined) {
+						trained = await validateTransformRecord(section("transform"), expect);
+						if (trained.error) trained = { error: `profile ${profile.id}: ${trained.error}` };
+					} else if (node.transformFilePath) {
+						trained = await importLegacy(node, profile, "transform", node.transformFilePath, `${cfg.workingSize}`, () =>
+							readTransformFile(node.transformFilePath, expect),
+						);
+					}
+				} else if (!training && node.transformFilePath) {
+					trained = await readTransformFile(node.transformFilePath, {
 						goldenKey,
 						goldenContentKey,
 						workingSize: cfg.workingSize,
 					});
-					if (trained && trained.error) {
-						// carry on searching rather than aligning to numbers
-						// known to be wrong - a stale pin looks like a print
-						// fault across the whole frame, which is the most
-						// expensive way to be wrong here
-						pinRefused = trained.error;
-						node.warn(`${trained.error}; searching for the transform instead`);
-					} else if (trained) {
-						cfg.pinnedScale = { mx: trained.scaleX, my: trained.scaleY };
-						trainedScore = trained.record.alignScore;
-						// the register slack training measured, when this record
-						// has one and the node is set to take it
-						// the trained slack when the record has one and
-						// toneMarginAuto is set; msg.toneMargin overrides it. A record
-						// trained before the levels existed is rounded here.
-						const sentMargin = msg.toneMargin != null && Number.isFinite(Number(msg.toneMargin));
-						const slack = trained.record.registerSlackPx;
-						if (cfg.toneMarginAuto && !sentMargin && Number.isFinite(slack) && slack >= 0 && slack <= 50) {
-							cfg.toneMargin = slackLevel(Math.round(slack));
-							trainedSlack = cfg.toneMargin;
-							// and per tile, where the record has it; compareFrame
-							// checks it against the golden's grid
-							const map = trained.record.register && trained.record.register.slack;
-							if (map && typeof map === "object") cfg.toneSlackMap = map;
-						}
+				}
+				if (trained && trained.error) {
+					// carry on searching rather than aligning to numbers
+					// known to be wrong - a stale pin looks like a print
+					// fault across the whole frame, which is the most
+					// expensive way to be wrong here
+					pinRefused = trained.error;
+					node.warn(`${trained.error}; searching for the transform instead`);
+				} else if (trained) {
+					if (profile) profile.transform = true;
+					cfg.pinnedScale = { mx: trained.scaleX, my: trained.scaleY };
+					trainedScore = trained.record.alignScore;
+					// the register slack training measured, when this record
+					// has one and the node is set to take it
+					// the trained slack when the record has one and
+					// toneMarginAuto is set; msg.toneMargin overrides it. A record
+					// trained before the levels existed is rounded here.
+					const sentMargin = msg.toneMargin != null && Number.isFinite(Number(msg.toneMargin));
+					const slack = trained.record.registerSlackPx;
+					if (cfg.toneMarginAuto && !sentMargin && Number.isFinite(slack) && slack >= 0 && slack <= 50) {
+						cfg.toneMargin = slackLevel(Math.round(slack));
+						trainedSlack = cfg.toneMargin;
+						// and per tile, where the record has it; compareFrame
+						// checks it against the golden's grid
+						const map = trained.record.register && trained.record.register.slack;
+						if (map && typeof map === "object") cfg.toneSlackMap = map;
 					}
 				}
 
 				// The nuisance map is independent of the trained transform:
 				// one pins magnification, the other says what "clean" looks
 				// like per block. A rig can sensibly have either alone.
-				const trainingNuisance = cfg.trainNuisance;
-				if (!trainingNuisance && node.nuisancePath) {
-					const map = await nuisance.readNuisanceMap(node.nuisancePath, {
+				let baselineMap = null;
+				if (!trainingNuisance && profile) {
+					const expect = {
+						goldenKey,
+						goldenContentKey: profile.contentKey,
+						workingSize: cfg.workingSize,
+						blockSize: cfg.blockSize,
+						strictContentKey: true,
+					};
+					if (section("nuisance") !== undefined) {
+						baselineMap = await nuisance.validateNuisanceRecord(section("nuisance"), expect);
+						if (baselineMap.error) baselineMap = { error: `profile ${profile.id}: ${baselineMap.error}` };
+					} else if (node.nuisancePath) {
+						baselineMap = await importLegacy(node, profile, "nuisance", node.nuisancePath, `${cfg.workingSize}|${cfg.blockSize}`, () =>
+							nuisance.readNuisanceMap(node.nuisancePath, expect),
+						);
+					}
+				} else if (!trainingNuisance && node.nuisancePath) {
+					baselineMap = await nuisance.readNuisanceMap(node.nuisancePath, {
 						goldenKey,
 						goldenContentKey,
 						workingSize: cfg.workingSize,
 						blockSize: cfg.blockSize,
 					});
-					if (map && map.error) {
-						// Same posture as a refused pin: run without it rather
-						// than subtract a baseline measured somewhere else,
-						// which would blind the check in the wrong places.
-						node.warn(`${map.error}; comparing without a nuisance map`);
-					} else if (map) {
-						cfg.nuisanceBaseline = map.baseline;
-					}
+				}
+				if (baselineMap && baselineMap.error) {
+					// Same posture as a refused pin: run without it rather
+					// than subtract a baseline measured somewhere else,
+					// which would blind the check in the wrong places.
+					node.warn(`${baselineMap.error}; comparing without a nuisance map`);
+				} else if (baselineMap) {
+					cfg.nuisanceBaseline = baselineMap.baseline;
+					if (profile) profile.nuisance = true;
 				}
 
 				node.status({
@@ -1094,14 +1497,45 @@ module.exports = (RED) => {
 							workingSize: cfg.workingSize,
 							goldenWidth: goldenMeta.width,
 							goldenHeight: goldenMeta.height,
+							// The frame the numbers were measured on, at working size
+							// and as it arrived, and where the golden sat in it. The
+							// scales alone map golden px to frame px only up to an
+							// offset; with these, barcode-locate can put a box found
+							// on the artwork onto the camera's native frame. The
+							// placement is this (the run's last written) frame's;
+							// later frames sit within the position tolerance of it.
+							frameWidth: result.targetWorking.width,
+							frameHeight: result.targetWorking.height,
+							frameNativeWidth: result.targetNative ? result.targetNative.width : null,
+							frameNativeHeight: result.targetNative ? result.targetNative.height : null,
+							placement: {
+								ox: result.transform.ox,
+								oy: result.transform.oy,
+								angleDeg: result.transform.angleDeg,
+							},
 							trainedAt: new Date().toISOString(),
 						};
-						if (!node.transformFilePath) {
+						// with a profile directory the profile is the record's
+						// only home; the legacy file is left as it was
+						let wroteTo;
+						if (profile) {
+							const written = await profileStore.writeProfileSection(
+								profile.path,
+								"transform",
+								record,
+								profile.golden,
+							);
+							profile.current = boundedSet(node.profileCache, profile.path, written, 16);
+							profile.transform = true;
+							wroteTo = profile.path;
+						} else if (node.transformFilePath) {
+							await writeTransformFile(node.transformFilePath, record);
+							wroteTo = node.transformFilePath;
+						} else {
 							throw new Error(
-								"training needs a Trained transform path to write to - set one on the node",
+								"training needs a profile directory or a Trained transform path to write to - set one on the node",
 							);
 						}
-						await writeTransformFile(node.transformFilePath, record);
 						msg.trainedTransform = record;
 						node.log(
 							`trained transform: scaleX=${record.scaleX.toFixed(5)} ` +
@@ -1114,7 +1548,7 @@ module.exports = (RED) => {
 											? ` (${Math.min(...record.register.slack.slackPx)}-${Math.max(...record.register.slack.slackPx)} per tile)`
 											: "")
 									: "") +
-								` -> ${node.transformFilePath}`,
+								` -> ${wroteTo}`,
 						);
 					}
 				} else {
@@ -1128,9 +1562,9 @@ module.exports = (RED) => {
 				// spot exactly where it sat.
 				if (trainingNuisance) {
 					const bg = result.backgroundBlemish;
-					if (!node.nuisancePath) {
+					if (!profile && !node.nuisancePath) {
 						throw new Error(
-							"training a nuisance map needs a Nuisance map path to write to - set one on the node",
+							"training a nuisance map needs a profile directory or a Nuisance map path to write to - set one on the node",
 						);
 					}
 					if (!bg || !bg.densityBytes) {
@@ -1138,43 +1572,59 @@ module.exports = (RED) => {
 							"nuisance training got no density grid back from the comparison",
 						);
 					}
-					if (
-						node.nuisanceAcc &&
-						(node.nuisanceAcc.gridW !== bg.gridW ||
-							node.nuisanceAcc.gridH !== bg.gridH)
-					) {
+					// One accumulator per golden version, a few at most: a run is
+					// one product's good frames, and an interleaved second product
+					// (or a revised artwork under the same profile name) must
+					// neither join it nor end it. Without a profile there is one
+					// file to write and one accumulator, as there always was - a
+					// flow that rewrites its golden file each cycle changes the
+					// golden key every frame, and keyed by it the map would never
+					// get past one frame.
+					const accKey = profile ? `profile:${profile.id}|${profile.contentKey}` : "legacy";
+					let acc = node.nuisanceAcc.get(accKey) || null;
+					if (acc && (acc.gridW !== bg.gridW || acc.gridH !== bg.gridH)) {
 						// geometry changed mid-run; the partial map describes a
 						// grid that no longer exists
 						node.warn(
 							`nuisance training restarted: grid changed to ${bg.gridW}x${bg.gridH}`,
 						);
-						node.nuisanceAcc = null;
+						acc = null;
 					}
-					if (!node.nuisanceAcc) {
-						node.nuisanceAcc = nuisance.createAccumulator(bg.gridW, bg.gridH);
-					}
-					nuisance.accumulate(
-						node.nuisanceAcc,
-						nuisance.dequantizeDensity(bg.densityBytes),
-					);
-					const baseline = nuisance.finalize(node.nuisanceAcc);
-					const record = nuisance.buildRecord(baseline, node.nuisanceAcc, {
+					if (!acc) acc = nuisance.createAccumulator(bg.gridW, bg.gridH);
+					boundedSet(node.nuisanceAcc, accKey, acc, 4);
+					nuisance.accumulate(acc, nuisance.dequantizeDensity(bg.densityBytes));
+					const baseline = nuisance.finalize(acc);
+					const record = nuisance.buildRecord(baseline, acc, {
 						channel: "background",
 						blockSize: cfg.blockSize,
 						workingSize: cfg.workingSize,
 						goldenKey,
 						goldenContentKey: await goldenContentKey(),
 					});
-					await nuisance.writeNuisanceMap(node.nuisancePath, record);
+					let wroteTo;
+					if (profile) {
+						const written = await profileStore.writeProfileSection(
+							profile.path,
+							"nuisance",
+							record,
+							profile.golden,
+						);
+						profile.current = boundedSet(node.profileCache, profile.path, written, 16);
+						profile.nuisance = true;
+						wroteTo = profile.path;
+					} else {
+						await nuisance.writeNuisanceMap(node.nuisancePath, record);
+						wroteTo = node.nuisancePath;
+					}
 					msg.trainedNuisance = {
 						frames: record.frames,
 						gridW: record.gridW,
 						gridH: record.gridH,
-						path: node.nuisancePath,
+						path: wroteTo,
 					};
 					node.log(
 						`nuisance map: ${record.frames} frame(s), ` +
-							`${record.gridW}x${record.gridH} -> ${node.nuisancePath}`,
+							`${record.gridW}x${record.gridH} -> ${wroteTo}`,
 					);
 				}
 
@@ -1243,6 +1693,27 @@ module.exports = (RED) => {
 						...(result.speckBlemish.reason ? { reason: result.speckBlemish.reason } : {}),
 					},
 				};
+				// Which profile this frame used and what it held for this golden:
+				// the path is what barcode-locate downstream reads its regions
+				// from, and the content key lets it check the file is still
+				// this golden's. `barcodes` is the region count of a section
+				// derived from this golden's content, else null (not derived
+				// yet, or derived from another version of the artwork).
+				if (profile) {
+					const bc = section("barcodes");
+					msg.result.profile = {
+						id: profile.id,
+						namedBy: profile.namedBy,
+						path: profile.path,
+						contentKey: profile.contentKey,
+						transform: profile.transform,
+						nuisance: profile.nuisance,
+						barcodes:
+							bc && bc.goldenContentKey === profile.contentKey && Array.isArray(bc.regions)
+								? bc.regions.length
+								: null,
+					};
+				}
 				// A check that was asked for and could not run says so once per
 				// golden, not per frame: the reason is the golden, not the part.
 				if (result.toneBlemish.reason && node.toneWarnedFor !== goldenKey) {
@@ -1318,11 +1789,12 @@ module.exports = (RED) => {
 								? `pass · align ${result.match.score.toFixed(3)}`
 								: `fail (${failedParts.join("+")}) · align ${result.match.score.toFixed(3)}`) +
 					` · ${fmtMs(performance.now() - totalStart)}`;
-				node.status({
+				node.lastVerdictStatus = {
 					fill: result.pass ? "green" : "red",
 					shape: result.pass ? "dot" : "ring",
 					text: verdictText,
-				});
+				};
+				node.status(node.lastVerdictStatus);
 
 				if (cfg.previewEnabled) {
 					// Keep the whole pipeline for the stage viewer, and put a
@@ -1391,6 +1863,35 @@ module.exports = (RED) => {
 						`diff ${fmtMs(t.diffMs)}, heatmap ${fmtMs(t.heatmapMs)}, ` +
 						`stages ${fmtMs(t.stagesMs)}, total ${fmtMs(msg.timings.totalMs)} | ${routeStr}`,
 				);
+
+				// The golden's barcodes, read once per golden version into its
+				// profile, after this frame has gone: a 12 MP render through
+				// zxing is hundreds of ms this frame's latency should not carry.
+				// Not awaited - the next frames run while it does, and the
+				// in-flight guard keeps them from starting a second one.
+				if (deriveAsked && !profile && node.derivationNoDirWarned !== true) {
+					node.derivationNoDirWarned = true;
+					node.warn("msg.deriveBarcodes needs a profile directory on the node to write the regions to");
+				}
+				if (profile) {
+					// the cache, not this frame's snapshot: a derivation that
+					// finished while this frame ran has already filed its
+					// section there, and its guard entry is gone
+					const latest = node.profileCache.get(profile.path) || profile.current;
+					const bc = latest ? latest.profile.barcodes : undefined;
+					const stale = !bc || bc.goldenContentKey !== profile.contentKey;
+					const failedBefore = node.derivationFailed.has(`${profile.path}|${profile.contentKey}`);
+					if (deriveAsked || (cfg.barcodeRegions && stale && !failedBefore)) {
+						deriveBarcodes(node, {
+							profile,
+							goldenSource,
+							goldenKey,
+							raw: cfg.raw,
+							bytes: goldenBytes,
+							contentMemoKey: contentMemoKey(),
+						});
+					}
+				}
 				done();
 			} catch (err) {
 				node.status({ fill: "red", shape: "ring", text: "error" });
