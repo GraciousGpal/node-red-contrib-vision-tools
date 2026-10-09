@@ -20,7 +20,7 @@ const assert = require("node:assert/strict");
 const sharp = require("sharp");
 const { prepareGolden, compareFrame } = require("../lib/compare.js");
 const { HAS_SAB, GC_EVERY_BYTES, sharedAllocated, allocU8 } = require("../lib/shared.js");
-const { shutdown, poolSize } = require("../lib/pool.js");
+const { shutdown, poolSize, gcPhase } = require("../lib/pool.js");
 const { setTimeout: sleep } = require("node:timers/promises");
 
 const W = 900;
@@ -120,6 +120,34 @@ test("shared buffers from finished frames are released while the pool runs", { s
 		peak < bound,
 		`shared buffers peaked at ${(peak / 1e6).toFixed(0)} MB over ${frames} frames; bound ${(bound / 1e6).toFixed(0)} MB`,
 	);
+});
+
+// Every worker is shown the same new buffers, so workers that start their
+// collection intervals together collect in the same frame, and twelve
+// collections at once stalled a frame in eight on the rig to twice its
+// time. Each worker's count, as lib/poolWorker.js keeps it, over a run
+// of frames that each bring every worker 9 MB of new buffers.
+test("pool workers spread their collections over the frames", () => {
+	const interval = GC_EVERY_BYTES / 2;
+	const perFrame = 9 * 1024 * 1024;
+	for (const workers of [4, 12, 15]) {
+		const count = Array.from({ length: workers }, (_, i) => gcPhase(i) * interval);
+		const collected = new Set();
+		let most = 0;
+		for (let frame = 0; frame < 200; frame++) {
+			let now = 0;
+			for (let i = 0; i < workers; i++) {
+				count[i] += perFrame;
+				if (count[i] < interval) continue;
+				count[i] = 0;
+				now++;
+				collected.add(i);
+			}
+			most = Math.max(most, now);
+		}
+		assert.equal(collected.size, workers, `${workers} workers: one never collected`);
+		assert.ok(most <= Math.ceil((workers * perFrame) / interval) + 1, `${workers} workers: ${most} collected in one frame`);
+	}
 });
 
 // The allocating thread's half, on its own. At 1 MP a frame the pool

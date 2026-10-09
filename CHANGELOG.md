@@ -413,7 +413,12 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   the frame before instead of allocated anew: the pool workers collect
   by the volume of shared memory they have not seen, and new masks every
   frame had one of them collecting inside nearly every frame (the spares
-  kept for reuse are capped at 128 MB across golden sizes). The
+  kept for reuse are capped at 128 MB across golden sizes), and each
+  worker starts its collection interval at its own point of it: every
+  worker is shown the same new buffers (the rectified frame, mostly), so
+  all twelve collected inside the same frame, one frame in eight, which
+  took 165 ms; now about one collects in a frame, and the good frame's
+  p95 is 99 ms where it was 167, for ~80 MB more held. The
   thresholding counts (Otsu's histogram, the golden's ink and its
   coverage, the native path's disagreement) are taken by the pool as it
   binarizes; the print and background checks run as one pass over the
