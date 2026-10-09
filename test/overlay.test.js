@@ -119,3 +119,27 @@ test("the overlay's canvas is the grey as RGB, built across turns of the loop", 
 		assert.ok(turns >= slices - 1, `${n} pixels: ${turns} turns for ${slices} slices`);
 	}
 });
+
+test("a thumbnail that fails to encode while the canvas is still being built fails the frame, not the process", async () => {
+	const golden = await prepareGolden(await sharp(labelSvg()).png().toBuffer(), CFG);
+	const frame = await sharp(labelSvg()).png().toBuffer();
+	const cfg = { ...CFG, heatmapFormat: "raw" };
+	const unhandled = [];
+	const onUnhandled = (err) => unhandled.push(err);
+	process.on("unhandledRejection", onUnhandled);
+	// the thumbnail's encode fails at once; the canvas's slices are slowed
+	// so it is still being built when that happens
+	const jpeg = sharp.prototype.jpeg;
+	sharp.prototype.jpeg = () => ({ toBuffer: () => Promise.reject(new Error("encode failed")) });
+	const immediate = global.setImmediate;
+	global.setImmediate = (fn, ...args) => setTimeout(fn, 5, ...args);
+	try {
+		await assert.rejects(compareFrame(frame, golden, cfg), /encode failed/);
+		await new Promise((resolve) => setTimeout(resolve, 50));
+	} finally {
+		sharp.prototype.jpeg = jpeg;
+		global.setImmediate = immediate;
+		process.off("unhandledRejection", onUnhandled);
+	}
+	assert.deepEqual(unhandled, []);
+});
