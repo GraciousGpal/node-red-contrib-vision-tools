@@ -208,6 +208,32 @@ for (const [name, thresholds] of cases) {
 	}
 }
 
+test("on the pool the masks come from the frame's scratch, reused buffers and all", { skip: !HAS_SAB }, async () => {
+	const cfg = { toneMargin: 3, toneThreshold: 0.3, speckThreshold: 0.3, workers: 5 };
+	let want = null;
+	// the scratch hands back the same two buffers every frame, as
+	// takeShared does once a frame has given them back
+	const { takeShared, giveShared } = require("../lib/shared.js");
+	for (let round = 0; round < 3; round++) {
+		const taken = [];
+		const take = (Ctor, length, zero) => {
+			const a = takeShared(Ctor, length, zero);
+			taken.push(a);
+			return a;
+		};
+		const got = await toneDefect(golden, frame, cfg, false, take);
+		// after the first call, which builds the golden's classes for this margin
+		want = want || reference(golden, frame, cfg, false);
+		assert.deepStrictEqual(taken, [got.defect, got.speck]);
+		same(got.defect, want.defect, `round ${round} defect`);
+		same(got.speck, want.speck, `round ${round} speck`);
+		same(got.seeds, want.seeds, `round ${round} seeds`);
+		// what the speck fill leaves behind: visited pixels marked 2
+		for (const i of got.seeds) got.speck[i] = 2;
+		for (const a of taken) giveShared(a);
+	}
+});
+
 test("the histogram pass gives the same cells however the cells are split", () => {
 	const classes = golden.toneClasses.classes;
 	const cellsW = Math.ceil(W / 128);
