@@ -307,6 +307,38 @@ test("parallel local refinement is byte-identical to serial", {
 	assert.strictEqual(par.tile, serial.tile);
 });
 
+// The workers claim tiles and squares of the frame a chunk at a time: on
+// sizes no tile, square or chunk divides, with more workers than rows of
+// tiles and with fewer, every one is still done once.
+test("parallel local refinement is byte-identical on sizes nothing divides", {
+	skip: !HAS_SAB,
+}, async () => {
+	for (const [W, H, tile, max, workers] of [
+		[901, 777, 37, 6, 12],
+		[700, 1300, 96, 6, 5],
+		[1475, 301, 96, 2, 16],
+	]) {
+		const goldenGray = noisy(W, H, W + H);
+		const target = new Uint8Array(W * H);
+		for (let y = 0; y < H; y++) {
+			// a shift that grows down the frame, so the field is not uniform
+			const dy = Math.round((3 * y) / H);
+			const sy = Math.min(H - 1, Math.max(0, y - dy));
+			for (let x = 0; x < W; x++) target[y * W + x] = goldenGray[sy * W + Math.min(W - 1, Math.max(0, x - 1))];
+		}
+		const cfg = { localAlignTile: tile, localAlignMax: max, localAlignMinStdDev: 12, workers };
+		const serial = refineLocally(goldenGray, target, W, H, cfg);
+		const par = await refineLocallyParallel(goldenGray, target, W, H, cfg);
+		const name = `${W}x${H} tile ${tile} cap ${max}, ${workers} workers`;
+		assert.ok(par, `${name}: precondition, big enough to split`);
+		assert.ok(serial.stats.localised > 0, `${name}: precondition, some tile localises`);
+		assert.ok(same(serial.gray, par.gray), `${name}: the corrected grey diverged`);
+		assert.ok(same(serial.field.fx, par.field.fx), `${name}: the fx field diverged`);
+		assert.ok(same(serial.field.fy, par.field.fy), `${name}: the fy field diverged`);
+		assert.ok(same(serial.field.valid, par.field.valid), `${name}: the validity field diverged`);
+	}
+});
+
 // The one that matters: the whole pipeline, same verdict either way.
 test("a frame compares identically with and without workers", {
 	skip: !HAS_SAB,
