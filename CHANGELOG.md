@@ -456,7 +456,9 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   heat-map block as it sets them, so the tone grid no longer walks the
   mask again (unless an edge margin cleared some of them); the pool's
   workers clear the tone and speck masks a chunk of rows at a time as
-  they compare it, where the inspector's thread zeroed both whole. The
+  they compare it, where the inspector's thread zeroed both whole; and
+  the tone levels and tables are worked out outside the async check,
+  where their loops ran unoptimised in runs of frames. The
   resampling works out each column's horizontal
   interpolation once per band of rows sharing a pair of field rows,
   rather than once per pixel.
