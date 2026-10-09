@@ -408,8 +408,9 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 - **`golden-compare` runs a good frame in about half the time.** On the
   rig's 1475x2125 golden at 12 workers the median good frame went from
-  168 to 76 ms, with `msg.result` and `msg.heatmap` unchanged to the bit
-  on all 162 sample frames. A frame's full-size masks are reused from
+  164 to 74 ms and its p95 from 190 to 99 ms (whole handler, all 162
+  sample frames twice, old and new interleaved on an idle host), with
+  `msg.result` and `msg.heatmap` unchanged to the bit. A frame's full-size masks are reused from
   the frame before instead of allocated anew: the pool workers collect
   by the volume of shared memory they have not seen, and new masks every
   frame had one of them collecting inside nearly every frame (the spares

@@ -1,6 +1,70 @@
 # Golden-compare: NodeRed-Test container benchmark
 
-## Result
+## Current result (October 2026)
+
+Good frames: **164 → 74 ms median, 190 → 99 ms p95, 210 → ~109 ms p99**
+(whole handler). `msg.result` and every heat map are identical to the
+bit on all 162 frames, pinned, and on 20-frame samples with no trained
+transform, with and without OpenCV.
+
+Same container, golden (1475×2125, rendered from the PDF as below), 148
+good + 14 bad camera frames, the live flow's settings (workingSize 2125,
+trained transform pinned, nuisance map, tone and speck checks on, preview
+on, overlay heat map raw, named golden), 12 workers. Each run is the full
+set twice; old and new snapshots alternate, two rounds each, one job on
+the host at a time. The harness is `bench/golden-container-bench.js`
+extended with the flow's rectify step, profile directory and admin-route
+stubs.
+
+| Good frames | before | after |
+| --- | ---: | ---: |
+| median | 164.3 ms | 74 ms |
+| p95 | 190.4 ms | 99 ms |
+| p99 | 209.8 ms | 107–111 ms |
+| bad frames, median | 334 ms | 255 ms |
+
+Good-frame stage medians, before → after: native align 23 → 11, threshold
+18 → 4, diff 26 → 10, heat-map grids 12 → 2, tone 33 → 9, handler
+plumbing after the inspection 23 → 3; local align 16 → 14; overlay 8 → 13
+(it now includes the preview thumbnail, which used to be drawn on the
+main thread). A 972-frame soak: 65 / 88 / 97 ms p50 / p95 / p99, process
+RSS flat at ~820 MB (~740 MB before).
+
+What moved it, largest first:
+
+- **Garbage collection.** Pool workers force a full collection after a
+  volume of shared memory they have not seen. Fresh full-size masks every
+  frame put a collection inside nearly every frame, and since every
+  worker sees the same new buffers, all twelve collected in the same
+  frame, one in eight, at ~160 ms. Full-size scratch is now reused (128
+  MB cap) and each worker starts its collection interval at its own
+  phase, so about one collects per frame.
+- **Serial passes moved onto the pool**: Otsu's histogram and the ink
+  counts inside binarize, the print and background checks fused into one
+  pass that also counts the heat-map blocks, the tone check's chunked
+  work split.
+- **Preview**: the thumbnail is drawn small in the inspector; the
+  full-size overlay is drawn only when the message or an open viewer
+  wants it.
+- **The JS alignment fallback**: pooled density sweeps, the stage-2 angle
+  sweep only for the hypotheses stage 3 reads, the polish split by rows.
+  Pinned JS-route frames 480 → 391 ms median; unpinned search 2.3 → 0.57 s.
+
+Remaining tail: the 8 bad frames that fall back to the JS search are all
+labels missing or nearly empty (2–12% of the golden's ink covered, every
+natively aligned frame ≥ 83%). An ink-presence check before the search
+would end them at ~65 ms but changes their result, so it is not in.
+
+Native SIMD kernels were measured as the next step (threshold, dilate and
+warp 2–7× faster single-threaded in C++) and are not needed for this
+target. GPU offload is not worth it: the bundled OpenCV has no OpenCL or
+CUDA, the container has no GPU, and these stages are memory-bound.
+
+The sections below are the September 2026 measurements, kept as history;
+the code has changed since (tone and speck checks, local alignment,
+profiles), so their absolute numbers no longer describe it.
+
+## September 2026 result
 
 The safe code-only optimization reduces median comparison latency **110.6 → 96.2 ms (13%)**, with **identical complete result objects on all 162 images**. It replaces full-image integral tables with direct counts over the non-overlapping defect blocks in `lib/compare.js`.
 

@@ -148,8 +148,9 @@ instantiate the WASM runtime. Run `node bench/engine-compare.js` to measure
 your own hardware.
 
 End to end the gap can be wider. Replaying the real `golden-compare`
-handler in the Node-RED test container (`bench/golden-performance.md`), the
-WASM-backed snapshot measured **456ms median** against native's **101ms**
+handler in the Node-RED test container (`bench/golden-performance.md`,
+September 2026, before the current pipeline's speed-ups), the WASM-backed
+snapshot measured **456ms median** against native's **101ms**
 at 12 workers with a named golden. Both graded that sample identically,
 but their transforms and native/fallback paths differ, so read it as a
 comparison of these two implementations rather than a universal WASM
