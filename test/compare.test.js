@@ -662,6 +662,19 @@ test("any print tolerance gives the same answer over the pool and on one thread"
 	}
 });
 
+test("a fractional block size gives the same answer over the pool and on one thread", async () => {
+	const goldenBuf = await png(labelSvg(1200, 1600));
+	const golden = await prepareGolden(goldenBuf, cfg({ heatmapFormat: "raw" }));
+	const frame = await png(labelSvg(1200, 1600, { missingBar: true, extraBlob: { x: 650, y: 1250, w: 40, h: 30 } }));
+	const strip = (r) => JSON.stringify({ ...r, timings: null, heatmap: null, thumbnail: null });
+	for (const blockSize of [10.5, 13]) {
+		const settings = { blockSize, heatmapFormat: "raw", outputPrintHeatmap: true, outputBackgroundHeatmap: true };
+		const serial = await compareFrame(frame, golden, cfg({ ...settings, workers: 1 }));
+		const pooled = await compareFrame(frame, golden, cfg({ ...settings, workers: 4 }));
+		assert.ok(strip(pooled) === strip(serial), `blockSize ${blockSize}: the pooled result differs from the one-thread one`);
+	}
+});
+
 test("one spatter fails the speck check on its size, and a clean frame has no specks", async () => {
 	const goldenBuf = await png(labelSvg(1200, 1600));
 	const golden = await prepareGolden(goldenBuf, cfg());
