@@ -253,8 +253,10 @@ test("on the pool the masks come from the frame's scratch, reused buffers and al
 		same(got.defect, want.defect, `round ${round} defect`);
 		same(got.speck, want.speck, `round ${round} speck`);
 		same(got.seeds, want.seeds, `round ${round} seeds`);
-		// what the speck fill leaves behind: visited pixels marked 2
+		// what the speck fill leaves behind: visited pixels marked 2; and
+		// what a frame with other defects would: set pixels everywhere
 		for (const i of got.seeds) got.speck[i] = 2;
+		for (let i = 0; i < got.defect.length; i += 7) got.defect[i] = got.speck[i] = 1;
 		for (const a of taken) giveShared(a);
 	}
 });

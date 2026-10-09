@@ -454,7 +454,9 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   check's per-cell histograms, so neither runs a pass of its own over
   the frame, and the tone comparison counts its defect pixels per
   heat-map block as it sets them, so the tone grid no longer walks the
-  mask again (unless an edge margin cleared some of them). The
+  mask again (unless an edge margin cleared some of them); the pool's
+  workers clear the tone and speck masks a chunk of rows at a time as
+  they compare it, where the inspector's thread zeroed both whole. The
   resampling works out each column's horizontal
   interpolation once per band of rows sharing a pair of field rows,
   rather than once per pixel.
