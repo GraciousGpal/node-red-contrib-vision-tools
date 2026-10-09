@@ -388,3 +388,73 @@ test("the native path blanks pixels that fall outside the frame", async () => {
 		nativeSeed._resetEngine();
 	}
 });
+
+// The per-pixel form blankOutsideSource replaced, kept as the reference:
+// the run form must agree with it on every pixel, boundaries included.
+function blankPerPixel(gray, gW, gH, { mx, my, theta, ox, oy }, tW, tH) {
+	const cos = Math.cos(theta);
+	const sin = Math.sin(theta);
+	const xFromGx = cos * mx;
+	const yFromGx = sin * mx;
+	const xFromGy = -sin * my;
+	const yFromGy = cos * my;
+	const out = new Uint8Array(gW * gH);
+	for (let y = 0; y < gH; y++) {
+		const baseX = ox + xFromGy * y;
+		const baseY = oy + yFromGy * y;
+		for (let x = 0; x < gW; x++) {
+			const tx = baseX + xFromGx * x;
+			const ty = baseY + yFromGx * x;
+			out[y * gW + x] = tx >= 0 && tx < tW && ty >= 0 && ty < tH ? gray[y * gW + x] : 255;
+		}
+	}
+	return out;
+}
+
+test("blankOutsideSource blanks exactly the pixels the per-pixel test does", () => {
+	const gW = 157;
+	const gH = 113;
+	const gray = new Uint8Array(gW * gH);
+	for (let i = 0; i < gray.length; i++) gray[i] = (i * 37) % 254;
+	let seed = 99;
+	const rnd = () => ((seed = (seed * 1103515245 + 12345) & 0x7fffffff) / 0x7fffffff);
+	const cases = [
+		// identity, the frame exactly the golden's size: nothing blanked
+		{ mx: 1, my: 1, theta: 0, ox: 0, oy: 0, tW: gW, tH: gH },
+		// edges landing exactly on pixel boundaries, and a frame smaller
+		// than the golden on both axes
+		{ mx: 1, my: 1, theta: 0, ox: -10, oy: -7, tW: 100, tH: 80 },
+		{ mx: 0.5, my: 0.25, theta: 0, ox: 3, oy: -2, tW: 40, tH: 20 },
+		// a quarter turn either way: the run is along the other axis
+		{ mx: 1, my: 1, theta: Math.PI / 2, ox: 120, oy: -5, tW: 130, tH: 150 },
+		{ mx: 1.1, my: 0.9, theta: -Math.PI / 2, ox: 5, oy: 140, tW: 130, tH: 150 },
+		// upside down, and a mirrored scale
+		{ mx: 1, my: 1, theta: Math.PI, ox: 150, oy: 110, tW: 140, tH: 100 },
+		{ mx: -1, my: 1, theta: 0, ox: 150, oy: 0, tW: 160, tH: 120 },
+		// nothing inside at all, and everything inside
+		{ mx: 1, my: 1, theta: 0.01, ox: 1000, oy: 1000, tW: 50, tH: 50 },
+		{ mx: 0.1, my: 0.1, theta: 0.3, ox: 30, oy: 30, tW: 500, tH: 500 },
+		// a degenerate scale, and non-finite ones
+		{ mx: 0, my: 1, theta: 0, ox: 4, oy: -3, tW: 10, tH: 60 },
+		{ mx: NaN, my: 1, theta: 0, ox: 0, oy: 0, tW: 10, tH: 10 },
+		{ mx: 1, my: 1, theta: 0, ox: Infinity, oy: 0, tW: 10, tH: 10 },
+	];
+	for (let k = 0; k < 300; k++) {
+		cases.push({
+			mx: 0.3 + rnd() * 2,
+			my: 0.3 + rnd() * 2,
+			theta: (rnd() - 0.5) * 0.2 + (k % 4) * (Math.PI / 2),
+			// thirds of a pixel and tiny offsets put crossings within
+			// rounding of an integer
+			ox: Math.round((rnd() - 0.5) * 300) / 3 + (k % 3 ? 0 : 1e-12),
+			oy: Math.round((rnd() - 0.5) * 300) / 3 - (k % 5 ? 0 : 1e-12),
+			tW: 20 + Math.floor(rnd() * 200),
+			tH: 20 + Math.floor(rnd() * 200),
+		});
+	}
+	for (const c of cases) {
+		const expected = blankPerPixel(gray, gW, gH, c, c.tW, c.tH);
+		const actual = nativeSeed.blankOutsideSource(gray, gW, gH, c, c.tW, c.tH);
+		assert.deepStrictEqual(Buffer.from(actual), Buffer.from(expected), JSON.stringify(c));
+	}
+});
