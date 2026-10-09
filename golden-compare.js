@@ -1947,10 +1947,12 @@ module.exports = (RED) => {
 	}
 
 	/**
-	 * Store this frame's images for the viewer and draw the thumbnail: the
-	 * one picture with every check's regions on it, or the aligned frame
-	 * when that picture is off, so the picture under the node says where,
-	 * not just whether. `attached` says whether a viewer had every stage
+	 * Store this frame's images for the viewer and publish the thumbnail:
+	 * the aligned frame with every check's region boxes in their colours,
+	 * drawn small by the inspector (cfg.thumbnailWidth), so the picture
+	 * under the node says where, not just whether. A result without one is
+	 * shrunk here from the one picture, or the aligned frame when that
+	 * picture is off. `attached` says whether a viewer had every stage
 	 * and heat map rendered for this frame; else the frame is kept so one
 	 * can have them rendered when it opens.
 	 */
