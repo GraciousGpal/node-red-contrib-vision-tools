@@ -13,7 +13,7 @@ const test = require("node:test");
 const assert = require("node:assert/strict");
 const sharp = require("sharp");
 const { prepareGolden, compareFrame } = require("../lib/compare.js");
-const { HAS_SAB, takeShared, giveShared, sharedAllocated } = require("../lib/shared.js");
+const { HAS_SAB, takeShared, giveShared, sharedAllocated, sparedBytes, SPARE_MAX_BYTES } = require("../lib/shared.js");
 const { shutdown, poolSize } = require("../lib/pool.js");
 
 test.after(() => shutdown());
@@ -44,6 +44,21 @@ test("a spare is handed out again, zeroed when asked, and bounded", { skip: !HAS
 	let reused = 0;
 	for (let i = 0; i < 40; i++) if (buffers.has(takeShared(Uint8Array, 333).buffer)) reused++;
 	assert.ok(reused > 0 && reused < 40, `${reused} of 40 kept`);
+});
+
+test("the spares of many sizes stay under one cap, the oldest size given up first", { skip: !HAS_SAB }, () => {
+	// a process inspecting one golden after another kept every size's
+	// spares for good
+	const MB = 1024 * 1024;
+	const sizes = Array.from({ length: 40 }, (_, i) => 4 * MB + i * 4096);
+	for (const n of sizes) giveShared(takeShared(Uint8Array, n, false));
+	assert.ok(sparedBytes() <= SPARE_MAX_BYTES, `${(sparedBytes() / MB).toFixed(0)} MB kept`);
+	assert.ok(sparedBytes() > SPARE_MAX_BYTES - 8 * MB, "up to the cap, not well short of it");
+	const before = sharedAllocated();
+	takeShared(Uint8Array, sizes[sizes.length - 1], false);
+	assert.strictEqual(sharedAllocated(), before, "the newest size is kept");
+	takeShared(Uint8Array, sizes[0], false);
+	assert.strictEqual(sharedAllocated(), before + sizes[0], "the oldest size was given up");
 });
 
 const W = 900;
