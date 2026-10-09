@@ -119,33 +119,38 @@ for (const pinned of [false, true]) {
 	});
 }
 
-test("stage 2 sweeps angle only for the hypotheses stage 3 refines", async () => {
-	const { frame, signatures } = fixture();
-	const batches = [];
-	await findTransform(GW, GH, frame, TW, TH, signatures, {
-		...OPTS,
-		// decline every batch, so this only watches what is asked for
-		scoreDensity: async (sig, table, w, h, params, n) => {
-			const angles = new Set();
-			for (let i = 0; i < n; i++) angles.add(params[i * 5 + 2]);
-			batches.push({ sig, n, angles: angles.size });
-			return null;
-		},
+// A fractional count, a library caller's, refines the whole number above
+// it, as the `i < keep` loop the slice replaced did.
+for (const rankedCandidates of [OPTS.rankedCandidates, 2.5]) {
+	test(`stage 2 sweeps angle only for the hypotheses stage 3 refines (${rankedCandidates})`, async () => {
+		const { frame, signatures } = fixture();
+		const batches = [];
+		await findTransform(GW, GH, frame, TW, TH, signatures, {
+			...OPTS,
+			rankedCandidates,
+			// decline every batch, so this only watches what is asked for
+			scoreDensity: async (sig, table, w, h, params, n) => {
+				const angles = new Set();
+				for (let i = 0; i < n; i++) angles.add(params[i * 5 + 2]);
+				batches.push({ sig, n, angles: angles.size });
+				return null;
+			},
+		});
+		// stage 2 on the medium lattice: first every scale pair at angle 0,
+		// then the angle sweep. Both use the same translation grid around each
+		// hypothesis, so the first batch gives its size.
+		const medium = batches.filter((b) => b.sig === signatures.medium);
+		assert.strictEqual(medium.length, 2, "a scale batch and an angle batch");
+		const pairs = OPTS.aspectSteps * 3;
+		const grid = medium[0].n / pairs;
+		assert.strictEqual(medium[1].angles, OPTS.angleSteps);
+		assert.strictEqual(
+			medium[1].n,
+			Math.ceil(rankedCandidates) * OPTS.angleSteps * grid,
+			"the angle sweep covered other than the hypotheses stage 3 refines",
+		);
 	});
-	// stage 2 on the medium lattice: first every scale pair at angle 0,
-	// then the angle sweep. Both use the same translation grid around each
-	// hypothesis, so the first batch gives its size.
-	const medium = batches.filter((b) => b.sig === signatures.medium);
-	assert.strictEqual(medium.length, 2, "a scale batch and an angle batch");
-	const pairs = OPTS.aspectSteps * 3;
-	const grid = medium[0].n / pairs;
-	assert.strictEqual(medium[1].angles, OPTS.angleSteps);
-	assert.strictEqual(
-		medium[1].n,
-		OPTS.rankedCandidates * OPTS.angleSteps * grid,
-		"the angle sweep covered more than the hypotheses stage 3 refines",
-	);
-});
+}
 
 // The polish as it was, scoring its start in a batch of its own - the
 // reference the folded form has to reproduce.
