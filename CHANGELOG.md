@@ -449,35 +449,30 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   the defect and speck masks come from the frame's reused scratch.
 
 - **The local alignment, the threshold and the tone check cost less,
-  results identical to the bit.** On the pool, the local alignment's
-  resampling counts the grey it writes for Otsu's level and for the tone
-  check's per-cell histograms, so neither runs a pass of its own over
-  the frame; the tone comparison, the check's one pass left, runs in
-  the binarization's dispatch over the same rows, whose workers now
-  claim rows a chunk at a time instead of a fixed share (the slowest
-  share took twice the average); and the tone comparison counts its defect pixels per
-  heat-map block as it sets them, so the tone grid no longer walks the
-  mask again (unless an edge margin cleared some of them); the pool's
-  workers clear the tone and speck masks a chunk of rows at a time as
-  they compare it, where the inspector's thread zeroed both whole; the
-  tone check's per-frame tables and counts come from the frame's reused
-  scratch, so the workers no longer meet ~0.2 MB of new shared memory
-  each a frame and collect for it; and
-  the tone levels and tables are worked out outside the async check,
-  where their loops ran unoptimised in runs of frames. The
-  resampling works out each column's horizontal
-  interpolation once per band of rows sharing a pair of field rows,
-  rather than once per pixel.
-  The tile search reads each tile's golden samples from one gathered
-  array (the four neighbours of the sub-pixel step too), and the frame's
-  outer row and column of tiles stop a losing offset early as the inner
-  tiles do, where they summed every offset in full. Which tiles have the
-  contrast to search depends on the golden alone and is measured once
-  per golden instead of every frame. The pool's workers claim the field's tiles and the resampling's
-  squares a small chunk at a time, as they do the tone check's, instead
-  of a fixed share of rows each: a blank tile costs nothing and a busy
-  one every offset, and the slowest worker's share of the field took 40%
-  longer than the average one's.
+  results identical to the bit.** On the same rig and set the median
+  good frame went from 93 to 79 ms, p95 from 119 to 104 ms and p99 from
+  129 to 114 ms (local align 14.7 to 11.1 ms, threshold 10.6 to 9.2, the
+  tone stage 11.7 to 0.5 with its comparison now in the threshold
+  stage). On the pool, the local alignment's resampling counts the grey
+  it writes for Otsu's level and for the tone check's per-cell
+  histograms, so neither runs a pass of its own; the tone comparison,
+  the check's one pass left, runs in the binarization's dispatch over
+  the same rows, and counts its defect pixels per heat-map block as it
+  sets them, so the tone grid no longer walks the mask again (unless an
+  edge margin cleared some). The binarization's workers, and the local
+  alignment's, claim rows, tiles and squares a small chunk at a time
+  instead of a fixed share each (the slowest fixed share took 40-100%
+  longer than the average). The resampling works out each column's
+  horizontal interpolation once per band of rows sharing a pair of field
+  rows rather than once per pixel; the tile search reads each tile's
+  golden samples from one gathered array, the frame's outer tiles stop a
+  losing offset early as the inner ones do, and which tiles have the
+  contrast to search is measured once per golden. The tone levels and
+  tables are worked out outside the async check, where their loops ran
+  unoptimised in runs of frames; the workers clear the tone and speck
+  masks as they compare; and the check's per-frame tables and counts
+  come from the frame's reused scratch, so the workers no longer meet
+  new shared memory for them every frame.
 
 - **The JS alignment - the frames OpenCV cannot align - is faster, with
   identical results.** The density sweeps run on the worker pool, every

@@ -1,6 +1,43 @@
 # Golden-compare: NodeRed-Test container benchmark
 
-## Current result (October 2026)
+## Local alignment and tone check, second pass (October 2026)
+
+Good frames: **93 → 79 ms median, 119 → 104 ms p95, 129 → 114 ms p99**
+(whole handler; same set, settings and method as below: two rounds of
+two passes over all 162 frames, old and new interleaved, one job on the
+host at a time). `msg.result` and every heat map identical to the bit on
+all 162 frames. Process RSS stays at ~810-860 MB over each run, as
+before.
+
+Good-frame stage medians, before → after: local align 14.7 → 11.1,
+threshold 10.6 → 9.2, tone 11.7 → 0.5 (its comparison now runs inside
+the threshold stage's binarization; its histograms inside the local
+alignment). Diff, overlay and native align are not touched by this pass.
+
+- **Local alignment**: the resampling works out each column's
+  interpolation once per band of rows (CPU 39 → 19 ms a frame on one
+  thread); the tile search reads a gathered golden tile and stops the
+  edge tiles' losing offsets early too (field CPU -16%); tiles and
+  squares are claimed a chunk at a time (the slowest worker's fixed share
+  of the field took 40% longer than the mean); which tiles can localise
+  is kept per golden. Search order was tried (nearest the neighbour's
+  offset first): the bound tightens, but the time did not move.
+- **Fewer dispatches**: the resampling counts Otsu's histogram and the
+  tone check's per-cell histograms as it writes; the tone comparison
+  rides on the binarization (now claimed: its slowest worker took twice
+  the mean, 17 ms at p95); the comparison counts its heat-map blocks as
+  it sets them. From local alignment to the diff, a good frame's pool
+  dispatches went from eight to four.
+- **Tone serial work**: the levels and tables moved out of the async
+  function, where they ran unoptimised in runs of frames (one frame in
+  four at 4-7 ms instead of 0.6); the masks are cleared by the workers;
+  the tables and counts come from the frame's scratch.
+
+Left on a good frame, by stage median: native align ~19-21, diff ~13
+(its slowest worker takes twice the mean; claiming its block rows is the
+obvious next step), overlay ~14, local align ~11, threshold ~9.
+
+## Previous result (October 2026)
 
 Good frames: **193 → 94 ms median, 226 → 119 ms p95, 248 → 130 ms p99**
 (whole handler). The live flow, run after deploying this code, logs the
