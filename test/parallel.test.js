@@ -212,11 +212,11 @@ test("parallel area-average warp is byte-identical to serial", {
 	);
 });
 
-// warpParallel only dispatches when a summed-area table is handed in AND
-// the magnification clears 1.001 - without either it must fall back to
-// the serial implementation. The fallback is not a different resampling;
-// it IS warpGray, so assert that byte for byte.
-test("parallel warp without a summed-area table falls back to serial", {
+// Without a summed-area table warpParallel either falls back to warpGray
+// (magnifying: the area-average path needs the table, and warpGray builds
+// its own) or splits the bilinear path, which reads the source alone.
+// Neither is a different resampling, so assert both byte for byte.
+test("parallel warp without a summed-area table matches serial", {
 	skip: !HAS_SAB,
 }, async () => {
 	const srcW = 900;
@@ -226,7 +226,7 @@ test("parallel warp without a summed-area table falls back to serial", {
 	const outH = 600;
 	for (const [mx, my] of [
 		[2.5, 1.75], // m > 1: serial takes the area-average path, building its own table
-		[0.8, 0.9], // m <= 1: the bilinear path
+		[0.8, 0.9], // m <= 1: the bilinear path, split across the pool
 	]) {
 		const serial = warpGray(
 			src,
@@ -254,7 +254,7 @@ test("parallel warp without a summed-area table falls back to serial", {
 			outW,
 			outH,
 			255,
-			null, // no table: must take the serial fallback, not a copy
+			null, // no table
 			4,
 		);
 		assert.ok(same(serial, par), `the no-table warp diverged at m=(${mx},${my})`);
