@@ -2,17 +2,20 @@
 
 ## Local alignment and tone check, second pass (October 2026)
 
-Good frames: **93 → 79 ms median, 119 → 104 ms p95, 129 → 114 ms p99**
+Good frames: **92 → 74 ms median, 116 → 90 ms p95, 125 → 96 ms p99**
 (whole handler; same set, settings and method as below: two rounds of
 two passes over all 162 frames, old and new interleaved, one job on the
 host at a time). `msg.result` and every heat map identical to the bit on
-all 162 frames. Process RSS stays at ~810-860 MB over each run, as
-before.
+all 162 frames. Process RSS stays within ~615-880 MB over each run, as
+before. The 100 ms target is met at p95 and p99.
 
-Good-frame stage medians, before → after: local align 14.7 → 11.1,
-threshold 10.6 → 9.2, tone 11.7 → 0.5 (its comparison now runs inside
-the threshold stage's binarization; its histograms inside the local
-alignment). Diff, overlay and native align are not touched by this pass.
+Good-frame stage medians, before → after: local align 14.5 → 10.9,
+threshold 10.2 → 9.0, diff 13.8 → 9.7 (p95 21.9 → 14.5), tone 11.4 → 0.5
+(its comparison now runs inside the threshold stage's binarization; its
+histograms inside the local alignment). Native align reads 18 → 21: the
+same with a 300 ms idle gap before every frame (16.5 → 19.9), so it is not
+the previous frame's work overlapping the next; not explained yet.
+Overlay is not touched by this pass.
 
 - **Local alignment**: the resampling works out each column's
   interpolation once per band of rows (CPU 39 → 19 ms a frame on one
@@ -33,9 +36,17 @@ alignment). Diff, overlay and native align are not touched by this pass.
   four at 4-7 ms instead of 0.6); the masks are cleared by the workers;
   the tables and counts come from the frame's scratch.
 
-Left on a good frame, by stage median: native align ~19-21, diff ~13
-(its slowest worker takes twice the mean; claiming its block rows is the
-obvious next step), overlay ~14, local align ~11, threshold ~9.
+- **Diff**: its block rows are claimed four at a time, each chunk
+  dilating its own halo of `printTolerance` rows as each fixed share did
+  (the slowest fixed share took twice the mean); the dilation's rows are
+  walked in runs with no edge test and its column window moves in one
+  pass (-10% CPU, p95 16.5 → 14.8).
+
+Left on a good frame, by stage median: native align ~21, overlay ~13,
+local align ~11, diff ~10, threshold ~9. Riding the diff on the
+binarization's dispatch, as the tone comparison does, would save a
+dispatch (~1 ms) at the cost of each chunk thresholding its halo rows
+from the grey; not done.
 
 ## Previous result (October 2026)
 

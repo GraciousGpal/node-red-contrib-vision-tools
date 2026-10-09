@@ -448,12 +448,12 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   golden's grey-to-level fractions are worked out once per golden; and
   the defect and speck masks come from the frame's reused scratch.
 
-- **The local alignment, the threshold and the tone check cost less,
-  results identical to the bit.** On the same rig and set the median
-  good frame went from 93 to 79 ms, p95 from 119 to 104 ms and p99 from
-  129 to 114 ms (local align 14.7 to 11.1 ms, threshold 10.6 to 9.2, the
-  tone stage 11.7 to 0.5 with its comparison now in the threshold
-  stage). On the pool, the local alignment's resampling counts the grey
+- **The local alignment, the threshold, the diff and the tone check
+  cost less, results identical to the bit.** On the same rig and set the
+  median good frame went from 92 to 74 ms, p95 from 116 to 90 ms and p99
+  from 125 to 96 ms (local align 14.5 to 10.9 ms, threshold 10.2 to 9.0,
+  diff 13.8 to 9.7 (p95 21.9 to 14.5), the tone stage 11.4 to 0.5 with
+  its comparison now in the threshold stage). On the pool, the local alignment's resampling counts the grey
   it writes for Otsu's level and for the tone check's per-cell
   histograms, so neither runs a pass of its own; the tone comparison,
   the check's one pass left, runs in the binarization's dispatch over
