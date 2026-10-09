@@ -13,6 +13,7 @@ const test = require("node:test");
 const assert = require("node:assert/strict");
 const sharp = require("sharp");
 const { prepareGolden, compareFrame } = require("../lib/compare.js");
+const nativeSeed = require("../lib/nativeSeed.js");
 const { HAS_SAB, takeShared, giveShared, sharedAllocated, sparedBytes, SPARE_MAX_BYTES } = require("../lib/shared.js");
 const { shutdown, poolSize } = require("../lib/pool.js");
 
@@ -153,6 +154,45 @@ test("a frame hands its scratch back, and a dirty spare changes nothing", { skip
 		for (let k = 0; k < frames.length; k++) {
 			assert.strictEqual(strip(await compareFrame(frames[k], golden, CFG)), clean[k], `frame ${k}, round ${round}`);
 		}
+	}
+});
+
+test("a frame that falls back from OpenCV hands back the attempt's scratch too", { skip: NO_POOL }, async () => {
+	// an engine whose canvas disagrees with the golden everywhere, so an
+	// unpinned frame always falls back to the JS search
+	nativeSeed._setEngine({
+		async imageAlign(reference) {
+			const data = Buffer.alloc(reference.data.length);
+			for (let i = 0; i < data.length; i++) data[i] = 255 - reference.data[i];
+			return {
+				success: true,
+				image: { data, width: reference.width, height: reference.height, channels: 1 },
+				transformMatrix: { matrix2x3: [1, 0, 0, 0, 1, 0] },
+			};
+		},
+	});
+	try {
+		const cfg = { ...CFG, nativeFastAlign: true, thumbnailWidth: 120 };
+		const golden = await prepareGolden(await sharp(labelSvg()).png().toBuffer(), cfg);
+		const frame = await sharp(labelSvg('<rect x="300" y="500" width="90" height="60" fill="#000"/>')).png().toBuffer();
+		// shared bytes allocated over a few frames, once the spares settle
+		const allocated = async (c) => {
+			for (let i = 0; i < 2; i++) await compareFrame(frame, golden, c);
+			const before = sharedAllocated();
+			for (let i = 0; i < 3; i++) await compareFrame(frame, golden, c);
+			return sharedAllocated() - before;
+		};
+		assert.match((await compareFrame(frame, golden, cfg)).transform.nativeFallback, /OpenCV score/);
+		const fallback = await allocated(cfg);
+		const plain = await allocated({ ...cfg, nativeFastAlign: false });
+		// the attempt's masks, lost, were about four golden-sized buffers a
+		// frame on top of what the JS run alone allocates
+		assert.ok(
+			fallback - plain < golden.width * golden.height,
+			`a fallback frame allocated ${fallback - plain} bytes more than a JS one over three frames`,
+		);
+	} finally {
+		nativeSeed._resetEngine();
 	}
 });
 
