@@ -2,33 +2,39 @@
 
 ## Current result (October 2026)
 
-Good frames: **164 → 74 ms median, 190 → 99 ms p95, 210 → ~109 ms p99**
-(whole handler). `msg.result` and every heat map are identical to the
-bit on all 162 frames, pinned, and on 20-frame samples with no trained
-transform, with and without OpenCV.
+Good frames: **193 → 94 ms median, 226 → 119 ms p95, 248 → 130 ms p99**
+(whole handler). The live flow, run after deploying this code, logs the
+same: 95 ms median, 123 ms p95 over the 148 good frames. `msg.result`
+and every heat map are identical to the bit on all 162 frames, pinned,
+and on 20-frame samples with no trained transform, with and without
+OpenCV. The 100 ms target is met at the median, not yet at p95.
 
 Same container, golden (1475×2125, rendered from the PDF as below), 148
 good + 14 bad camera frames, the live flow's settings (workingSize 2125,
 trained transform pinned, nuisance map, tone and speck checks on, preview
-on, overlay heat map raw, named golden), 12 workers. Each run is the full
-set twice; old and new snapshots alternate, two rounds each, one job on
-the host at a time. The harness is `bench/golden-container-bench.js`
-extended with the flow's rectify step, profile directory and admin-route
-stubs.
+on, overlay heat map raw, named golden), 12 workers. Each run is two
+passes over the whole set; old and new snapshots alternate, two rounds
+each, one job on the host at a time.
 
-| Good frames | before | after |
+**Measure each frame once per pass.** An earlier version of this harness
+sent every frame twice in a row. The native addon caches its last frame,
+so the repeat aligned in ~4 ms instead of ~18, and half the samples were
+flattered: that run reported 74 ms median / 99 ms p95 for this same code.
+`--iterations` now means passes over the set.
+
+| | before | after |
 | --- | ---: | ---: |
-| median | 164.3 ms | 74 ms |
-| p95 | 190.4 ms | 99 ms |
-| p99 | 209.8 ms | 107–111 ms |
-| bad frames, median | 334 ms | 255 ms |
+| good, median | 192.9 ms | 94.0 ms |
+| good, p95 | 226.1 ms | 118.8 ms |
+| good, p99 | 248.0 ms | 130.0 ms |
+| bad, median | 315.5 ms | 274.3 ms |
 
-Good-frame stage medians, before → after: native align 23 → 11, threshold
-18 → 4, diff 26 → 10, heat-map grids 12 → 2, tone 33 → 9, handler
-plumbing after the inspection 23 → 3; local align 16 → 14; overlay 8 → 13
+Good-frame stage medians, before → after: native align 31 → 18, threshold
+22 → 11, diff 28 → 14, heat-map grids 12 → 2, tone 45 → 12, handler
+plumbing after the inspection 21 → 3; local align 17 → 15; overlay 8 → 14
 (it now includes the preview thumbnail, which used to be drawn on the
-main thread). A 972-frame soak: 65 / 88 / 97 ms p50 / p95 / p99, process
-RSS flat at ~820 MB (~740 MB before).
+main thread). A 972-frame soak held process RSS flat at ~820 MB (~740 MB
+before).
 
 What moved it, largest first:
 
@@ -48,12 +54,13 @@ What moved it, largest first:
   wants it.
 - **The JS alignment fallback**: pooled density sweeps, the stage-2 angle
   sweep only for the hypotheses stage 3 reads, the polish split by rows.
-  Pinned JS-route frames 480 → 391 ms median; unpinned search 2.3 → 0.57 s.
+  Pinned JS-route frames 486 → 328 ms median (p95 779 → 578); unpinned
+  search 2.3 → 0.57 s.
 
 Remaining tail: the 8 bad frames that fall back to the JS search are all
 labels missing or nearly empty (2–12% of the golden's ink covered, every
 natively aligned frame ≥ 83%). An ink-presence check before the search
-would end them at ~65 ms but changes their result, so it is not in.
+would end them at an estimated ~65 ms but changes their result, so it is not in.
 
 Native SIMD kernels were measured as the next step (threshold, dilate and
 warp 2–7× faster single-threaded in C++) and are not needed for this

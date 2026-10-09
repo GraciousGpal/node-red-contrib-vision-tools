@@ -408,9 +408,10 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 - **`golden-compare` runs a good frame in about half the time.** On the
   rig's 1475x2125 golden at 12 workers the median good frame went from
-  164 to 74 ms and its p95 from 190 to 99 ms (whole handler, all 162
-  sample frames twice, old and new interleaved on an idle host), with
-  `msg.result` and `msg.heatmap` unchanged to the bit. A frame's full-size masks are reused from
+  193 to 94 ms and its p95 from 226 to 119 ms (whole handler, two passes
+  over all 162 sample frames, old and new interleaved on an idle host;
+  the live flow logs 95 ms median), with `msg.result` and `msg.heatmap`
+  unchanged to the bit. A frame's full-size masks are reused from
   the frame before instead of allocated anew: the pool workers collect
   by the volume of shared memory they have not seen, and new masks every
   frame had one of them collecting inside nearly every frame (the spares
@@ -418,8 +419,8 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   worker starts its collection interval at its own point of it: every
   worker is shown the same new buffers (the rectified frame, mostly), so
   all twelve collected inside the same frame, one frame in eight, which
-  took 165 ms; now about one collects in a frame, and the good frame's
-  p95 is 99 ms where it was 167, for ~80 MB more held. The
+  took ~160 ms; now about one collects in a frame, for ~80 MB more
+  held. The
   thresholding counts (Otsu's histogram, the golden's ink and its
   coverage, the native path's disagreement) are taken by the pool as it
   binarizes; the print and background checks run as one pass over the
@@ -457,8 +458,8 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   table inline; the final warp splits across the pool when it is not
   magnifying; and the frame mask the search reads is cut on the pool
   without the ambiguity band nothing read. On the container rig, 12
-  workers: the eight pinned JS-route frames went from 480 to 391ms median
-  wall (search 185 → 149ms, warp 24 → 14ms); with no trained transform,
+  workers: the eight pinned JS-route frames went from 486 to 328ms median
+  wall (search 174 → 141ms); with no trained transform,
   search went from 2.3s to 0.57s median. `msg.result` is byte-identical on
   all 162 bench frames, pinned and unpinned.
 
