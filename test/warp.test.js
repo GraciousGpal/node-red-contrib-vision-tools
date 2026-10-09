@@ -175,3 +175,97 @@ test("a fractional magnification matches a direct fractional-box reference", () 
 		}
 	}
 });
+
+// The area-average loop reads the table through an inlined copy of what
+// used to be a helper. The helper and the loop that called it are kept
+// here verbatim as the reference, and the inlined form has to agree with
+// them on every byte - rotated, at fractional magnifications, and with
+// footprints hanging off each edge of the frame, where a corner reads 0
+// or clamps to the table's far side.
+function helperSatAt(table, x, y) {
+	const { integral, stride, width, height } = table;
+	if (x <= 0 || y <= 0) return 0;
+	if (x >= width) x = width;
+	if (y >= height) y = height;
+	const ix = x | 0;
+	const iy = y | 0;
+	const fx = x - ix;
+	const fy = y - iy;
+	const x1 = ix + 1 > width ? width : ix + 1;
+	const y1 = iy + 1 > height ? height : iy + 1;
+	const p00 = integral[iy * stride + ix];
+	const p10 = integral[iy * stride + x1];
+	const p01 = integral[y1 * stride + ix];
+	const p11 = integral[y1 * stride + x1];
+	return (
+		p00 + (p10 - p00) * fx + (p01 - p00) * fy + (p00 - p10 - p01 + p11) * fx * fy
+	);
+}
+
+function helperAreaWarp(sat, srcW, srcH, mx, my, theta, ox, oy, outW, outH) {
+	const out = new Uint8Array(outW * outH).fill(255);
+	const cos = Math.cos(theta);
+	const sin = Math.sin(theta);
+	const xFromGx = cos * mx;
+	const yFromGx = sin * mx;
+	const xFromGy = -sin * my;
+	const yFromGy = cos * my;
+	const halfX = mx / 2;
+	const halfY = my / 2;
+	for (let y = 0; y < outH; y++) {
+		const baseX = ox + xFromGy * y;
+		const baseY = oy + yFromGy * y;
+		for (let x = 0; x < outW; x++) {
+			const tx = baseX + xFromGx * x;
+			const ty = baseY + yFromGx * x;
+			let x0 = tx + 0.5 - halfX;
+			let y0 = ty + 0.5 - halfY;
+			let x1 = tx + 0.5 + halfX;
+			let y1 = ty + 0.5 + halfY;
+			if (x1 <= 0 || y1 <= 0 || x0 >= srcW || y0 >= srcH) continue;
+			if (x0 < 0) x0 = 0;
+			if (y0 < 0) y0 = 0;
+			if (x1 > srcW) x1 = srcW;
+			if (y1 > srcH) y1 = srcH;
+			const area = (x1 - x0) * (y1 - y0);
+			if (area <= 0) continue;
+			const sum =
+				helperSatAt(sat, x1, y1) -
+				helperSatAt(sat, x0, y1) -
+				helperSatAt(sat, x1, y0) +
+				helperSatAt(sat, x0, y0);
+			out[y * outW + x] = Math.round(sum / area);
+		}
+	}
+	return out;
+}
+
+test("the inlined corner reads match the helper they replaced byte for byte", () => {
+	const srcW = 311;
+	const srcH = 257;
+	const src = new Uint8Array(srcW * srcH);
+	let seed = 99;
+	for (let i = 0; i < src.length; i++) {
+		seed = (seed * 1103515245 + 12345) & 0x7fffffff;
+		src[i] = (seed >> 16) & 0xff;
+	}
+	const table = buildGrayTable(src, srcW, srcH);
+	const outW = 97;
+	const outH = 83;
+	const cases = [
+		// [mx, my, theta, ox, oy]
+		[3.13, 2.87, 0.012, 0.3, -0.7],
+		[1.5, 1.5, 0, 0, 0],
+		[3.96, 3.97, -0.035, -40.25, -30.5], // off the top and left
+		[3.5, 3.25, 0.02, 60.6, 45.4], // off the bottom and right
+		[2.001, 1.0, 0.3, 150.1, -80.9], // steep rotation, one axis at 1
+		[7.77, 6.1, -0.2, -300, 400], // mostly outside the frame
+	];
+	for (const [mx, my, theta, ox, oy] of cases) {
+		const expected = helperAreaWarp(table, srcW, srcH, mx, my, theta, ox, oy, outW, outH);
+		const got = warpGray(src, srcW, srcH, mx, my, theta, ox, oy, outW, outH, 255, table);
+		let differ = 0;
+		for (let i = 0; i < got.length; i++) if (got[i] !== expected[i]) differ++;
+		assert.strictEqual(differ, 0, `m=(${mx},${my}) theta=${theta}: ${differ} bytes differ`);
+	}
+});
