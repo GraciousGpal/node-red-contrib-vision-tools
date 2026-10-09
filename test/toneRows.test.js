@@ -233,12 +233,15 @@ test("the comparison's block counts are the defect mask's", async () => {
 	assert.strictEqual((await toneDefect(golden, frame, { ...cfg, blockSize: 7.5, workers: 1 }, false)).blocks, null);
 });
 
-test("on the pool the masks come from the frame's scratch, reused buffers and all", { skip: !HAS_SAB }, async () => {
-	const cfg = { toneMargin: 3, toneThreshold: 0.3, speckThreshold: 0.3, workers: 5 };
+test("on the pool the masks and tables come from the frame's scratch, reused buffers and all", { skip: !HAS_SAB }, async () => {
+	const cfg = { toneMargin: 3, toneThreshold: 0.3, speckThreshold: 0.18, blockSize: 8, workers: 5 };
 	let want = null;
-	// the scratch hands back the same two buffers every frame, as
-	// takeShared does once a frame has given them back
-	const { takeShared, giveShared } = require("../lib/shared.js");
+	// the scratch hands back the same buffers every frame, as takeShared
+	// does once a frame has given them back - so after the first frame the
+	// check allocates next to no shared memory the workers have not seen
+	const { takeShared, giveShared, sharedAllocated, toShared } = require("../lib/shared.js");
+	// the aligned grey compareFrame hands it is shared already
+	const sharedFrame = toShared(frame);
 	for (let round = 0; round < 3; round++) {
 		const taken = [];
 		const take = (Ctor, length, zero) => {
@@ -246,10 +249,13 @@ test("on the pool the masks come from the frame's scratch, reused buffers and al
 			taken.push(a);
 			return a;
 		};
-		const got = await toneDefect(golden, frame, cfg, false, take);
+		const before = sharedAllocated();
+		const got = await toneDefect(golden, sharedFrame, cfg, false, take);
+		const fresh = sharedAllocated() - before;
 		// after the first call, which builds the golden's classes for this margin
 		want = want || reference(golden, frame, cfg, false);
-		assert.deepStrictEqual(taken, [got.defect, got.speck]);
+		assert.ok(taken.includes(got.defect) && taken.includes(got.speck) && taken.includes(got.blocks), "masks and blocks taken");
+		if (round > 0) assert.ok(fresh < 1024, `round ${round}: ${fresh} fresh shared bytes`);
 		same(got.defect, want.defect, `round ${round} defect`);
 		same(got.speck, want.speck, `round ${round} speck`);
 		same(got.seeds, want.seeds, `round ${round} seeds`);
@@ -257,6 +263,8 @@ test("on the pool the masks come from the frame's scratch, reused buffers and al
 		// what a frame with other defects would: set pixels everywhere
 		for (const i of got.seeds) got.speck[i] = 2;
 		for (let i = 0; i < got.defect.length; i += 7) got.defect[i] = got.speck[i] = 1;
+		// and the tables and counts left as this frame wrote them, or worse
+		for (const a of taken) if (a !== got.defect && a !== got.speck) a.fill(7);
 		for (const a of taken) giveShared(a);
 	}
 });
