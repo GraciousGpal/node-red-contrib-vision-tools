@@ -642,6 +642,23 @@ test("the tone and speck checks give the same answer over the pool and on one th
 	assert.ok(Buffer.from(serial.speckBlemish.heatmap.data).equals(Buffer.from(pooled.speckBlemish.heatmap.data)));
 });
 
+// The print and background checks' one pass over the pool indexes rows
+// by the dilation radius; a library caller's fractional printTolerance
+// emptied its dilation and failed every print pixel.
+test("a fractional print tolerance gives the same answer over the pool and on one thread", async () => {
+	const goldenBuf = await png(labelSvg(1200, 1600));
+	const golden = await prepareGolden(goldenBuf, cfg({ heatmapFormat: "raw" }));
+	const frame = await png(labelSvg(1200, 1600, { missingBar: true, extraBlob: { x: 650, y: 1250, w: 40, h: 30 } }));
+	const settings = { printTolerance: 2.5, heatmapFormat: "raw", outputPrintHeatmap: true, outputBackgroundHeatmap: true };
+	const serial = await compareFrame(frame, golden, cfg({ ...settings, workers: 1 }));
+	const pooled = await compareFrame(frame, golden, cfg({ ...settings, workers: 0 }));
+	assert.strictEqual(pooled.printBlemish.defectRatio, serial.printBlemish.defectRatio);
+	// compared as text: a diff of two whole results is slow to print
+	const strip = (r) => JSON.stringify({ ...r, timings: null, heatmap: null, thumbnail: null });
+	assert.ok(strip(pooled) === strip(serial), "the pooled result differs from the one-thread one");
+	assert.ok(serial.printBlemish.defectRatio < 0.05, `print ${serial.printBlemish.defectRatio}`);
+});
+
 test("one spatter fails the speck check on its size, and a clean frame has no specks", async () => {
 	const goldenBuf = await png(labelSvg(1200, 1600));
 	const golden = await prepareGolden(goldenBuf, cfg());
