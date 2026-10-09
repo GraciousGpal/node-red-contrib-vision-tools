@@ -231,6 +231,28 @@ test("a named key that hides a different-sized render still re-prepares", async 
 	);
 });
 
+test("the heat-map format re-prepares the golden only when its stages are baked in it", async () => {
+	// the format and quality reach the prepared golden only through the
+	// debug-stage images it bakes; without them a change is a re-prepare
+	// - a whole golden threshold and dilation - for nothing
+	const frame = await png(labelSvg(600, 900));
+	const golden = await png(labelSvg(600, 900));
+	const { node, run } = makeNode({ ...CFG });
+	const key = async (extra) => {
+		await run({ payload: frame, golden, goldenKey: "fmt", ...extra });
+		return node.goldenCache.key;
+	};
+	const plain = await key({});
+	assert.strictEqual(await key({ heatmapQuality: 40 }), plain, "quality, no stages");
+	assert.strictEqual(await key({ heatmapFormat: "png" }), plain, "format, no stages");
+	const stages = await key({ debugStages: true });
+	assert.notStrictEqual(stages, plain, "stages baked in");
+	assert.notStrictEqual(await key({ debugStages: true, heatmapQuality: 40 }), stages, "a JPEG's quality");
+	const png1 = await key({ debugStages: true, heatmapFormat: "png" });
+	assert.notStrictEqual(png1, stages, "the format");
+	assert.strictEqual(await key({ debugStages: true, heatmapFormat: "png", heatmapQuality: 40 }), png1, "a PNG has no quality");
+});
+
 test("a golden deleted under a named key is still an error", async () => {
 	// the stat is what preserves this: the name replaces the *fingerprint*,
 	// not the existence check

@@ -884,7 +884,7 @@ overlay and zoom you were on, and **Pause** holds again. The thumbnail
 under the node keeps following meanwhile.
 
 The node keeps one inspection per golden-compare node in memory for
-this - the thumbnail's picture, and every stage at working size while a
+this - the thumbnail, and every stage at working size while a
 viewer is open - and serves it over
 `GET /golden-compare/last/:id` (the verdict, timings and stage list) and
 `GET /golden-compare/last/:id/stage/:key` (one image, in the format the
@@ -892,8 +892,10 @@ pipeline rendered it; `raw` is encoded on the way out). It survives a
 redeploy, not a restart, and a deleted node's goes with it. The viewer
 fetches each image as you step to it rather than all at once, so opening
 it costs one image, not fifteen. With no viewer open the preview renders
-only its thumbnail's picture, about 17 ms a frame on the rig (199 ms
-mean against 182 with the preview off), so it can stay on in production; the stages and the per-check heat maps are
+only its thumbnail - the aligned frame shrunk in the inspector, with
+each check's region boxes, so the full-size picture is drawn only when
+the message asks for `outputHeatmap` or a viewer is open - so it can
+stay on in production; the stages and the per-check heat maps are
 rendered while a viewer is open on the node (it says so with
 `POST /golden-compare/last/:id/watch` every few seconds and lets go on
 close), and the frame it opens on is rendered in full then, from the
@@ -1724,7 +1726,7 @@ nothing is found at all, one message with `msg.text = null`,
 
 ## Tests
 
-`npm test` (Node 18+, no test framework needed — `node --test`), 646
+`npm test` (Node 18+, no test framework needed — `node --test`), 678
 tests. Fixtures are generated with `sharp` rather than read from
 `data/sample_images`, so the suite runs anywhere; the real QC photos are
 gitignored. Coverage spans the lib pipeline (`compare`, `align`, `warp`,

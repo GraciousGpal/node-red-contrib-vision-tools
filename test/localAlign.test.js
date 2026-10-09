@@ -131,3 +131,66 @@ test("offsets never exceed the cap", () => {
 		);
 	}
 });
+
+// applyRows as it was before its per-column terms were hoisted, the
+// reference: the resampled frame must not move by a pixel
+function applyRowsPerPixel(out, src, width, height, { fx, fy, gridW, gridH }, tile, yLo, yHi) {
+	const sample = (x, y) => src[Math.min(height - 1, Math.max(0, y)) * width + Math.min(width - 1, Math.max(0, x))];
+	for (let y = yLo; y < yHi; y++) {
+		let gyf = y / tile - 0.5;
+		if (gyf < 0) gyf = 0;
+		else if (gyf > gridH - 1) gyf = gridH - 1;
+		const gy0 = Math.floor(gyf);
+		const gy1 = gy0 + 1 < gridH ? gy0 + 1 : gy0;
+		const wy = gyf - gy0;
+		for (let x = 0; x < width; x++) {
+			let gxf = x / tile - 0.5;
+			if (gxf < 0) gxf = 0;
+			else if (gxf > gridW - 1) gxf = gridW - 1;
+			const gx0 = Math.floor(gxf);
+			const gx1 = gx0 + 1 < gridW ? gx0 + 1 : gx0;
+			const wx = gxf - gx0;
+			const i00 = gy0 * gridW + gx0;
+			const i01 = gy0 * gridW + gx1;
+			const i10 = gy1 * gridW + gx0;
+			const i11 = gy1 * gridW + gx1;
+			const top = fx[i00] + (fx[i01] - fx[i00]) * wx;
+			const bot = fx[i10] + (fx[i11] - fx[i10]) * wx;
+			const dx = top + (bot - top) * wy;
+			const topY = fy[i00] + (fy[i01] - fy[i00]) * wx;
+			const botY = fy[i10] + (fy[i11] - fy[i10]) * wx;
+			const dy = topY + (botY - topY) * wy;
+			out[y * width + x] = sample(x + Math.round(dx), y + Math.round(dy));
+		}
+	}
+}
+
+test("applyRows resamples exactly as the per-pixel form did", () => {
+	const { applyRows } = require("../lib/localAlign.js");
+	let seed = 7;
+	const rnd = () => ((seed = (seed * 1103515245 + 12345) & 0x7fffffff) / 0x7fffffff);
+	for (const [width, height, tile] of [[1, 1, 8], [37, 23, 8], [200, 150, 96], [301, 257, 17]]) {
+		const src = Uint8Array.from({ length: width * height }, () => Math.floor(rnd() * 256));
+		const gridW = Math.max(1, Math.ceil(width / tile));
+		const gridH = Math.max(1, Math.ceil(height / tile));
+		// sub-pixel offsets, halves that sit on Math.round's tie, and
+		// offsets that push samples off every edge
+		const field = {
+			fx: Float32Array.from({ length: gridW * gridH }, (_, i) => (i % 5 === 0 ? 0.5 : (rnd() - 0.5) * 30)),
+			fy: Float32Array.from({ length: gridW * gridH }, (_, i) => (i % 7 === 0 ? -2.5 : (rnd() - 0.5) * 30)),
+			gridW,
+			gridH,
+		};
+		const expected = new Uint8Array(width * height);
+		applyRowsPerPixel(expected, src, width, height, field, tile, 0, height);
+		const whole = new Uint8Array(width * height);
+		applyRows(whole, src, width, height, field, tile, 0, height);
+		assert.deepStrictEqual(whole, expected, `${width}x${height} tile ${tile}`);
+		// and over split ranges, as the pool runs it
+		const split = new Uint8Array(width * height);
+		const mid = height >> 1;
+		applyRows(split, src, width, height, field, tile, 0, mid);
+		applyRows(split, src, width, height, field, tile, mid, height);
+		assert.deepStrictEqual(split, expected, `${width}x${height} tile ${tile}, split`);
+	}
+});

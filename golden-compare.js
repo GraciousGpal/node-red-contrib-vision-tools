@@ -984,19 +984,19 @@ module.exports = (RED) => {
 				for (const [key, spec] of Object.entries(SETTINGS)) {
 					cfg[key] = spec.fixed ? node[key] : readSetting(spec, msg[key], node[key]);
 				}
-				// The preview renders this frame's stages and per-check heat maps
-				// only while a viewer is attached (or the message asked for
-				// them), and the combined heat map every frame for the
-				// thumbnail; the message carries only what was asked for.
-				// debugStages is in the golden cache key below, so it is settled
-				// here.
+				// The preview renders this frame's stages and heat maps only
+				// while a viewer is attached (or the message asked for them);
+				// its thumbnail comes small from the inspector, so the full-size
+				// picture is drawn only when someone looks at it. The message
+				// carries only what was asked for. debugStages is in the golden
+				// cache key below, so it is settled here.
 				const wantStages = cfg.debugStages;
 				const wanted = Object.fromEntries(HEATMAPS.map(([key, flag]) => [key, cfg[flag]]));
 				const attached = cfg.previewEnabled && viewerAttached(node.id);
 				if (cfg.previewEnabled) {
 					cfg.debugStages = true;
 					cfg.frameStages = wantStages || attached;
-					cfg.outputHeatmap = true;
+					cfg.thumbnailWidth = cfg.previewWidth;
 					if (attached) for (const [, flag] of HEATMAPS) cfg[flag] = true;
 				}
 				cfg.mmPerPixelNative = scaleOk ? scale.mmPerPixelNative : null;
@@ -1054,10 +1054,11 @@ module.exports = (RED) => {
 							cfg.inkMargin,
 							cfg.backgroundTolerance,
 							// whether the golden's debug-stage images were baked in,
-							// and in which format
-							cfg.debugStages,
-							cfg.heatmapFormat,
-							cfg.heatmapQuality,
+							// and in which format - which only matters when they were,
+							// and the quality only to a JPEG (encodeImage)
+							cfg.debugStages
+								? `stages:${cfg.heatmapFormat}:${cfg.heatmapFormat === "png" || cfg.heatmapFormat === "raw" ? "" : cfg.heatmapQuality}`
+								: "",
 							cfg.mmPerPixelNative,
 							// the calibration photo's size, which the mm/px conversion is
 							// expressed against
@@ -1971,13 +1972,17 @@ module.exports = (RED) => {
 		};
 		lastInspections.set(node.id, entry);
 		if (!RED.comms || typeof RED.comms.publish !== "function") return;
-		// the thumbnail: the one picture, which the preview always renders
-		const source = images.heatmap || images.targetGrayAligned;
-		if (!source) return;
-		const thumb = await imagePipeline(source)
-			.resize({ width: cfg.previewWidth, withoutEnlargement: true })
-			.jpeg({ quality: 70 })
-			.toBuffer();
+		// the thumbnail, drawn small by the inspector; else (a result from
+		// before it did) from the one picture
+		let thumb = result.thumbnail ? Buffer.from(result.thumbnail) : null;
+		if (!thumb) {
+			const source = images.heatmap || images.targetGrayAligned;
+			if (!source) return;
+			thumb = await imagePipeline(source)
+				.resize({ width: cfg.previewWidth, withoutEnlargement: true })
+				.jpeg({ quality: 70 })
+				.toBuffer();
+		}
 		node.previewShown = true;
 		RED.comms.publish("golden-compare-preview", {
 			id: node.id,
