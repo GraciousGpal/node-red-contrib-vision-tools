@@ -13,7 +13,7 @@
 
 const test = require("node:test");
 const assert = require("node:assert");
-const { toneDefect, toneCounts } = require("../lib/compare.js");
+const { toneDefect, toneCounts, tonePrepare, toneRide, toneTally, toneResult } = require("../lib/compare.js");
 const { toneHistCells, toneCompareRows } = require("../lib/toneRows.js");
 const { shutdown } = require("../lib/pool.js");
 const { HAS_SAB } = require("../lib/shared.js");
@@ -337,6 +337,40 @@ test("the local alignment's resampling counts what the histogram passes count", 
 	same(got.defect, ref.defect, "defect");
 	same(got.seeds, ref.seeds, "seeds");
 	same(got.map, ref.map, "map");
+});
+
+// The comparison rides on the binarization's dispatch in compareFrame: the
+// binarization must be what it is alone, and the tone check what the
+// reference says, from masks the frame before left dirty.
+test("the tone comparison riding on the binarization changes neither", { skip: !HAS_SAB }, async () => {
+	const { binarizeParallel } = require("../lib/parallel.js");
+	const { takeShared } = require("../lib/shared.js");
+	const cfg = { toneMargin: 3, toneThreshold: 0.3, speckThreshold: 0.18, blockSize: 8, workers: 5 };
+	const level = 120;
+	const margin = 9;
+	const alone = await binarizeParallel(frame, W, H, level, margin, 5, golden.fg);
+	for (const wantMap of [false, true]) {
+		const take = (Ctor, length, zero) => {
+			const a = takeShared(Ctor, length, zero);
+			if (!zero) a.fill(1);
+			return a;
+		};
+		const prep = await tonePrepare(golden, frame, cfg, wantMap, take);
+		assert.ok(prep.enabled && prep.pooled, "precondition: the comparison is pooled");
+		const rode = await binarizeParallel(frame, W, H, level, margin, 5, golden.fg, undefined, toneRide(prep));
+		assert.ok(rode.toneRan, "the comparison rode along");
+		same(rode.fg, alone.fg, "fg");
+		same(rode.ambiguous, alone.ambiguous, "ambiguous");
+		assert.deepStrictEqual(rode.counts, alone.counts, "counts");
+		const got = toneResult(prep, toneTally(prep));
+		const want = reference(golden, frame, cfg, wantMap);
+		assert.ok(want.count > 0 && want.seeds.length > 0, "precondition: defects and specks");
+		assert.strictEqual(got.count, want.count, "count");
+		same(got.defect, want.defect, "defect");
+		same(got.speck, want.speck, "speck");
+		same(got.seeds, want.seeds, "seeds");
+		same(got.map, want.map, "map");
+	}
 });
 
 test("a speck sharing the defect's tables is the defect mask, counted per row", () => {

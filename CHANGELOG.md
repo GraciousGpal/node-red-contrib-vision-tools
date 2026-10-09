@@ -452,7 +452,10 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   results identical to the bit.** On the pool, the local alignment's
   resampling counts the grey it writes for Otsu's level and for the tone
   check's per-cell histograms, so neither runs a pass of its own over
-  the frame, and the tone comparison counts its defect pixels per
+  the frame; the tone comparison, the check's one pass left, runs in
+  the binarization's dispatch over the same rows, whose workers now
+  claim rows a chunk at a time instead of a fixed share (the slowest
+  share took twice the average); and the tone comparison counts its defect pixels per
   heat-map block as it sets them, so the tone grid no longer walks the
   mask again (unless an edge margin cleared some of them); the pool's
   workers clear the tone and speck masks a chunk of rows at a time as
