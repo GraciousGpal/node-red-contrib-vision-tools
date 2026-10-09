@@ -449,13 +449,14 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   the defect and speck masks come from the frame's reused scratch.
 
 - **The local alignment, the threshold, the diff and the tone check
-  cost less, results identical to the bit.** On the same rig and set the
-  median good frame went from 92 to 74 ms, p95 from 116 to 90 ms and p99
-  from 125 to 96 ms (local align 14.5 to 10.9 ms, threshold 10.2 to 9.0,
-  diff 13.8 to 9.7 (p95 21.9 to 14.5), the tone stage 11.4 to 0.5 with
-  its comparison now in the threshold stage). On the pool, the local alignment's resampling counts the grey
-  it writes for Otsu's level and for the tone check's per-cell
-  histograms, so neither runs a pass of its own; the tone comparison,
+  cost less, results identical to the bit.** On the same rig and set,
+  measured without the overlay changes below, the median good frame went
+  from 92 to 74 ms, p95 from 116 to 90 ms and p99 from 125 to 96 ms
+  (local align 14.5 to 10.9 ms, threshold 10.2 to 9.0, diff 13.8 to 9.7
+  (p95 21.9 to 14.5), the tone stage 11.4 to 0.5 with its comparison now
+  in the threshold stage). On the pool, the local alignment's resampling
+  counts the grey it writes for Otsu's level and for the tone check's
+  per-cell histograms, so neither runs a pass of its own; the tone comparison,
   the check's one pass left, runs in the binarization's dispatch over
   the same rows, and counts its defect pixels per heat-map block as it
   sets them, so the tone grid no longer walks the mask again (unless an
@@ -476,6 +477,25 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   masks as they compare; and the check's per-frame tables and counts
   come from the frame's reused scratch, so the workers no longer meet
   new shared memory for them every frame.
+
+- **The preview's thumbnail encodes while the overlay is composed.** The
+  inspector asks sharp for the thumbnail's JPEG before it composes the
+  full-size overlay, not after, so the encode runs on sharp's threads
+  during the compose instead of waiting behind it. The bytes are
+  unchanged.
+
+- **The overlay's canvas is built while the checks run.** The full-size
+  overlay starts from the aligned grey as RGB, a new 9.4 MB buffer every
+  frame (it leaves with the message) whose fresh pages were most of the
+  overlay stage. It is now built on the inspector thread a slice at a
+  time from the moment the grey is final, while that thread would
+  otherwise wait on the pool's threshold, diff and tone passes, and the
+  overlay stage only draws the regions on it. With the thumbnail change
+  above, and measured without the alignment, threshold, diff and tone
+  changes, the overlay stage on the rig went from 13.4 to 4.9 ms median on a good frame and the
+  good frame from 92 to 83 ms median, p95 115 to 106 ms (12 workers, two
+  passes over the 162 sample frames, interleaved twice); `msg.heatmap`
+  is unchanged to the bit.
 
 - **The JS alignment - the frames OpenCV cannot align - is faster, with
   identical results.** The density sweeps run on the worker pool, every
