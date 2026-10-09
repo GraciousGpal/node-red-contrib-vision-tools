@@ -242,6 +242,31 @@ test("the field is the exhaustive search's, to the bit, edge tiles and ties incl
 	}
 });
 
+// Which tiles have the contrast to search is measured once per golden and
+// kept: the field must be the one measured afresh, and a second tile size
+// or contrast floor on the same golden must not be served the first's.
+test("the searchable tiles kept per golden give the field measured afresh", () => {
+	const { refineLocally, searchableTiles } = require("../lib/localAlign.js");
+	const golden = texture(W, H);
+	// a blank band, so the floor decides which tiles are searched
+	golden.fill(200, 0, W * 60);
+	for (let i = W * 300; i < W * H; i++) golden[i] = 200 + (i % 3);
+	const frame = displaced(golden, W, H, { x0: 0, y0: 0, x1: W, y1: H }, 1, 1);
+	let differs = false;
+	for (const [tile, floor] of [[48, 12], [48, 0.5], [32, 12], [48, 12]]) {
+		const fresh = buildDisplacementField(golden, frame, W, H, { tile, maxOffset: 4, minStdDev: floor });
+		const kept = refineLocally(golden, frame, W, H, { localAlignTile: tile, localAlignMax: 4, localAlignMinStdDev: floor });
+		const want = smoothField(fresh);
+		assert.deepStrictEqual(Array.from(kept.field.fx), Array.from(want.fx), `tile ${tile} floor ${floor}: fx`);
+		assert.deepStrictEqual(Array.from(kept.field.fy), Array.from(want.fy), `tile ${tile} floor ${floor}: fy`);
+		assert.deepStrictEqual(Array.from(kept.field.valid), Array.from(want.valid), `tile ${tile} floor ${floor}: valid`);
+		const tiles = searchableTiles(golden, W, H, tile, floor);
+		assert.strictEqual(searchableTiles(golden, W, H, tile, floor), tiles, "kept, not measured again");
+		if (floor === 0.5) differs = tiles.some((v, i) => v !== searchableTiles(golden, W, H, 48, 12)[i]);
+	}
+	assert.ok(differs, "a second floor on the same golden is measured, not served the first's tiles");
+});
+
 // applyRows as it was before its per-column terms were hoisted, the
 // reference: the resampled frame must not move by a pixel
 function applyRowsPerPixel(out, src, width, height, { fx, fy, gridW, gridH }, tile, yLo, yHi) {

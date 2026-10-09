@@ -465,7 +465,9 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   The tile search reads each tile's golden samples from one gathered
   array (the four neighbours of the sub-pixel step too), and the frame's
   outer row and column of tiles stop a losing offset early as the inner
-  tiles do, where they summed every offset in full. The pool's workers claim the field's tiles and the resampling's
+  tiles do, where they summed every offset in full. Which tiles have the
+  contrast to search depends on the golden alone and is measured once
+  per golden instead of every frame. The pool's workers claim the field's tiles and the resampling's
   squares a small chunk at a time, as they do the tone check's, instead
   of a fixed share of rows each: a blank tile costs nothing and a busy
   one every offset, and the slowest worker's share of the field took 40%
