@@ -459,8 +459,9 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   the check's one pass left, runs in the binarization's dispatch over
   the same rows, and counts its defect pixels per heat-map block as it
   sets them, so the tone grid no longer walks the mask again (unless an
-  edge margin cleared some). The binarization's workers, and the local
-  alignment's, claim rows, tiles and squares a small chunk at a time
+  edge margin cleared some). The binarization's workers, the local
+  alignment's and the fused print and background diff's claim rows,
+  tiles, squares and block rows a small chunk at a time
   instead of a fixed share each (the slowest fixed share took 40-100%
   longer than the average). The resampling works out each column's
   horizontal interpolation once per band of rows sharing a pair of field

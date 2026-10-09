@@ -163,11 +163,22 @@ test("diffParallel matches the serial pipeline on the pool", { skip: !HAS_SAB },
 	for (const [radius, margin, blockSize] of [[2, 0, 8], [1, 5, 16], [4, 0, 7]]) {
 		const t = inputs(width, height, radius * 10 + margin, { radius, margin, ambiguous: true });
 		const expected = reference(t, width, height, blockSize);
-		for (const workers of [2, 3, 8]) {
+		for (const workers of [2, 3, 8, 12, 16]) {
 			const par = await diffParallel({ ...t, wantDilated: true }, width, height, blockSize, workers);
 			assert.ok(par, "precondition: the fixture should be big enough to split");
 			assertSame(par, expected, `r ${radius} margin ${margin} block ${blockSize} workers ${workers}`);
 		}
+		// The workers claim block rows a chunk at a time, and the masks
+		// arrive holding the last frame's pixels (compareFrame's scratch):
+		// every row must still be written exactly once, every block counted
+		// once. Block rows that no chunk size divides (703 / 7 = 101).
+		const dirty = (Ctor, length, zero) => {
+			const a = new Ctor(new SharedArrayBuffer(length * Ctor.BYTES_PER_ELEMENT));
+			if (!zero) a.fill(1);
+			return a;
+		};
+		const par = await diffParallel({ ...t, wantDilated: true }, width, height, blockSize, 12, dirty);
+		assertSame(par, expected, `r ${radius} margin ${margin} block ${blockSize}, dirty scratch`);
 	}
 	// without the stage viewer the dilated mask is not written at all
 	const t = inputs(width, height, 1, { radius: 2, margin: 0, ambiguous: false });
