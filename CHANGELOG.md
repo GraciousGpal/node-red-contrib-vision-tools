@@ -461,9 +461,9 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   interpolation once per band of rows sharing a pair of field rows,
   rather than once per pixel.
   The tile search reads each tile's golden samples from one gathered
-  array, and the frame's outer row and column of tiles stop a losing
-  offset early as the inner tiles do, where they summed every offset in
-  full. The pool's workers claim the field's tiles and the resampling's
+  array (the four neighbours of the sub-pixel step too), and the frame's
+  outer row and column of tiles stop a losing offset early as the inner
+  tiles do, where they summed every offset in full. The pool's workers claim the field's tiles and the resampling's
   squares a small chunk at a time, as they do the tone check's, instead
   of a fixed share of rows each: a blank tile costs nothing and a busy
   one every offset, and the slowest worker's share of the field took 40%
