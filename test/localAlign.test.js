@@ -132,6 +132,116 @@ test("offsets never exceed the cap", () => {
 	}
 });
 
+// The field as the exhaustive search finds it - every offset of the box
+// summed in full, the first strictly lowest kept - the reference for the
+// search that stops losing offsets early: the field must not move by a bit.
+function fieldExhaustive(golden, target, width, height, { tile, maxOffset, minStdDev }) {
+	const STEP = 3;
+	const ssd = (x0, y0, x1, y1, dx, dy) => {
+		let sum = 0;
+		let count = 0;
+		for (let y = y0; y < y1; y += STEP) {
+			const sy = y + dy;
+			if (sy < 0 || sy >= height) continue;
+			for (let x = x0; x < x1; x += STEP) {
+				const sx = x + dx;
+				if (sx < 0 || sx >= width) continue;
+				const d = golden[y * width + x] - target[sy * width + sx];
+				sum += d * d;
+				count++;
+			}
+		}
+		return count ? sum / count : Infinity;
+	};
+	const stdDev = (x0, y0, x1, y1) => {
+		let sum = 0;
+		let sumSq = 0;
+		let n = 0;
+		for (let y = y0; y < y1; y += 2) {
+			for (let x = x0; x < x1; x += 2) {
+				const v = golden[y * width + x];
+				sum += v;
+				sumSq += v * v;
+				n++;
+			}
+		}
+		if (n === 0) return 0;
+		const mean = sum / n;
+		const variance = sumSq / n - mean * mean;
+		return variance > 0 ? Math.sqrt(variance) : 0;
+	};
+	const parabolic = (before, at, after) => {
+		if (!Number.isFinite(before) || !Number.isFinite(at) || !Number.isFinite(after)) return 0;
+		const denom = before - 2 * at + after;
+		if (Math.abs(denom) < 1e-9) return 0;
+		const shift = (0.5 * (before - after)) / denom;
+		return shift > 1 || shift < -1 ? 0 : shift;
+	};
+	const gridW = Math.max(1, Math.ceil(width / tile));
+	const gridH = Math.max(1, Math.ceil(height / tile));
+	const fx = new Float32Array(gridW * gridH);
+	const fy = new Float32Array(gridW * gridH);
+	const valid = new Uint8Array(gridW * gridH);
+	for (let gy = 0; gy < gridH; gy++) {
+		for (let gx = 0; gx < gridW; gx++) {
+			const x0 = gx * tile;
+			const y0 = gy * tile;
+			const x1 = Math.min(width, x0 + tile);
+			const y1 = Math.min(height, y0 + tile);
+			if (stdDev(x0, y0, x1, y1) < minStdDev) continue;
+			let bestDx = 0;
+			let bestDy = 0;
+			let bestVal = Infinity;
+			for (let dy = -maxOffset; dy <= maxOffset; dy++) {
+				for (let dx = -maxOffset; dx <= maxOffset; dx++) {
+					const v = ssd(x0, y0, x1, y1, dx, dy);
+					if (v < bestVal) {
+						bestVal = v;
+						bestDx = dx;
+						bestDy = dy;
+					}
+				}
+			}
+			if (Math.abs(bestDx) === maxOffset || Math.abs(bestDy) === maxOffset) continue;
+			const cell = gy * gridW + gx;
+			fx[cell] = bestDx + parabolic(ssd(x0, y0, x1, y1, bestDx - 1, bestDy), bestVal, ssd(x0, y0, x1, y1, bestDx + 1, bestDy));
+			fy[cell] = bestDy + parabolic(ssd(x0, y0, x1, y1, bestDx, bestDy - 1), bestVal, ssd(x0, y0, x1, y1, bestDx, bestDy + 1));
+			valid[cell] = 1;
+		}
+	}
+	return { fx, fy, valid };
+}
+
+test("the field is the exhaustive search's, to the bit, edge tiles and ties included", () => {
+	let seed = 11;
+	const rnd = () => ((seed = (seed * 1103515245 + 12345) & 0x7fffffff) / 0x7fffffff);
+	const cases = [];
+	// a textured golden against itself displaced, plus noise
+	const golden = texture(W, H);
+	const shifted = displaced(golden, W, H, { x0: 0, y0: 0, x1: W, y1: H }, 2, -1);
+	cases.push(["displaced", golden, shifted.map((v) => Math.max(0, Math.min(255, v + Math.round((rnd() - 0.5) * 40)))), W, H, opts]);
+	// a checkerboard one period apart: offsets exactly tied, the first of
+	// them in raster order inside the box
+	const checks = (w, h, p) =>
+		Uint8Array.from({ length: w * h }, (_, i) => (((i % w) % p < p / 2) !== (((i / w) | 0) % p < p / 2) ? 30 : 220));
+	cases.push(["tied checks", checks(150, 90, 4), checks(150, 90, 4), 150, 90, { tile: 32, maxOffset: 5, minStdDev: 12 }]);
+	// noise, tiles that do not divide the frame, a cap past the frame's
+	// own size, and a frame smaller than one tile
+	for (const [w, h, tile, maxOffset] of [[101, 77, 24, 4], [60, 45, 16, 16], [20, 13, 32, 3], [200, 140, 48, 6]]) {
+		const g = Uint8Array.from({ length: w * h }, () => Math.floor(rnd() * 256));
+		const t = Uint8Array.from(g, (v) => Math.max(0, Math.min(255, v + Math.round((rnd() - 0.5) * 60))));
+		cases.push([`noise ${w}x${h} tile ${tile} cap ${maxOffset}`, g, t, w, h, { tile, maxOffset, minStdDev: 12 }]);
+	}
+	for (const [name, g, t, w, h, o] of cases) {
+		const want = fieldExhaustive(g, t, w, h, o);
+		const got = buildDisplacementField(g, t, w, h, o);
+		assert.ok(want.valid.some((v) => v), `${name}: precondition, some tile localises`);
+		assert.deepStrictEqual(Array.from(got.valid), Array.from(want.valid), `${name}: valid`);
+		assert.deepStrictEqual(Array.from(got.fx), Array.from(want.fx), `${name}: fx`);
+		assert.deepStrictEqual(Array.from(got.fy), Array.from(want.fy), `${name}: fy`);
+	}
+});
+
 // applyRows as it was before its per-column terms were hoisted, the
 // reference: the resampled frame must not move by a pixel
 function applyRowsPerPixel(out, src, width, height, { fx, fy, gridW, gridH }, tile, yLo, yHi) {
