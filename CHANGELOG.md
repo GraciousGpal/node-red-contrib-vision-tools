@@ -468,7 +468,9 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   rows rather than once per pixel; the tile search reads each tile's
   golden samples from one gathered array, the frame's outer tiles stop a
   losing offset early as the inner ones do, and which tiles have the
-  contrast to search is measured once per golden. The tone levels and
+  contrast to search is measured once per golden. The diff's dilation
+  walks each row in runs that need no edge test, and moves its column
+  window by the entering and leaving rows in one pass. The tone levels and
   tables are worked out outside the async check, where their loops ran
   unoptimised in runs of frames; the workers clear the tone and speck
   masks as they compare; and the check's per-frame tables and counts
