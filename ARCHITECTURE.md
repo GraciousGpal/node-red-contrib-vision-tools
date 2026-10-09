@@ -850,11 +850,17 @@ Also taken already: the polish objective runs on a fixed 320px canvas
 rather than half the golden (search 1643 → 250ms), and the tile matcher
 subsamples by 3 rather than 2.
 
-**The density sweeps (stages 1–3) are still synchronous**, and on an
-unpinned frame they are the larger half of the search. So the search is
-no longer *one* contiguous block on the event loop, but it is not free of
-one either. `scoreCandidate` already reads a shared-backed `Uint32`
-integral, so the groundwork for splitting them is in place.
+**The density sweeps (stages 1–3) run on the pool too** (`density`
+kernel, `densityBatchParallel`), each stage's independent sweeps - the
+ladder's rungs, the surviving hypotheses - batched into one dispatch and
+picked in the serial loops' order with a strict `<`, so a tie resolves as
+it always did. Unpinned they were the larger half of the search: 2.3s
+median before, 0.57s after, on the container rig. The polish objective
+now splits each batch by output rows, every worker scoring every
+candidate on its own band, rather than one candidate per worker: the
+area-average warp is bound by its reads of the Float64 grey table, and
+ten workers each warping a whole candidate took twice as long as one
+candidate alone.
 
 ### The polish, batched (1.0.2)
 

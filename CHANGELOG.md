@@ -440,6 +440,21 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   golden's grey-to-level fractions are worked out once per golden; and
   the defect and speck masks come from the frame's reused scratch.
 
+- **The JS alignment - the frames OpenCV cannot align - is faster, with
+  identical results.** The density sweeps run on the worker pool, every
+  rung or hypothesis of a stage in one batch; stage 2 sweeps angle only
+  for the hypotheses stage 3 refines (5 of 21 at the defaults - the angle
+  sweep never re-ranked them); the polish objective splits each batch by
+  rows across every worker instead of one candidate per worker, and scores
+  its start with its first neighbourhood; the area-average warp reads its
+  table inline; the final warp splits across the pool when it is not
+  magnifying; and the frame mask the search reads is cut on the pool
+  without the ambiguity band nothing read. On the container rig, 12
+  workers: the eight pinned JS-route frames went from 480 to 391ms median
+  wall (search 185 → 149ms, warp 24 → 14ms); with no trained transform,
+  search went from 2.3s to 0.57s median. `msg.result` is byte-identical on
+  all 162 bench frames, pinned and unpinned.
+
 - **The `golden-compare` edit dialog is grouped into six collapsible
   sections** — Golden and profile, Ink, Alignment, Position, Blemish
   checks, Output and preview — with the two legacy file paths under

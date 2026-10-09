@@ -272,7 +272,8 @@ test("a step size that never stops improving is cut off after POLISH_MAX_ROUNDS"
 		2,
 		false,
 	);
-	assert.strictEqual(batches, 1 + stepSizes * POLISH_MAX_ROUNDS);
+	// the start rides in the first round's batch rather than a batch of its own
+	assert.strictEqual(batches, stepSizes * POLISH_MAX_ROUNDS);
 	assert.ok(end.ox > start.ox, "it still moved while it could");
 });
 
