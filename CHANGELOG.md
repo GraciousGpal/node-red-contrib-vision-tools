@@ -406,6 +406,28 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Changed
 
+- **`golden-compare` runs a good frame in about half the time.** On the
+  rig's 1475x2125 golden at 12 workers the median good frame went from
+  164 to 94 ms, with `msg.result` and `msg.heatmap` unchanged to the bit
+  on all 162 sample frames. A frame's full-size masks are reused from
+  the frame before instead of allocated anew: the pool workers collect
+  by the volume of shared memory they have not seen, and new masks every
+  frame had one of them collecting inside nearly every frame. The
+  thresholding counts (Otsu's histogram, the golden's ink and its
+  coverage, the native path's disagreement) are taken by the pool as it
+  binarizes; the print and background checks run as one pass over the
+  pool that also counts each mask per block for the heat-map grids,
+  where they were five passes, two of them strided, and three serial
+  grids; the native warp's uncovered pixels are blanked by runs; the
+  local alignment works out its per-column terms once. With the preview
+  on, the thumbnail is drawn small in the inspector from the aligned
+  frame and its region boxes, so the node no longer decodes, resizes and
+  encodes the full-size picture on its own thread, and that picture is
+  no longer drawn at all when `outputHeatmap` is off and no viewer is
+  open (the thumbnail now shows the boxes, not each region's pixels).
+  The heat-map format and quality no longer re-prepare the golden when
+  its debug stages are not baked in.
+
 - **The `golden-compare` edit dialog is grouped into six collapsible
   sections** — Golden and profile, Ink, Alignment, Position, Blemish
   checks, Output and preview — with the two legacy file paths under

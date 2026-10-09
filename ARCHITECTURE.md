@@ -72,13 +72,14 @@ authoritative list.
 
 | file | role |
 | --- | --- |
-| `golden-compare.js` | Node-RED wiring: config and clamping, `msg` overrides, golden cache key, the golden's profile (resolution, cached reads, legacy import, barcode derivation after send), transform and nuisance-map training, logging; hands frames to `lib/inspector.js`. Keeps each node's last inspection (the thumbnail's picture every frame; every stage and heat map while a viewer is open) for the editor's stage viewer and serves it over admin routes (last, stage, hold, watch) |
+| `golden-compare.js` | Node-RED wiring: config and clamping, `msg` overrides, golden cache key, the golden's profile (resolution, cached reads, legacy import, barcode derivation after send), transform and nuisance-map training, logging; hands frames to `lib/inspector.js`. Keeps each node's last inspection (the inspector's small thumbnail every frame; every stage and heat map while a viewer is open) for the editor's stage viewer and serves it over admin routes (last, stage, hold, watch) |
 | `lib/nodeInput.js` | input handling shared by every node: bounded `clampInt`/`clampFloat`/`pickMode` settings, the size-capped image loader for `msg.payload` / `msg.golden` (bytes, a path, or an object carrying `data`/`buffer`/`path`), and `rawGeometry`/`assertRawFits` for bare pixels (`barcode-locate` uses them; `golden-compare` still has its own copies) |
 | `lib/inspector.js` | main-thread client for the inspection pipeline: one unref()'d worker per process, spawned on first use; runs the core inline when worker threads or `SharedArrayBuffer` are unavailable |
 | `lib/inspectorCore.js` | the pipeline behind one request/response surface (`prepare`, `inspect`, `calibrate`, `rectify`) plus the bounded prepared-golden store; same code on the worker and inline, no file I/O |
 | `lib/inspectorWorker.js` | worker side of the inspector: message plumbing around `inspectorCore`, replies matched to requests by id, a frame's raw images moved to the main thread rather than copied |
 | `lib/compare.js` | the pipeline above — `prepareGolden` and `compareFrame`, including the tone and speck checks on the aligned grey |
 | `lib/toneRows.js` | the tone check's two per-pixel passes over a range of rows, run whole-frame by `compare.js` or a range per worker by the pool |
+| `lib/diffRows.js` | the print and background checks in one pass over a range of block rows (dilation, both defect masks, edge margin, per-block counts), run a range per worker by the pool; `compare.js` keeps the separate passes as the reference and the path without a pool |
 | `lib/align.js` | global transform search: coarse-to-fine over scale, stretch, angle, translation |
 | `lib/localAlign.js` | per-tile displacement field and its application; `measureRegister`, the register residual a training frame measures per tile and writes as the slack map |
 | `lib/warp.js` | resample the frame into golden's grid, area-average when minifying |

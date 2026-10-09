@@ -1097,7 +1097,7 @@
     <code>GET /golden-compare/last/:id</code> (the verdict and the stage
     list) and <code>GET /golden-compare/last/:id/stage/:key</code> (one
     image). It survives a redeploy, not a restart. With no viewer open the
-    preview renders only its thumbnail, about 17 ms a frame on the rig; the stages and
+    preview renders only its thumbnail, drawn small in the inspector; the stages and
     the per-check heat maps are rendered while a viewer is open on the
     node (it says so with <code>POST /golden-compare/last/:id/watch</code>
     every few seconds), and the frame it opens on is rendered in full
