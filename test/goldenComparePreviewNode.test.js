@@ -232,6 +232,24 @@ test("with the preview on: a thumbnail under the node, every stage served, the m
 	assert.deepStrictEqual(h.warns, []);
 });
 
+test("with the combined heat map off, the preview's thumbnail does not draw one", async () => {
+	// the thumbnail comes small from the inspector; the full-size picture
+	// is drawn only for the message or a viewer
+	const h = makeNode({ previewEnabled: true, previewWidth: 100, outputHeatmap: false }, "gc-thumb");
+	await h.run({ golden, payload: golden });
+	assert.deepStrictEqual(h.doneErrors, []);
+	assert.strictEqual(h.sent[0].heatmap, undefined, "not asked for");
+	const { data } = h.published[0];
+	const thumb = await sharp(Buffer.from(data.image, "base64")).metadata();
+	assert.strictEqual(thumb.format, "jpeg");
+	assert.strictEqual(thumb.width, 100);
+	assert.ok(!data.stages.includes("heatmap"), `nothing full-size drawn: ${data.stages}`);
+	// a viewer still gets it
+	assert.strictEqual((await watch(h, "gc-thumb")).body.rendered, true);
+	assert.ok((await last(h, "gc-thumb")).body.stages.some((s) => s.key === "heatmap"));
+	await unwatch(h, "gc-thumb");
+});
+
 test("stages asked for on the message do not stand in for a viewer's full render", async () => {
 	const h = makeNode({ previewEnabled: true, debugStages: true });
 	await h.run({ golden, payload: golden });
