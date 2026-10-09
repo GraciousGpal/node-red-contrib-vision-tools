@@ -448,6 +448,35 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   golden's grey-to-level fractions are worked out once per golden; and
   the defect and speck masks come from the frame's reused scratch.
 
+- **The local alignment, the threshold, the diff and the tone check
+  cost less, results identical to the bit.** On the same rig and set the
+  median good frame went from 92 to 74 ms, p95 from 116 to 90 ms and p99
+  from 125 to 96 ms (local align 14.5 to 10.9 ms, threshold 10.2 to 9.0,
+  diff 13.8 to 9.7 (p95 21.9 to 14.5), the tone stage 11.4 to 0.5 with
+  its comparison now in the threshold stage). On the pool, the local alignment's resampling counts the grey
+  it writes for Otsu's level and for the tone check's per-cell
+  histograms, so neither runs a pass of its own; the tone comparison,
+  the check's one pass left, runs in the binarization's dispatch over
+  the same rows, and counts its defect pixels per heat-map block as it
+  sets them, so the tone grid no longer walks the mask again (unless an
+  edge margin cleared some). The binarization's workers, the local
+  alignment's and the fused print and background diff's claim rows,
+  tiles, squares and block rows a small chunk at a time
+  instead of a fixed share each (the slowest fixed share took 40-100%
+  longer than the average). The resampling works out each column's
+  horizontal interpolation once per band of rows sharing a pair of field
+  rows rather than once per pixel; the tile search reads each tile's
+  golden samples from one gathered array, the frame's outer tiles stop a
+  losing offset early as the inner ones do, and which tiles have the
+  contrast to search is measured once per golden. The diff's dilation
+  walks each row in runs that need no edge test, and moves its column
+  window by the entering and leaving rows in one pass. The tone levels and
+  tables are worked out outside the async check, where their loops ran
+  unoptimised in runs of frames; the workers clear the tone and speck
+  masks as they compare; and the check's per-frame tables and counts
+  come from the frame's reused scratch, so the workers no longer meet
+  new shared memory for them every frame.
+
 - **The JS alignment - the frames OpenCV cannot align - is faster, with
   identical results.** The density sweeps run on the worker pool, every
   rung or hypothesis of a stage in one batch; stage 2 sweeps angle only

@@ -13,7 +13,7 @@
 
 const test = require("node:test");
 const assert = require("node:assert");
-const { toneDefect } = require("../lib/compare.js");
+const { toneDefect, toneCounts, tonePrepare, toneRide, toneTally, toneResult } = require("../lib/compare.js");
 const { toneHistCells, toneCompareRows } = require("../lib/toneRows.js");
 const { shutdown } = require("../lib/pool.js");
 const { HAS_SAB } = require("../lib/shared.js");
@@ -208,12 +208,40 @@ for (const [name, thresholds] of cases) {
 	}
 }
 
-test("on the pool the masks come from the frame's scratch, reused buffers and all", { skip: !HAS_SAB }, async () => {
-	const cfg = { toneMargin: 3, toneThreshold: 0.3, speckThreshold: 0.3, workers: 5 };
+// The comparison counts its defect pixels per heat-map block as it sets
+// them, for the tone blemish grid, instead of the mask being walked again:
+// the counts must be the mask's, for block sizes that do and do not
+// divide the pool's chunk of rows, and none when there is no tone check.
+test("the comparison's block counts are the defect mask's", async () => {
+	const { blockCountRows } = require("../lib/diffRows.js");
+	const cfg = { toneMargin: 3, toneThreshold: 0.3, speckThreshold: 0.3 };
+	// after a call, which builds the golden's classes for this margin
+	await toneDefect(golden, frame, { ...cfg, workers: 1 }, false);
+	const want = reference(golden, frame, cfg, false);
+	for (const blockSize of [8, 7, 20, 1]) {
+		const gridH = Math.ceil(H / blockSize);
+		const expected = new Uint32Array(Math.ceil(W / blockSize) * gridH);
+		blockCountRows(want.defect, W, H, blockSize, expected, 0, gridH);
+		for (const workers of HAS_SAB ? [1, 5] : [1]) {
+			const got = await toneDefect(golden, frame, { ...cfg, blockSize, workers }, false);
+			same(got.defect, want.defect, `block ${blockSize}, ${workers} workers: defect`);
+			same(got.blocks, expected, `block ${blockSize}, ${workers} workers: blocks`);
+		}
+	}
+	// specks only, or a block size the grid would not take: nothing counted
+	assert.strictEqual((await toneDefect(golden, frame, { ...cfg, toneThreshold: 0, blockSize: 8, workers: 1 }, false)).blocks, null);
+	assert.strictEqual((await toneDefect(golden, frame, { ...cfg, blockSize: 7.5, workers: 1 }, false)).blocks, null);
+});
+
+test("on the pool the masks and tables come from the frame's scratch, reused buffers and all", { skip: !HAS_SAB }, async () => {
+	const cfg = { toneMargin: 3, toneThreshold: 0.3, speckThreshold: 0.18, blockSize: 8, workers: 5 };
 	let want = null;
-	// the scratch hands back the same two buffers every frame, as
-	// takeShared does once a frame has given them back
-	const { takeShared, giveShared } = require("../lib/shared.js");
+	// the scratch hands back the same buffers every frame, as takeShared
+	// does once a frame has given them back - so after the first frame the
+	// check allocates next to no shared memory the workers have not seen
+	const { takeShared, giveShared, sharedAllocated, toShared } = require("../lib/shared.js");
+	// the aligned grey compareFrame hands it is shared already
+	const sharedFrame = toShared(frame);
 	for (let round = 0; round < 3; round++) {
 		const taken = [];
 		const take = (Ctor, length, zero) => {
@@ -221,15 +249,22 @@ test("on the pool the masks come from the frame's scratch, reused buffers and al
 			taken.push(a);
 			return a;
 		};
-		const got = await toneDefect(golden, frame, cfg, false, take);
+		const before = sharedAllocated();
+		const got = await toneDefect(golden, sharedFrame, cfg, false, take);
+		const fresh = sharedAllocated() - before;
 		// after the first call, which builds the golden's classes for this margin
 		want = want || reference(golden, frame, cfg, false);
-		assert.deepStrictEqual(taken, [got.defect, got.speck]);
+		assert.ok(taken.includes(got.defect) && taken.includes(got.speck) && taken.includes(got.blocks), "masks and blocks taken");
+		if (round > 0) assert.ok(fresh < 1024, `round ${round}: ${fresh} fresh shared bytes`);
 		same(got.defect, want.defect, `round ${round} defect`);
 		same(got.speck, want.speck, `round ${round} speck`);
 		same(got.seeds, want.seeds, `round ${round} seeds`);
-		// what the speck fill leaves behind: visited pixels marked 2
+		// what the speck fill leaves behind: visited pixels marked 2; and
+		// what a frame with other defects would: set pixels everywhere
 		for (const i of got.seeds) got.speck[i] = 2;
+		for (let i = 0; i < got.defect.length; i += 7) got.defect[i] = got.speck[i] = 1;
+		// and the tables and counts left as this frame wrote them, or worse
+		for (const a of taken) if (a !== got.defect && a !== got.speck) a.fill(7);
 		for (const a of taken) giveShared(a);
 	}
 });
@@ -251,6 +286,99 @@ test("the histogram pass gives the same cells however the cells are split", () =
 	let sampled = 0;
 	for (let i = 0; i < classes.length; i++) if (classes[i] & 12) sampled++;
 	assert.strictEqual(whole.histP.reduce((a, b) => a + b, 0) + whole.histK.reduce((a, b) => a + b, 0), sampled);
+});
+
+// The local alignment's resampling counts the grey it writes - Otsu's
+// histogram and the tone check's per-cell ones - so neither needs a pass
+// of its own. What it counts has to be what those passes count over its
+// output, split however the cells are, and the tone check given those
+// counts has to be the reference's.
+test("the local alignment's resampling counts what the histogram passes count", async () => {
+	const { applyCells, buildDisplacementField, smoothField } = require("../lib/localAlign.js");
+	const { refineLocallyParallel } = require("../lib/parallel.js");
+	const cfg = { toneMargin: 3, toneThreshold: 0.3, speckThreshold: 0.3, localAlignTile: 96, localAlignMax: 3 };
+	const counts = toneCounts(golden, cfg);
+	assert.ok(counts, "precondition: the tone check has something to count");
+	const { cell, cellsW, cells } = counts;
+	const field = smoothField(buildDisplacementField(golden.gray, frame, W, H, { tile: 96, maxOffset: 3, minStdDev: 12 }));
+	assert.ok(field.valid.some((v) => v), "precondition: the field localises");
+	const expect = (gray) => {
+		const hist = { classes: counts.classes, gray, histP: new Uint32Array(cells * 256), histK: new Uint32Array(cells * 256), width: W, height: H, cell, cellsW, paperBit: 4, inkBit: 8 };
+		toneHistCells(hist, 0, cells);
+		const grey = new Uint32Array(256);
+		for (const v of gray) grey[v]++;
+		return { grey, histP: hist.histP, histK: hist.histK };
+	};
+	// serially, over ranges that start and end part-way along a row of cells
+	for (const n of [1, 3, 7, cells + 2]) {
+		const t = {
+			out: new Uint8Array(W * H),
+			target: frame,
+			width: W,
+			height: H,
+			field,
+			tile: 96,
+			cell,
+			cellsW,
+			counts: { ...counts, grey: new Uint32Array(256), histP: new Uint32Array(cells * 256), histK: new Uint32Array(cells * 256) },
+		};
+		for (let k = 0; k < n; k++) applyCells(t, Math.floor((k * cells) / n), Math.floor(((k + 1) * cells) / n));
+		const want = expect(t.out);
+		same(t.counts.grey, want.grey, `${n} ranges, grey`);
+		same(t.counts.histP, want.histP, `${n} ranges, paper`);
+		same(t.counts.histK, want.histK, `${n} ranges, ink`);
+	}
+	if (!HAS_SAB) return;
+	// on the pool, and the tone check run on what it counted
+	const refined = await refineLocallyParallel(golden.gray, frame, W, H, { ...cfg, workers: 5 }, undefined, { grey: true, tone: counts });
+	assert.ok(refined && refined.tone && refined.grey, "precondition: the pool refined and counted");
+	const want = expect(refined.gray);
+	same(refined.grey, want.grey, "pooled grey");
+	same(refined.tone.histP, want.histP, "pooled paper");
+	same(refined.tone.histK, want.histK, "pooled ink");
+	const got = await toneDefect(golden, refined.gray, { ...cfg, workers: 5 }, true, null, refined.tone);
+	const ref = reference(golden, refined.gray, cfg, true);
+	assert.ok(ref.count > 0, "precondition: the frame holds defects");
+	assert.strictEqual(got.count, ref.count, "count");
+	assert.strictEqual(got.paperLevel, ref.paperLevel, "paper level");
+	assert.strictEqual(got.inkLevel, ref.inkLevel, "ink level");
+	same(got.defect, ref.defect, "defect");
+	same(got.seeds, ref.seeds, "seeds");
+	same(got.map, ref.map, "map");
+});
+
+// The comparison rides on the binarization's dispatch in compareFrame: the
+// binarization must be what it is alone, and the tone check what the
+// reference says, from masks the frame before left dirty.
+test("the tone comparison riding on the binarization changes neither", { skip: !HAS_SAB }, async () => {
+	const { binarizeParallel } = require("../lib/parallel.js");
+	const { takeShared } = require("../lib/shared.js");
+	const cfg = { toneMargin: 3, toneThreshold: 0.3, speckThreshold: 0.18, blockSize: 8, workers: 5 };
+	const level = 120;
+	const margin = 9;
+	const alone = await binarizeParallel(frame, W, H, level, margin, 5, golden.fg);
+	for (const wantMap of [false, true]) {
+		const take = (Ctor, length, zero) => {
+			const a = takeShared(Ctor, length, zero);
+			if (!zero) a.fill(1);
+			return a;
+		};
+		const prep = await tonePrepare(golden, frame, cfg, wantMap, take);
+		assert.ok(prep.enabled && prep.pooled, "precondition: the comparison is pooled");
+		const rode = await binarizeParallel(frame, W, H, level, margin, 5, golden.fg, undefined, toneRide(prep));
+		assert.ok(rode.toneRan, "the comparison rode along");
+		same(rode.fg, alone.fg, "fg");
+		same(rode.ambiguous, alone.ambiguous, "ambiguous");
+		assert.deepStrictEqual(rode.counts, alone.counts, "counts");
+		const got = toneResult(prep, toneTally(prep));
+		const want = reference(golden, frame, cfg, wantMap);
+		assert.ok(want.count > 0 && want.seeds.length > 0, "precondition: defects and specks");
+		assert.strictEqual(got.count, want.count, "count");
+		same(got.defect, want.defect, "defect");
+		same(got.speck, want.speck, "speck");
+		same(got.seeds, want.seeds, "seeds");
+		same(got.map, want.map, "map");
+	}
 });
 
 test("a speck sharing the defect's tables is the defect mask, counted per row", () => {
