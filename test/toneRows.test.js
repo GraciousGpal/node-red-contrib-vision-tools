@@ -13,7 +13,7 @@
 
 const test = require("node:test");
 const assert = require("node:assert");
-const { toneDefect } = require("../lib/compare.js");
+const { toneDefect, toneCounts } = require("../lib/compare.js");
 const { toneHistCells, toneCompareRows } = require("../lib/toneRows.js");
 const { shutdown } = require("../lib/pool.js");
 const { HAS_SAB } = require("../lib/shared.js");
@@ -251,6 +251,65 @@ test("the histogram pass gives the same cells however the cells are split", () =
 	let sampled = 0;
 	for (let i = 0; i < classes.length; i++) if (classes[i] & 12) sampled++;
 	assert.strictEqual(whole.histP.reduce((a, b) => a + b, 0) + whole.histK.reduce((a, b) => a + b, 0), sampled);
+});
+
+// The local alignment's resampling counts the grey it writes - Otsu's
+// histogram and the tone check's per-cell ones - so neither needs a pass
+// of its own. What it counts has to be what those passes count over its
+// output, split however the cells are, and the tone check given those
+// counts has to be the reference's.
+test("the local alignment's resampling counts what the histogram passes count", async () => {
+	const { applyCells, buildDisplacementField, smoothField } = require("../lib/localAlign.js");
+	const { refineLocallyParallel } = require("../lib/parallel.js");
+	const cfg = { toneMargin: 3, toneThreshold: 0.3, speckThreshold: 0.3, localAlignTile: 96, localAlignMax: 3 };
+	const counts = toneCounts(golden, cfg);
+	assert.ok(counts, "precondition: the tone check has something to count");
+	const { cell, cellsW, cells } = counts;
+	const field = smoothField(buildDisplacementField(golden.gray, frame, W, H, { tile: 96, maxOffset: 3, minStdDev: 12 }));
+	assert.ok(field.valid.some((v) => v), "precondition: the field localises");
+	const expect = (gray) => {
+		const hist = { classes: counts.classes, gray, histP: new Uint32Array(cells * 256), histK: new Uint32Array(cells * 256), width: W, height: H, cell, cellsW, paperBit: 4, inkBit: 8 };
+		toneHistCells(hist, 0, cells);
+		const grey = new Uint32Array(256);
+		for (const v of gray) grey[v]++;
+		return { grey, histP: hist.histP, histK: hist.histK };
+	};
+	// serially, over ranges that start and end part-way along a row of cells
+	for (const n of [1, 3, 7, cells + 2]) {
+		const t = {
+			out: new Uint8Array(W * H),
+			target: frame,
+			width: W,
+			height: H,
+			field,
+			tile: 96,
+			cell,
+			cellsW,
+			counts: { ...counts, grey: new Uint32Array(256), histP: new Uint32Array(cells * 256), histK: new Uint32Array(cells * 256) },
+		};
+		for (let k = 0; k < n; k++) applyCells(t, Math.floor((k * cells) / n), Math.floor(((k + 1) * cells) / n));
+		const want = expect(t.out);
+		same(t.counts.grey, want.grey, `${n} ranges, grey`);
+		same(t.counts.histP, want.histP, `${n} ranges, paper`);
+		same(t.counts.histK, want.histK, `${n} ranges, ink`);
+	}
+	if (!HAS_SAB) return;
+	// on the pool, and the tone check run on what it counted
+	const refined = await refineLocallyParallel(golden.gray, frame, W, H, { ...cfg, workers: 5 }, undefined, { grey: true, tone: counts });
+	assert.ok(refined && refined.tone && refined.grey, "precondition: the pool refined and counted");
+	const want = expect(refined.gray);
+	same(refined.grey, want.grey, "pooled grey");
+	same(refined.tone.histP, want.histP, "pooled paper");
+	same(refined.tone.histK, want.histK, "pooled ink");
+	const got = await toneDefect(golden, refined.gray, { ...cfg, workers: 5 }, true, null, refined.tone);
+	const ref = reference(golden, refined.gray, cfg, true);
+	assert.ok(ref.count > 0, "precondition: the frame holds defects");
+	assert.strictEqual(got.count, ref.count, "count");
+	assert.strictEqual(got.paperLevel, ref.paperLevel, "paper level");
+	assert.strictEqual(got.inkLevel, ref.inkLevel, "ink level");
+	same(got.defect, ref.defect, "defect");
+	same(got.seeds, ref.seeds, "seeds");
+	same(got.map, ref.map, "map");
 });
 
 test("a speck sharing the defect's tables is the defect mask, counted per row", () => {

@@ -448,9 +448,13 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   golden's grey-to-level fractions are worked out once per golden; and
   the defect and speck masks come from the frame's reused scratch.
 
-- **The local alignment costs less, results identical to the bit.** Its
-  resampling works out each column's horizontal interpolation once per
-  band of rows sharing a pair of field rows, rather than once per pixel.
+- **The local alignment, the threshold and the tone check cost less,
+  results identical to the bit.** On the pool, the local alignment's
+  resampling counts the grey it writes for Otsu's level and for the tone
+  check's per-cell histograms, so neither runs a pass of its own over
+  the frame. The resampling works out each column's horizontal
+  interpolation once per band of rows sharing a pair of field rows,
+  rather than once per pixel.
   The tile search reads each tile's golden samples from one gathered
   array, and the frame's outer row and column of tiles stop a losing
   offset early as the inner tiles do, where they summed every offset in

@@ -432,6 +432,24 @@ test("a frame compares identically with and without workers", {
 	assert.strictEqual(parallel.position.dxPx, serial.position.dxPx);
 	assert.strictEqual(parallel.position.dyPx, serial.position.dyPx);
 	assert.strictEqual(parallel.pass, serial.pass);
+
+	// With the tone and speck checks on, the pool's local alignment counts
+	// their histograms and Otsu's as it resamples, where one worker runs
+	// each pass on its own: every check's result and picture the same.
+	const toned = (workers) => ({
+		...cfg(workers),
+		toneThreshold: 0.3,
+		toneMargin: 3,
+		speckThreshold: 0.3,
+		outputToneHeatmap: true,
+		outputSpeckHeatmap: true,
+	});
+	const toneSerial = await compareFrame(targetBuf, await prepareGolden(goldenBuf, toned(1)), toned(1));
+	const tonePool = await compareFrame(targetBuf, await prepareGolden(goldenBuf, toned(4)), toned(4));
+	assert.ok(toneSerial.toneBlemish.enabled, "precondition: the tone check runs");
+	assert.ok(toneSerial.toneBlemish.regions.length > 0, "precondition: the tone check finds the blob");
+	const verdict = (r) => JSON.stringify({ ...r, timings: null });
+	assert.strictEqual(verdict(tonePool), verdict(toneSerial));
 });
 
 // ---- rectify -------------------------------------------------------------
