@@ -450,11 +450,12 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 - **The local alignment, the threshold, the diff and the tone check
   cost less, results identical to the bit.** On the same rig and set,
-  measured without the overlay changes below, the median good frame went
-  from 92 to 74 ms, p95 from 116 to 90 ms and p99 from 125 to 96 ms
-  (local align 14.5 to 10.9 ms, threshold 10.2 to 9.0, diff 13.8 to 9.7
-  (p95 21.9 to 14.5), the tone stage 11.4 to 0.5 with its comparison now
-  in the threshold stage). On the pool, the local alignment's resampling
+  together with the two overlay changes below, the median good frame went
+  from 91 to 67 ms, p95 from 115 to 86 ms and p99 from 134 to 98 ms
+  (local align 14.6 to 11.3 ms, diff 13.8 to 10.2, the tone stage 11.3
+  to 0.5 with its comparison now in the threshold stage, which stays at
+  ~10, overlay 13.1 to 6.1; two rounds of two passes over the 162 sample
+  frames, old and new interleaved). On the pool, the local alignment's resampling
   counts the grey it writes for Otsu's level and for the tone check's
   per-cell histograms, so neither runs a pass of its own; the tone comparison,
   the check's one pass left, runs in the binarization's dispatch over
@@ -490,12 +491,8 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   overlay stage. It is now built on the inspector thread a slice at a
   time from the moment the grey is final, while that thread would
   otherwise wait on the pool's threshold, diff and tone passes, and the
-  overlay stage only draws the regions on it. With the thumbnail change
-  above, and measured without the alignment, threshold, diff and tone
-  changes, the overlay stage on the rig went from 13.4 to 4.9 ms median on a good frame and the
-  good frame from 92 to 83 ms median, p95 115 to 106 ms (12 workers, two
-  passes over the 162 sample frames, interleaved twice); `msg.heatmap`
-  is unchanged to the bit.
+  overlay stage only draws the regions on it; `msg.heatmap` is unchanged
+  to the bit. The timing is in the entry above.
 
 - **The JS alignment - the frames OpenCV cannot align - is faster, with
   identical results.** The density sweeps run on the worker pool, every

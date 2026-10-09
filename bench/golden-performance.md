@@ -2,27 +2,26 @@
 
 ## Second pass (October 2026)
 
-Two pieces of work, each measured on its own against the previous
-result below; the combined figure is still to be measured. Same set,
-settings and method as below: two rounds of two passes over all 162
-frames, old and new interleaved, one job on the host at a time, whole
-handler. `msg.result` and every heat map identical to the bit on all
-162 frames for each.
+Good frames: **91 → 67 ms median, 115 → 86 ms p95, 134 → 98 ms p99**
+(whole handler; the two rounds' p95 were 89.6 and 83.2). Bad frames 278 →
+244 ms median. `msg.result` and every heat map identical to the bit on
+all 162 frames, and on 20-frame samples with no trained transform, with
+and without OpenCV. Same set, settings and method as the previous result
+below: two rounds of two passes over all 162 frames, old and new
+interleaved, one job on the host at a time.
 
-**Local alignment, threshold, diff and tone check** (measured alone):
-good frames **92 → 74 ms median, 116 → 90 ms p95, 125 → 96 ms p99**.
-Process RSS stays within ~615-880 MB over each run, as before. Stage
-medians, before → after: local align 14.5 → 10.9, threshold 10.2 → 9.0,
-diff 13.8 → 9.7 (p95 21.9 → 14.5), tone 11.4 → 0.5 (its comparison now
-runs inside the threshold stage's binarization; its histograms inside
-the local alignment). Native align reads 18 → 21: the same with a 300 ms
-idle gap before every frame (16.5 → 19.9), so it is not the previous
-frame's work overlapping the next; not explained yet.
+| Good frames, stage median | before | after |
+| --- | ---: | ---: |
+| native align | 17.6 ms | 19.6 ms |
+| local align | 14.6 ms | 11.3 ms |
+| threshold (now with the tone comparison) | 10.5 ms | 10.1 ms |
+| diff | 13.8 ms | 10.2 ms |
+| tone | 11.3 ms | 0.5 ms |
+| overlay | 13.1 ms | 6.1 ms |
 
-**Overlay** (measured alone, two rounds against the previous result):
-good frames **91.8/92.5 → 82.8/85.0 ms median, 114.9/117.1 →
-106.0/107.1 ms p95, 130.7/125.5 → 119.2/122.4 ms p99**; overlay stage
-13.4/13.6 → 4.9/5.0 ms median; threshold, diff and tone unchanged.
+Native align reads ~2 ms slower, also with a 300 ms idle gap before every
+frame, so it is not the previous frame's work overlapping the next; not
+explained yet.
 
 - **Local alignment**: the resampling works out each column's
   interpolation once per band of rows (CPU 39 → 19 ms a frame on one
@@ -42,12 +41,11 @@ good frames **91.8/92.5 → 82.8/85.0 ms median, 114.9/117.1 →
   function, where they ran unoptimised in runs of frames (one frame in
   four at 4-7 ms instead of 0.6); the masks are cleared by the workers;
   the tables and counts come from the frame's scratch.
-
 - **Diff**: its block rows are claimed four at a time, each chunk
   dilating its own halo of `printTolerance` rows as each fixed share did
   (the slowest fixed share took twice the mean); the dilation's rows are
   walked in runs with no edge test and its column window moves in one
-  pass (-10% CPU, p95 16.5 → 14.8).
+  pass (-10% CPU). Claiming took the diff stage's p95 from 22 to 15 ms.
 - **Overlay**: the thumbnail's JPEG is requested before the full-size
   overlay is composed, so sharp encodes it (4.7 ms median) during the
   compose rather than after it. The overlay's canvas, the aligned grey
@@ -59,9 +57,8 @@ good frames **91.8/92.5 → 82.8/85.0 ms median, 114.9/117.1 →
   alignment, while that thread waits on the pool's threshold, diff and
   tone passes; the overlay stage only draws the regions.
 
-Left on a good frame after the alignment, threshold, diff and tone work
-alone, by stage median: native align ~21, overlay ~13 (~5 with the
-overlay work), local align ~11, diff ~10, threshold ~9. Riding the diff on the
+Left on a good frame, by stage median: native align ~20, local align
+~11, diff ~10, threshold ~10, overlay ~6. Riding the diff on the
 binarization's dispatch, as the tone comparison does, would save a
 dispatch (~1 ms) at the cost of each chunk thresholding its halo rows
 from the grey; not done.
