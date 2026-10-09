@@ -192,5 +192,12 @@ test("applyRows resamples exactly as the per-pixel form did", () => {
 		applyRows(split, src, width, height, field, tile, 0, mid);
 		applyRows(split, src, width, height, field, tile, mid, height);
 		assert.deepStrictEqual(split, expected, `${width}x${height} tile ${tile}, split`);
+		// ranges that start and end inside a band of rows sharing a pair of
+		// field rows, one row long, and across several bands
+		for (const step of [1, 3, tile - 1, tile + 1, 2 * tile + 5]) {
+			const banded = new Uint8Array(width * height);
+			for (let lo = 0; lo < height; lo += step) applyRows(banded, src, width, height, field, tile, lo, Math.min(height, lo + step));
+			assert.deepStrictEqual(banded, expected, `${width}x${height} tile ${tile}, ranges of ${step}`);
+		}
 	}
 });

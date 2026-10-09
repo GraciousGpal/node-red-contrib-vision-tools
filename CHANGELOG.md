@@ -448,6 +448,10 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   golden's grey-to-level fractions are worked out once per golden; and
   the defect and speck masks come from the frame's reused scratch.
 
+- **The local alignment costs less, results identical to the bit.** Its
+  resampling works out each column's horizontal interpolation once per
+  band of rows sharing a pair of field rows, rather than once per pixel.
+
 - **The JS alignment - the frames OpenCV cannot align - is faster, with
   identical results.** The density sweeps run on the worker pool, every
   rung or hypothesis of a stage in one batch; stage 2 sweeps angle only
