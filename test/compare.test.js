@@ -584,6 +584,29 @@ test("the one-picture overlay carries every check's regions in colour", async ()
 	assert.strictEqual(off.heatmap, null);
 });
 
+test("the preview's thumbnail is the aligned grey, shrunk", async () => {
+	// the format and width alone passed while the picture was three
+	// interleaved copies of the frame: sharp hands the resized grey back
+	// with three channels, which were read as one
+	const buf = await png(labelSvg(1200, 1600));
+	const golden = await prepareGolden(buf, cfg({ debugStages: true, heatmapFormat: "raw" }));
+	const r = await compareFrame(buf, golden, cfg({ debugStages: true, heatmapFormat: "raw", thumbnailWidth: 160 }));
+	assert.strictEqual(r.printBlemish.regions.length + r.backgroundBlemish.regions.length, 0, "no boxes drawn");
+	const aligned = r.stages.targetGrayAligned;
+	const want = await sharp(Buffer.from(aligned.data), { raw: { width: aligned.width, height: aligned.height, channels: 1 } })
+		.resize({ width: 160 })
+		.extractChannel(0)
+		.raw()
+		.toBuffer({ resolveWithObject: true });
+	const got = await sharp(r.thumbnail).raw().toBuffer({ resolveWithObject: true });
+	assert.strictEqual(got.info.width, want.info.width);
+	assert.strictEqual(got.info.height, want.info.height);
+	let sum = 0;
+	for (let i = 0; i < want.data.length; i++) sum += Math.abs(got.data[i * got.info.channels] - want.data[i]);
+	// JPEG at quality 70 on bars and paper: a few levels on average
+	assert.ok(sum / want.data.length < 6, `mean difference ${(sum / want.data.length).toFixed(1)}`);
+});
+
 test("pinholes inside a bar fail the speck check by count", async () => {
 	const goldenBuf = await png(labelSvg(1200, 1600));
 	const barTop = Math.round(1600 * BAR_Y[3]);
