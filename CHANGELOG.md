@@ -406,6 +406,12 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Changed
 
+- **The preview's thumbnail encodes while the overlay is composed.** The
+  inspector asks sharp for the thumbnail's JPEG before it composes the
+  full-size overlay, not after, so the encode runs on sharp's threads
+  during the compose instead of waiting behind it. The bytes are
+  unchanged.
+
 - **`golden-compare` runs a good frame in about half the time.** On the
   rig's 1475x2125 golden at 12 workers the median good frame went from
   193 to 94 ms and its p95 from 226 to 119 ms (whole handler, two passes
