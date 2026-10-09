@@ -412,7 +412,8 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   on all 162 sample frames. A frame's full-size masks are reused from
   the frame before instead of allocated anew: the pool workers collect
   by the volume of shared memory they have not seen, and new masks every
-  frame had one of them collecting inside nearly every frame. The
+  frame had one of them collecting inside nearly every frame (the spares
+  kept for reuse are capped at 128 MB across golden sizes). The
   thresholding counts (Otsu's histogram, the golden's ink and its
   coverage, the native path's disagreement) are taken by the pool as it
   binarizes; the print and background checks run as one pass over the
