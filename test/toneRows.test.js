@@ -208,6 +208,31 @@ for (const [name, thresholds] of cases) {
 	}
 }
 
+// The comparison counts its defect pixels per heat-map block as it sets
+// them, for the tone blemish grid, instead of the mask being walked again:
+// the counts must be the mask's, for block sizes that do and do not
+// divide the pool's chunk of rows, and none when there is no tone check.
+test("the comparison's block counts are the defect mask's", async () => {
+	const { blockCountRows } = require("../lib/diffRows.js");
+	const cfg = { toneMargin: 3, toneThreshold: 0.3, speckThreshold: 0.3 };
+	// after a call, which builds the golden's classes for this margin
+	await toneDefect(golden, frame, { ...cfg, workers: 1 }, false);
+	const want = reference(golden, frame, cfg, false);
+	for (const blockSize of [8, 7, 20, 1]) {
+		const gridH = Math.ceil(H / blockSize);
+		const expected = new Uint32Array(Math.ceil(W / blockSize) * gridH);
+		blockCountRows(want.defect, W, H, blockSize, expected, 0, gridH);
+		for (const workers of HAS_SAB ? [1, 5] : [1]) {
+			const got = await toneDefect(golden, frame, { ...cfg, blockSize, workers }, false);
+			same(got.defect, want.defect, `block ${blockSize}, ${workers} workers: defect`);
+			same(got.blocks, expected, `block ${blockSize}, ${workers} workers: blocks`);
+		}
+	}
+	// specks only, or a block size the grid would not take: nothing counted
+	assert.strictEqual((await toneDefect(golden, frame, { ...cfg, toneThreshold: 0, blockSize: 8, workers: 1 }, false)).blocks, null);
+	assert.strictEqual((await toneDefect(golden, frame, { ...cfg, blockSize: 7.5, workers: 1 }, false)).blocks, null);
+});
+
 test("on the pool the masks come from the frame's scratch, reused buffers and all", { skip: !HAS_SAB }, async () => {
 	const cfg = { toneMargin: 3, toneThreshold: 0.3, speckThreshold: 0.3, workers: 5 };
 	let want = null;

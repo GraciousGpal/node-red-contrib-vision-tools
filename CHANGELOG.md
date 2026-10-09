@@ -452,7 +452,10 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   results identical to the bit.** On the pool, the local alignment's
   resampling counts the grey it writes for Otsu's level and for the tone
   check's per-cell histograms, so neither runs a pass of its own over
-  the frame. The resampling works out each column's horizontal
+  the frame, and the tone comparison counts its defect pixels per
+  heat-map block as it sets them, so the tone grid no longer walks the
+  mask again (unless an edge margin cleared some of them). The
+  resampling works out each column's horizontal
   interpolation once per band of rows sharing a pair of field rows,
   rather than once per pixel.
   The tile search reads each tile's golden samples from one gathered
