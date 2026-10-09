@@ -95,3 +95,27 @@ test("the thumbnail's encode is asked for before the overlay is composed", async
 	assert.ok(result.heatmap && result.thumbnail, "both pictures rendered");
 	assert.deepEqual(qualities, [70, 85], "the thumbnail first, then the overlay");
 });
+
+test("the overlay's canvas is the grey as RGB, built across turns of the loop", async () => {
+	const { expandGray, OVERLAY_EXPAND_SLICE: S } = require("../lib/compare.js");
+	for (const n of [1, 7, S - 1, S, S + 1, 3 * S + 5]) {
+		const gray = new Uint8Array(n);
+		for (let i = 0; i < n; i++) gray[i] = (i * 2654435761) >>> 24;
+		const want = Buffer.alloc(n * 3);
+		for (let i = 0; i < n; i++) want[i * 3] = want[i * 3 + 1] = want[i * 3 + 2] = gray[i];
+		// how many turns of the loop pass while it builds
+		let turns = 0;
+		let counting = true;
+		const tick = () => {
+			if (!counting) return;
+			turns++;
+			setImmediate(tick);
+		};
+		setImmediate(tick);
+		const got = await expandGray(gray, n);
+		counting = false;
+		assert.ok(want.equals(got), `${n} pixels`);
+		const slices = Math.ceil(n / S);
+		assert.ok(turns >= slices - 1, `${n} pixels: ${turns} turns for ${slices} slices`);
+	}
+});

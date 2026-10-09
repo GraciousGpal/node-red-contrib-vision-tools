@@ -412,6 +412,18 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   during the compose instead of waiting behind it. The bytes are
   unchanged.
 
+- **The overlay's canvas is built while the checks run.** The full-size
+  overlay starts from the aligned grey as RGB, a new 9.4 MB buffer every
+  frame (it leaves with the message) whose fresh pages were most of the
+  overlay stage. It is now built on the inspector thread a slice at a
+  time from the moment the grey is final, while that thread would
+  otherwise wait on the pool's threshold, diff and tone passes, and the
+  overlay stage only draws the regions on it. With the thumbnail change
+  above, the overlay stage on the rig went from 13.4 to 4.9 ms median on
+  a good frame and the good frame from 92 to 83 ms median, p95 115 to
+  106 ms (12 workers, two passes over the 162 sample frames, interleaved
+  twice); `msg.heatmap` is unchanged to the bit.
+
 - **`golden-compare` runs a good frame in about half the time.** On the
   rig's 1475x2125 golden at 12 workers the median good frame went from
   193 to 94 ms and its p95 from 226 to 119 ms (whole handler, two passes
