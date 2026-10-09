@@ -1927,7 +1927,8 @@ module.exports = (RED) => {
 		// two viewers opening at once render once
 		if (!entry.rendering) {
 			const { cacheKey, cfg, frame } = entry.replay;
-			const full = { ...cfg, frameStages: true };
+			// the thumbnail went out with the frame; the stages are the point
+			const full = { ...cfg, frameStages: true, thumbnailWidth: 0 };
 			for (const [, flag] of HEATMAPS) full[flag] = true;
 			entry.rendering = inspector
 				.inspect({ cacheKey, cfg: full, frame })

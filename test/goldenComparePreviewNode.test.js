@@ -250,6 +250,32 @@ test("with the combined heat map off, the preview's thumbnail does not draw one"
 	await unwatch(h, "gc-thumb");
 });
 
+test("a frame rendered in full for a viewer draws no second thumbnail", async () => {
+	// the thumbnail was published with the frame; the replay is for the
+	// viewer's stages alone
+	const inspector = require("../lib/inspector.js");
+	const original = inspector.inspect;
+	const asked = [];
+	inspector.inspect = (req) => {
+		asked.push(req.cfg);
+		return original(req);
+	};
+	try {
+		const h = makeNode({ previewEnabled: true, previewWidth: 100 }, "gc-replay");
+		await h.run({ golden, payload: golden });
+		assert.deepStrictEqual(h.doneErrors, []);
+		assert.strictEqual(asked[asked.length - 1].thumbnailWidth, 100, "the frame drew its thumbnail");
+		const before = asked.length;
+		await watch(h, "gc-replay");
+		assert.strictEqual((await last(h, "gc-replay")).body.stages.length > 2, true, "rendered in full");
+		assert.strictEqual(asked.length, before + 1, "one replay");
+		assert.ok(!(asked[before].thumbnailWidth > 0), `the replay asked for a ${asked[before].thumbnailWidth} px thumbnail`);
+		await unwatch(h, "gc-replay");
+	} finally {
+		inspector.inspect = original;
+	}
+});
+
 test("stages asked for on the message do not stand in for a viewer's full render", async () => {
 	const h = makeNode({ previewEnabled: true, debugStages: true });
 	await h.run({ golden, payload: golden });
