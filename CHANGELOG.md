@@ -428,6 +428,18 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   The heat-map format and quality no longer re-prepare the golden when
   its debug stages are not baked in.
 
+- **The tone check costs about half as much.** On the same rig and set
+  its stage went from 17.6 to 10.3 ms median on a good frame at 12
+  workers (p95 45 to 26 ms) and from 43 to 37 ms on one, results again
+  identical to the bit. The pool's workers claim the check's cells and
+  rows a small chunk at a time instead of a fixed twelfth each, which a
+  worker the host had paused held the frame up for; a speck threshold
+  equal to the tone one, the default, shares its tables instead of being
+  tested again per pixel; the speck seeds are gathered from the rows the
+  comparison counted one in instead of a scan of the whole mask; the
+  golden's grey-to-level fractions are worked out once per golden; and
+  the defect and speck masks come from the frame's reused scratch.
+
 - **The `golden-compare` edit dialog is grouped into six collapsible
   sections** — Golden and profile, Ink, Alignment, Position, Blemish
   checks, Output and preview — with the two legacy file paths under
