@@ -1,5 +1,26 @@
 # Golden-compare: NodeRed-Test container benchmark
 
+## Native kernels (October 2026)
+
+Good frames: **67 → 46 ms median, 83 → 59 ms p95, 89 → 65 ms p99** with
+the native pool kernels (`native/kernels.cc`, linux-x64 prebuilds), against
+the second pass below. The same code with `VISION_TOOLS_KERNELS=js` measured
+64 / 80 / 90 ms. `msg.result` and every heat map identical to the bit on
+all 162 frames, native and JS kernels alike. Same method: two rounds of two
+passes over all 162 frames, base, native and JS interleaved, one job on
+the host at a time.
+
+Stage medians, before → native: alignment 41.5 → 29.6 (local align 11.2 →
+6.5, threshold with tone 10.1 → 4.2), diff 10.6 → 3.4, overlay 6.0 → 4.8
+(a raw overlay's canvas is now built on a worker beside the pool).
+
+The live flow, deployed and driven by its own good- and bad-frame injects
+(one frame every 3 s) with nothing else running on the host: good frames
+**47 ms median, 71 ms p95, 79 ms p99, 81 ms max**; 148/148 pass, 14/14
+fail. Two earlier live runs read 75-76 ms median and 155-237 ms p95 with
+slow frames in bursts: another job's test suites were running on the same
+host. A live check needs the host to itself as much as a bench does.
+
 ## Second pass (October 2026)
 
 Good frames: **91 → 67 ms median, 115 → 86 ms p95, 134 → 98 ms p99**

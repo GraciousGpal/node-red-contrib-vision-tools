@@ -704,6 +704,13 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Fixed
 
+- **A fractional `blockSize` is refused** with a `RangeError` from
+  `compareFrame`. It indexed the block grids by fractional pixels: half the
+  block rows counted nothing, and the heat maps left half their columns as
+  whatever the unzeroed buffer held, so two runs of the same frame could
+  differ. The node already clamps `blockSize` to a whole number from 4 to
+  256; only library callers could pass one.
+
 - **A node saved before a setting existed lost that setting's default in
   the editor.** Node-RED fills in nothing for a property an older node
   has no value for, so a box added since rendered unticked and a number
