@@ -4,3 +4,4 @@
 *.svg text eol=lf
 *.png binary
 *.jpg binary
+*.node binary
