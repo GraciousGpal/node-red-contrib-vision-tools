@@ -1,35 +1,32 @@
 /**
- * PROTOTYPE, opt-in: the OpenCV engine as our own addon over OpenCV 5
- * (native/opencv/vision-cv.cc), selected by VISION_TOOLS_ENGINE=own and
- * by nothing else - lib/engine.js's "auto" never picks it.
+ * @graciousstar/opencv5: a handful of OpenCV 5 vision ops on raw image
+ * buffers - colorConvert, resize, filter (otsu, edge), crop, rotate and
+ * imageAlign (ORB + RANSAC affine, ECC refinement) - over a small static
+ * OpenCV in a plain N-API addon (native/opencv5.cc). Not general OpenCV
+ * bindings.
  *
- * Why it exists: the rosepetal cpp-bridge is built for AVX2 (it can take
- * a pre-2013 x64 CPU down with an illegal instruction), has no win32
- * build (Windows falls to the opencv.js WASM build, which fails after a
- * few dozen large-frame alignments), and finds a golden's cached
- * features by hashing 768 of its bytes. This one is built for each arch's
- * baseline with the wider loops picked at run time, has a Windows build,
- * and keys a golden's features by the identity of its buffer.
+ * Every op is async and checks every length against the dimensions before
+ * native code touches a byte. The argument positions and reply shapes are
+ * those of the @rosepetal/node-red-contrib-image-tools cpp-bridge, which
+ * this replaces for node-red-contrib-vision-tools: raw images in and out
+ * as { data, width, height, channels, colorSpace, dtype }. An encoded
+ * Buffer at colorConvert and a non-raw `fmt` go through sharp, so OpenCV
+ * carries no codecs.
  *
- * Same op surface, argument positions and reply shapes as the bridge and
- * lib/cvjs.js, so lib/nativeSeed.js and lib/labelCrop.js take it
- * unchanged. Raw images in and out; an encoded Buffer at colorConvert and
- * a non-raw `fmt` go through sharp, as in lib/cvjs.js, so OpenCV carries
- * no codecs.
+ * Each binary is built for its arch's baseline and nothing else
+ * (x86-64-v2, NEON): it runs on any CPU of its arch and gives the same
+ * bytes on every one. It keys a reference image's ORB features by the
+ * identity of its buffer, so they are found once per reference.
  *
- * Where results can differ from the bridge's (OpenCV 5 against its 4.x,
- * and no fast-math), not just their timing: alignment moves by hundredths
- * of a pixel (bench numbers in the commit that added this), and
- * rotate()'s bilinear warp follows OpenCV 5's revised interpolation.
- *
- * The addon: prebuilds/<platform>-<arch>/vision-cv[.glibc|.musl].node,
- * checked against prebuilds/manifest.json before it is loaded, as
- * lib/nativeKernels.js does; or VISION_TOOLS_CV_ADDON=<path>, loaded
+ * The addon: prebuilds/<platform>-<arch>/opencv5[.glibc|.musl].node,
+ * checked against prebuilds/manifest.json (size and SHA-256) before it is
+ * opened - dlopen of a truncated shared object can take the process down
+ * before any error reaches JavaScript; or OPENCV5_ADDON=<path>, loaded
  * unchecked, for a local build.
  *
  * imageAlign()'s reply image is a buffer this thread reuses: it holds
- * until the event loop's next turn after the reply (lib/nativeSeed.js
- * copies out of it at once), not for as long as the caller keeps it.
+ * until the event loop's next turn after the reply, not for as long as
+ * the caller keeps it - copy out of it at once.
  */
 
 "use strict";
@@ -39,9 +36,8 @@ const fs = require("node:fs");
 const path = require("node:path");
 const { performance } = require("node:perf_hooks");
 
-const ROOT = path.join(__dirname, "..");
-const PREBUILDS = path.join(ROOT, "prebuilds");
-// native/opencv/vision-cv.cc VT_CV_ABI
+const PREBUILDS = path.join(__dirname, "prebuilds");
+// native/opencv5.cc OPENCV5_ABI
 const ABI = 1;
 
 function libc() {
@@ -50,15 +46,16 @@ function libc() {
 	return fs.existsSync(`/lib/ld-musl-${arch}.so.1`) ? "musl" : "glibc";
 }
 
+/** The binaries this host could load, best first. */
 function candidates() {
-	if (process.env.VISION_TOOLS_CV_ADDON) return [path.resolve(process.env.VISION_TOOLS_CV_ADDON)];
+	if (process.env.OPENCV5_ADDON) return [path.resolve(process.env.OPENCV5_ADDON)];
 	const dir = path.join(PREBUILDS, `${process.platform}-${process.arch}`);
 	const tag = libc();
 	const tags = tag === "" ? [""] : tag === "musl" ? [".musl", ".glibc"] : [".glibc", ".musl"];
-	return tags.map((t) => path.join(dir, `vision-cv${t}.node`));
+	return tags.map((t) => path.join(dir, `opencv5${t}.node`));
 }
 
-/** Why a prebuild must not be loaded, or null (lib/nativeKernels.js). */
+/** Why a prebuild must not be loaded, or null. */
 function unverified(file) {
 	let manifest;
 	try {
@@ -79,11 +76,12 @@ function unverified(file) {
 let addon;
 let loadError = null;
 
-/** The addon, or a throw saying why not. Once per thread. */
+/** The addon, or a throw saying why not. Once per thread (a worker
+ * thread loads its own instance). */
 function load() {
 	if (addon) return addon;
 	if (loadError) throw loadError;
-	const explicit = Boolean(process.env.VISION_TOOLS_CV_ADDON);
+	const explicit = Boolean(process.env.OPENCV5_ADDON);
 	const files = candidates().filter((f) => fs.existsSync(f));
 	const reasons = [];
 	for (const file of files) {
@@ -91,21 +89,22 @@ function load() {
 			const bad = explicit ? null : unverified(file);
 			if (bad) throw new Error(bad);
 			const a = require(file);
-			if (a.abi !== ABI) throw new Error(`vision-cv ABI ${a.abi}, expected ${ABI}`);
+			if (a.abi !== ABI) throw new Error(`opencv5 ABI ${a.abi}, expected ${ABI}`);
 			addon = a;
 			return addon;
 		} catch (err) {
-			reasons.push(`${path.relative(ROOT, file)}: ${err.message.split("\n")[0]}`);
+			reasons.push(`${path.relative(__dirname, file)}: ${err.message.split("\n")[0]}`);
 		}
 	}
 	loadError = new Error(
 		reasons.length
 			? reasons.join("; ")
-			: `no vision-cv addon for ${process.platform}-${process.arch}${libc() ? ` (${libc()})` : ""}`,
+			: `no opencv5 binary for ${process.platform}-${process.arch}${libc() ? ` (${libc()})` : ""}`,
 	);
 	throw loadError;
 }
 
+/** True when the addon loads here. */
 function available() {
 	try {
 		load();
@@ -115,11 +114,13 @@ function available() {
 	}
 }
 
+/** Resolves once the addon is loaded (it loads synchronously; this is for
+ * callers that expect an engine to have a ready()). */
 async function ready() {
 	return load();
 }
 
-/** Test seam: forget the load. */
+/** Test seam: forget the load, so OPENCV5_ADDON is read again. */
 function _reset() {
 	addon = undefined;
 	loadError = null;
@@ -131,22 +132,28 @@ const COLOR_SPACE_BY_CHANNELS = { 1: "GRAY", 3: "RGB", 4: "RGBA" };
 
 function describeRaw(image) {
 	if (!image || typeof image !== "object" || !ArrayBuffer.isView(image.data)) {
-		throw new Error("ownCv: expected a raw { data, width, height, channels } image");
+		throw new Error("opencv5: expected a raw { data, width, height, channels } image");
 	}
 	const width = Number(image.width);
 	const height = Number(image.height);
 	if (!Number.isInteger(width) || width <= 0 || !Number.isInteger(height) || height <= 0) {
-		throw new Error("ownCv: raw width and height must be positive integers");
+		throw new Error("opencv5: raw width and height must be positive integers");
 	}
 	if (image.dtype !== undefined && image.dtype !== "uint8") {
-		throw new Error(`ownCv: dtype ${image.dtype} is not supported (uint8 only)`);
+		throw new Error(`opencv5: dtype ${image.dtype} is not supported (uint8 only)`);
 	}
 	const channels = Number(image.channels || (image.colorSpace === "GRAY" ? 1 : 3));
-	if (!COLOR_SPACE_BY_CHANNELS[channels]) throw new Error(`ownCv: unsupported channel count ${channels}`);
+	if (!COLOR_SPACE_BY_CHANNELS[channels]) throw new Error(`opencv5: unsupported channel count ${channels}`);
 	const colorSpace = String(image.colorSpace || COLOR_SPACE_BY_CHANNELS[channels]).toUpperCase();
 	const bytes = width * height * channels;
 	const { data } = image;
-	if (data.byteLength < bytes) throw new Error(`ownCv: raw data is shorter than ${width}x${height}x${channels}`);
+	if (data.byteLength < bytes) throw new Error(`opencv5: raw data is shorter than ${width}x${height}x${channels}`);
+	// an op reads (and otsu writes) on a pool thread after this returns: a
+	// store that can shrink meanwhile is refused (the addon refuses a
+	// detached one)
+	if (data.buffer.resizable || data.buffer.growable) {
+		throw new Error("opencv5: raw data on a resizable or growable buffer is not supported");
+	}
 	const view = new Uint8Array(data.buffer, data.byteOffset, bytes);
 	return { view, width, height, channels, colorSpace };
 }
@@ -168,12 +175,12 @@ function timing(t0, op, reply) {
 	return {
 		totalMs: performance.now() - t0,
 		taskMs: reply && reply.timing ? reply.timing.taskMs : undefined,
-		engine: "own",
+		engine: "opencv5",
 		op,
 	};
 }
 
-// ---- codecs (sharp, as lib/cvjs.js) ------------------------------------
+// ---- codecs (sharp) ----------------------------------------------------
 
 let sharpModule;
 function getSharp() {
@@ -210,7 +217,7 @@ async function deliver(image, fmt, quality) {
 	if (fmt === "jpg" || fmt === "jpeg") return pipeline.jpeg({ quality: q }).toBuffer();
 	if (fmt === "png") return pipeline.png().toBuffer();
 	if (fmt === "webp") return pipeline.webp({ quality: q }).toBuffer();
-	throw new Error(`ownCv: unsupported output format "${fmt}"`);
+	throw new Error(`opencv5: unsupported output format "${fmt}"`);
 }
 
 // ---- ops ---------------------------------------------------------------
@@ -218,7 +225,7 @@ async function deliver(image, fmt, quality) {
 async function convert(raw, target) {
 	const cv = load();
 	const code = cv.colorCodes[`${raw.colorSpace}>${target}`];
-	if (code === undefined) throw new Error(`ownCv: no conversion from ${raw.colorSpace} to ${target}`);
+	if (code === undefined) throw new Error(`opencv5: no conversion from ${raw.colorSpace} to ${target}`);
 	const channels = CHANNELS_OF[target];
 	const out = Buffer.allocUnsafeSlow(raw.width * raw.height * channels);
 	const reply = await cv.cvtColor(raw.view, raw.width, raw.height, raw.channels, code, out, channels);
@@ -229,7 +236,7 @@ async function convert(raw, target) {
 async function colorConvert(image, targetColorSpace, fmt, quality) {
 	const t0 = performance.now();
 	const target = String(targetColorSpace || "RGB").toUpperCase();
-	if (!CHANNELS_OF[target]) throw new Error(`ownCv: unsupported colour space ${target}`);
+	if (!CHANNELS_OF[target]) throw new Error(`opencv5: unsupported colour space ${target}`);
 	const raw = describeRaw(Buffer.isBuffer(image) ? await decodeBuffer(image) : image);
 	if (raw.colorSpace === target) {
 		const copy = Buffer.allocUnsafeSlow(raw.view.byteLength);
@@ -243,19 +250,19 @@ async function colorConvert(image, targetColorSpace, fmt, quality) {
 	return { image: await deliver(out, fmt, quality), timing: timing(t0, "colorConvert", reply) };
 }
 
-/** lib/cvjs.js resolveDimension: num, pct/percent, scale; 0/NaN = keep aspect. */
+/** A target size: num, pct/percent, scale/multiply; 0/NaN keeps the aspect ratio. */
 function resolveDimension(mode, value, source) {
 	const n = Number(value);
 	if (mode === "pct" || mode === "percent") {
-		if (!Number.isFinite(n) || n <= 0) throw new Error(`ownCv: resize needs a positive percentage, got ${value}`);
+		if (!Number.isFinite(n) || n <= 0) throw new Error(`opencv5: resize needs a positive percentage, got ${value}`);
 		return Math.max(1, Math.round(source * (n / 100)));
 	}
 	if (mode === "scale" || mode === "multiply") {
-		if (!Number.isFinite(n) || n <= 0) throw new Error(`ownCv: resize needs a positive scale factor, got ${value}`);
+		if (!Number.isFinite(n) || n <= 0) throw new Error(`opencv5: resize needs a positive scale factor, got ${value}`);
 		return Math.max(1, Math.round(source * n));
 	}
 	if (n === 0 || Number.isNaN(n)) return null;
-	if (!Number.isFinite(n) || n < 0) throw new Error(`ownCv: resize needs a positive size, got ${value}`);
+	if (!Number.isFinite(n) || n < 0) throw new Error(`opencv5: resize needs a positive size, got ${value}`);
 	return Math.max(1, Math.round(n));
 }
 
@@ -266,7 +273,7 @@ async function resize(image, wMode, wVal, hMode, hVal, fmt, quality) {
 	const raw = describeRaw(image);
 	let width = resolveDimension(wMode, wVal, raw.width);
 	let height = resolveDimension(hMode, hVal, raw.height);
-	if (width === null && height === null) throw new Error("ownCv: resize needs at least one positive size");
+	if (width === null && height === null) throw new Error("opencv5: resize needs at least one positive size");
 	if (width === null) width = Math.max(1, Math.round((height * raw.width) / raw.height));
 	if (height === null) height = Math.max(1, Math.round((width * raw.height) / raw.width));
 	const out = Buffer.allocUnsafeSlow(width * height * raw.channels);
@@ -280,15 +287,20 @@ async function resize(image, wMode, wVal, hMode, hVal, fmt, quality) {
 /**
  * filter(image, type, kernel, intensity, [fmt], [quality]) -> {image, timing}
  *
- * "otsu" and "edge" only, as lib/cvjs.js (its filter() explains both,
- * and why "otsu" blurs a single-channel input in place).
+ *   "otsu" - GaussianBlur(kernel, sigma 0), then a global Otsu threshold
+ *            to a 0/255 mask. The blurred copy is written back over a
+ *            single-channel input, as the rosepetal bridge did: callers
+ *            written against it (label-crop's boundary refinement) read
+ *            the blurred image afterwards.
+ *   "edge" - Sobel magnitude, |gx|/2 + |gy|/2 scaled by `intensity`; a
+ *            continuous grey map, not a binary edge map.
  */
 async function filter(image, type, kernel, intensity, fmt, quality) {
 	const t0 = performance.now();
 	const cv = load();
 	const kind = String(type || "").toLowerCase();
 	if (kind !== "otsu" && kind !== "edge") {
-		throw new Error(`ownCv: filter type "${type}" is not implemented (otsu, edge)`);
+		throw new Error(`opencv5: filter type "${type}" is not implemented (otsu, edge)`);
 	}
 	const k = Number.isFinite(kernel) && kernel >= 3 ? Math.round(kernel) | 1 : 3;
 	const weight = Number.isFinite(intensity) && intensity > 0 ? intensity : 1;
@@ -302,7 +314,7 @@ async function filter(image, type, kernel, intensity, fmt, quality) {
 	};
 }
 
-/** crop(image, x, y, w, h, normalized, [fmt], [quality]) -> {image, timing}; clamped as lib/cvjs.js */
+/** crop(image, x, y, w, h, normalized, [fmt], [quality]) -> {image, timing}; clamped into the frame */
 async function crop(image, x, y, w, h, normalized, fmt, quality) {
 	const t0 = performance.now();
 	const raw = describeRaw(image);
@@ -328,7 +340,7 @@ async function crop(image, x, y, w, h, normalized, fmt, quality) {
 	};
 }
 
-/** "#rrggbb" (anything else: black) to a pad colour, as lib/cvjs.js padScalar */
+/** "#rrggbb" (anything else: black) to a pad colour; a grey image takes its luma */
 function padColour(padColor, channels) {
 	let r = 0;
 	let g = 0;
@@ -350,8 +362,8 @@ function padColour(padColor, channels) {
  * rotate(image, angleDeg, [padColor], [fmt], [quality]) -> {image, timing}
  *
  * getRotationMatrix2D(centre, +angleDeg) into a canvas grown to hold the
- * rotated frame, re-centred - lib/cvjs.js rotate(), whose convention
- * lib/labelCrop.js predicts sizes and positions from.
+ * rotated frame (each side Math.trunc of the rotated extent), re-centred.
+ * INTER_LINEAR, the border in `padColor`.
  */
 async function rotate(image, angleDeg, padColor, fmt, quality) {
 	const t0 = performance.now();
@@ -383,10 +395,10 @@ async function rotate(image, angleDeg, padColor, fmt, quality) {
 
 // ---- alignment -------------------------------------------------------------
 
-// golden buffer -> Map("offset:WxH:scale" -> addon handle). A prepared
-// golden's grey is never rewritten (lib/compare.js shares it read-only
-// with every frame), so the buffer's identity is the golden's; the
-// handle, holding the golden's ORB features, goes with the buffer.
+// reference buffer -> Map("offset:WxH:scale" -> addon handle): the
+// reference's ORB features, found once and kept while the buffer lives.
+// Keyed by identity, so a caller must not rewrite a reference's bytes
+// and align against it again (a new reference is a new buffer).
 const goldens = new WeakMap();
 // this thread's reply image, reused while no other align is in flight:
 // a fresh 5 MP buffer a frame is pages to fault in every time
@@ -408,24 +420,28 @@ function goldenHandle(cv, ref, scale) {
  *   pngOptimize, returnImage, polygon, motion, pipeline, eccRefine, detector)
  *   -> { success, image, transformMatrix: { matrix2x3 }, timing }
  *
- * The bridge's imageAlign for what lib/nativeSeed.js asks of it: grey
- * images, affine motion, the "features+ecc" pipeline with ORB; anything
- * else is refused rather than approximated.
+ * The bridge's imageAlign, for grey images, affine motion and the
+ * "features+ecc" pipeline with ORB; anything else is refused rather than
+ * approximated. `scale` sizes the internal alignment copy; the matrix
+ * maps reference coordinates into the target resized to the reference's
+ * size, and the image is the target warped onto the reference (0 where
+ * it does not reach). eccRefine "always" runs ECC after the feature
+ * seed; "auto" skips it when the seed has 50 inliers or more.
  */
 async function imageAlign(reference, target, scale, iterations, epsilon, fmt, quality, pngOptimize, returnImage, polygon, motion, pipeline, eccRefine, detector) {
 	const t0 = performance.now();
 	const cv = load();
 	if ((motion || "affine") !== "affine" || (pipeline || "features+ecc") !== "features+ecc" || (detector || "orb") !== "orb" || polygon) {
 		throw new Error(
-			`ownCv: imageAlign supports affine, features+ecc, orb and no polygon (got ${motion}, ${pipeline}, ${detector}${polygon ? ", a polygon" : ""})`,
+			`opencv5: imageAlign supports affine, features+ecc, orb and no polygon (got ${motion}, ${pipeline}, ${detector}${polygon ? ", a polygon" : ""})`,
 		);
 	}
 	const ref = describeRaw(reference);
 	const tgt = describeRaw(target);
-	if (ref.channels !== 1 || tgt.channels !== 1) throw new Error("ownCv: imageAlign takes grey images");
+	if (ref.channels !== 1 || tgt.channels !== 1) throw new Error("opencv5: imageAlign takes grey images");
 	ref.data = reference.data;
 	const s = Number(scale);
-	if (!(s > 0 && s <= 1)) throw new Error(`ownCv: imageAlign scale must be in (0, 1], got ${scale}`);
+	if (!(s > 0 && s <= 1)) throw new Error(`opencv5: imageAlign scale must be in (0, 1], got ${scale}`);
 	const handle = goldenHandle(cv, ref, s);
 	const n = ref.width * ref.height;
 	let out;

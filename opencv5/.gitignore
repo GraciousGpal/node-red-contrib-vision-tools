@@ -1,0 +1,7 @@
+node_modules/
+# the OpenCV source and builds native/prebuild-linux.sh keeps
+.opencv-cache/
+.prebuild-*/
+# a node-gyp build (Windows)
+native/build/
+*.tgz

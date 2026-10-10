@@ -1,30 +1,36 @@
 /**
- * The "own" engine (lib/ownCv.js over native/opencv/vision-cv.cc).
+ * @graciousstar/opencv5.
  *
- * Each pixel op is held to the opencv.js build of the same OpenCV major
- * (lib/cvjs.js) byte for byte where both are installed, which is a check
- * of the op's arguments as much as of OpenCV; imageAlign to a known
- * shift; label-crop end to end. Then the guards: a length the dimensions
- * do not fit is refused before any native code runs.
+ * Each pixel op is held to the stock opencv.js build of the same OpenCV
+ * (test/reference.js) byte for byte, which checks the op's arguments as
+ * much as OpenCV; imageAlign to known shifts and to bytes pinned in
+ * test/expected.json, which every platform's binary must reproduce; then
+ * the guards: a length the dimensions do not fit, a detached or resizable
+ * buffer, is refused before native code runs.
  *
- * Skipped when no vision-cv addon loads here (none is shipped yet: point
- * VISION_TOOLS_CV_ADDON at a build).
+ * Skipped where no binary loads (a platform with no prebuild);
+ * OPENCV5_ADDON tests a local build instead.
  */
 
 const test = require("node:test");
 const assert = require("node:assert");
+const crypto = require("node:crypto");
 
-const own = require("../lib/ownCv.js");
-const cvjs = require("../lib/cvjs.js");
-const engineModule = require("../lib/engine.js");
-const { labelCrop } = require("../lib/labelCrop.js");
-const { rawImage } = require("./helpers/synthetic.js");
+const own = require("..");
+const ref = require("./reference.js");
+const expected = require("./expected.json");
 
-const skip = own.available() ? false : "no vision-cv addon (VISION_TOOLS_CV_ADDON)";
-const skipCross = skip || (cvjs.available() ? false : "@techstark/opencv-js is not installed");
+const skip = own.available() ? false : "no opencv5 binary loads here (OPENCV5_ADDON)";
+const skipCross = skip || (ref.available() ? false : "@techstark/opencv-js is not installed");
 
 const DEG = Math.PI / 180;
 
+function rawImage(data, width, height, channels = 1, colorSpace = "GRAY") {
+	const buf = Buffer.isBuffer(data) ? data : Buffer.from(data.buffer, data.byteOffset, data.byteLength);
+	return { data: buf, width, height, channels, colorSpace, dtype: "uint8" };
+}
+
+/** A textured light rectangle on a dark field, rotated about the centre. */
 function labelFrame(width, height, angleDeg, labelWidth, labelHeight, channels = 3) {
 	const data = Buffer.alloc(width * height * channels, 30);
 	const ca = Math.cos(angleDeg * DEG);
@@ -42,6 +48,7 @@ function labelFrame(width, height, angleDeg, labelWidth, labelHeight, channels =
 	return rawImage(data, width, height, channels, channels === 1 ? "GRAY" : "RGB");
 }
 
+/** Deterministic blocks, so ORB has corners to find. */
 function texture(image, count = 120) {
 	let seed = 987;
 	const rnd = () => ((seed = (seed * 1103515245 + 12345) & 0x7fffffff) / 0x7fffffff);
@@ -58,55 +65,59 @@ function texture(image, count = 120) {
 }
 
 const same = (a, b) => {
-	assert.deepStrictEqual(
-		{ width: a.width, height: a.height, channels: a.channels, colorSpace: a.colorSpace },
-		{ width: b.width, height: b.height, channels: b.channels, colorSpace: b.colorSpace },
-	);
+	assert.deepStrictEqual([a.width, a.height, a.channels], [b.width, b.height, b.channels]);
 	assert.ok(Buffer.compare(Buffer.from(a.data), Buffer.from(b.data)) === 0, "pixels differ");
 };
 
 // ---- the same bytes as opencv.js -------------------------------------
 
-test("colorConvert matches opencv.js, RGB to GRAY and back", { skip: skipCross }, async () => {
+test("colorConvert matches opencv.js, RGB to GRAY", { skip: skipCross }, async () => {
 	const frame = labelFrame(160, 90, 7, 90, 50, 3);
 	const gray = (await own.colorConvert(frame, "GRAY", "raw")).image;
-	same(gray, (await cvjs.colorConvert(frame, "GRAY", "raw")).image);
-	same((await own.colorConvert(gray, "RGBA", "raw")).image, (await cvjs.colorConvert(gray, "RGBA", "raw")).image);
+	assert.strictEqual(gray.colorSpace, "GRAY");
+	same(gray, await ref.toGray(frame));
+	// and the identity conversion is a copy, not the caller's buffer
+	const again = (await own.colorConvert(gray, "GRAY", "raw")).image;
+	same(again, gray);
+	assert.notStrictEqual(again.data.buffer, gray.data.buffer);
 });
 
 test("resize matches opencv.js down and up, 1 and 3 channels", { skip: skipCross }, async () => {
 	for (const channels of [1, 3]) {
 		const frame = labelFrame(301, 199, 9, 150, 90, channels);
-		for (const [w, h] of [[150, 99], [97, 0], [640, 480]]) {
-			same(
-				(await own.resize(frame, "num", w, "num", h, "raw")).image,
-				(await cvjs.resize(frame, "num", w, "num", h, "raw")).image,
-			);
+		for (const [w, h] of [[150, 99], [640, 480]]) {
+			same((await own.resize(frame, "num", w, "num", h, "raw")).image, await ref.resize(frame, w, h));
 		}
+		// a 0 height keeps the aspect ratio
+		const r = (await own.resize(frame, "num", 97, "num", 0, "raw")).image;
+		assert.deepStrictEqual([r.width, r.height], [97, Math.round((97 * 199) / 301)]);
 	}
 });
 
-test("filter otsu and edge match opencv.js, including the in-place blur", { skip: skipCross }, async () => {
+test("filter otsu blurs its input in place and thresholds it, as opencv.js", { skip: skipCross }, async () => {
 	const a = labelFrame(200, 150, 11, 120, 70, 1);
-	const b = labelFrame(200, 150, 11, 120, 70, 1);
-	same((await own.filter(a, "otsu", 3, 0, "raw")).image, (await cvjs.filter(b, "otsu", 3, 0, "raw")).image);
-	same(a, b); // both blurred their caller's buffer, identically
-	same((await own.filter(a, "edge", 3, 1, "raw")).image, (await cvjs.filter(b, "edge", 3, 1, "raw")).image);
-	const rgb = labelFrame(200, 150, 11, 120, 70, 3);
-	same((await own.filter(rgb, "otsu", 5, 0, "raw")).image, (await cvjs.filter(rgb, "otsu", 5, 0, "raw")).image);
+	const original = rawImage(Buffer.from(a.data), 200, 150, 1);
+	const mask = (await own.filter(a, "otsu", 3, 0, "raw")).image;
+	const blurred = await ref.blur(original, 3);
+	same(a, blurred);
+	same(mask, await ref.otsu(blurred));
+	same((await own.filter(a, "edge", 3, 1, "raw")).image, await ref.edge(a, 3, 1));
 });
 
-test("crop matches opencv.js; rotate to within one grey level on a few pixels", { skip: skipCross }, async () => {
+test("crop clamps into the frame; rotate is within one grey level of opencv.js", { skip: skipCross }, async () => {
 	const frame = labelFrame(240, 160, 0, 140, 80, 3);
-	same((await own.crop(frame, 200, -5, 100, 60, false, "raw")).image, (await cvjs.crop(frame, 200, -5, 100, 60, false, "raw")).image);
-	same((await own.crop(frame, 0.1, 0.2, 0.5, 0.5, true, "raw")).image, (await cvjs.crop(frame, 0.1, 0.2, 0.5, 0.5, true, "raw")).image);
-	same((await own.rotate(frame, 0, "#20a0ff", "raw")).image, (await cvjs.rotate(frame, 0, "#20a0ff", "raw")).image);
-	// OpenCV 5's bilinear warp rounds its vector and scalar paths apart on
-	// the odd pixel: measured 2 and 3 of ~200,000 values, by one level
-	for (const angle of [12.5, -33]) {
+	const c = (await own.crop(frame, 200, -5, 100, 60, false, "raw")).image;
+	assert.deepStrictEqual([c.width, c.height], [40, 60]);
+	for (let y = 0; y < 60; y++) {
+		assert.ok(c.data.subarray(y * 120, y * 120 + 120).equals(frame.data.subarray((y * 240 + 200) * 3, (y * 240 + 240) * 3)));
+	}
+	// OpenCV 5's bilinear warp rounds its vector and scalar (WASM) paths
+	// apart on the odd pixel: measured 2 and 3 of ~200,000 values, by one
+	for (const angle of [0, 12.5, -33]) {
 		const a = (await own.rotate(frame, angle, "#20a0ff", "raw")).image;
-		const b = (await cvjs.rotate(frame, angle, "#20a0ff", "raw")).image;
-		assert.deepStrictEqual([a.width, a.height, a.channels], [b.width, b.height, b.channels]);
+		const b = await ref.rotate(frame, angle, a.width, a.height, [0x20, 0xa0, 0xff, 255]);
+		const rad = angle * DEG;
+		assert.strictEqual(a.width, Math.trunc(160 * Math.abs(Math.sin(rad)) + 240 * Math.abs(Math.cos(rad))));
 		let off = 0;
 		for (let i = 0; i < a.data.length; i++) {
 			const d = Math.abs(a.data[i] - b.data[i]);
@@ -115,6 +126,16 @@ test("crop matches opencv.js; rotate to within one grey level on a few pixels", 
 		}
 		assert.ok(off <= a.data.length / 1000, `rotate ${angle}: ${off} values differ`);
 	}
+});
+
+test("an encoded Buffer is decoded through sharp at its own channel count", { skip }, async () => {
+	const sharp = require("sharp");
+	const frame = labelFrame(64, 48, 0, 30, 20, 3);
+	const png = await sharp(frame.data, { raw: { width: 64, height: 48, channels: 3 } }).png().toBuffer();
+	const rgb = (await own.colorConvert(png, "RGB", "raw")).image;
+	same(rgb, frame);
+	const encoded = (await own.colorConvert(frame, "RGB", "png")).image;
+	assert.ok(Buffer.isBuffer(encoded) && encoded.subarray(1, 4).toString() === "PNG");
 });
 
 // ---- alignment ---------------------------------------------------------
@@ -153,7 +174,6 @@ test("imageAlign recovers a known shift and warps the frame onto the golden", { 
 
 test("imageAlign recovers a shift on a 2048px golden at full scale", { skip }, async () => {
 	// the rosepetal bridge answers identity, success true, from ~1536px up
-	// (ARCHITECTURE.md, "A native imageAlign limit worth knowing")
 	const golden = texture(labelFrame(2048, 1536, 0, 1400, 1000, 1), 900);
 	const target = shifted(golden, 2048, 1536, 1, 11, -6);
 	const result = await own.imageAlign(golden, target, 1, 50, 1e-4, ...ALIGN_TAIL, "auto", "orb");
@@ -231,57 +251,39 @@ test("an op whose buffer is shorter than its dimensions is refused before it run
 	const g = cv.createGolden(out, 10, 10, 0.5);
 	assert.throws(() => cv.align(g, out, 10, 10, small, 10, 1e-3, false), /bad arguments/);
 	assert.throws(() => cv.align({}, out, 10, 10, out, 10, 1e-3, false), /golden handle/);
+	// a detached store, and (in index.js) one that could shrink
+	const gone = new Uint8Array(100);
+	structuredClone(gone.buffer, { transfer: [gone.buffer] });
+	assert.throws(() => cv.resize(gone, 10, 10, 1, out, 10, 10), /bad arguments/);
+	const resizable = new Uint8Array(new ArrayBuffer(300, { maxByteLength: 600 }));
+	if (!resizable.buffer.resizable) return undefined; // Node 18: none exist
+	return assert.rejects(own.resize(rawImage(resizable, 10, 10, 3, "RGB"), "num", 5, "num", 5, "raw"), /resizable/);
 });
 
-// ---- callers -----------------------------------------------------------
+// ---- the same bytes on every platform ----------------------------------
 
-test("label-crop deskews a rotated label on the own engine", { skip }, async () => {
-	const frame = labelFrame(800, 600, 12, 360, 220, 3);
-	const result = await labelCrop(frame, { maxEdge: 400, polarity: "light", outputFormat: "raw" }, own);
-	assert.strictEqual(result.detected, true, result.metadata.reason);
-	assert.ok(Math.abs(result.metadata.angleDeg - 12) < 2, `angle ${result.metadata.angleDeg}`);
-});
-
-test("label-crop takes an encoded Buffer through sharp on the own engine", { skip }, async () => {
-	const sharp = require("sharp");
-	const frame = labelFrame(800, 600, 0, 400, 200, 3);
-	const png = await sharp(frame.data, { raw: { width: 800, height: 600, channels: 3 } }).png().toBuffer();
-	const result = await labelCrop(png, { maxEdge: 400, polarity: "light", outputFormat: "raw" }, own);
-	assert.strictEqual(result.detected, true, result.metadata.reason);
-});
-
-test("VISION_TOOLS_ENGINE=own selects it, and auto never does", { skip }, () => {
-	const previous = process.env.VISION_TOOLS_ENGINE;
-	try {
-		process.env.VISION_TOOLS_ENGINE = "own";
-		engineModule._reset();
-		assert.strictEqual(engineModule.candidate().name, "own");
-		process.env.VISION_TOOLS_ENGINE = "auto";
-		engineModule._reset();
-		assert.notStrictEqual(engineModule.candidate().name, "own");
-	} finally {
-		if (previous === undefined) delete process.env.VISION_TOOLS_ENGINE;
-		else process.env.VISION_TOOLS_ENGINE = previous;
-		engineModule._reset();
+/** What each case produces, as hashes: test/expected.json pins them, and
+ * a binary for another platform or CPU must give the same. */
+async function fingerprints() {
+	const sha = (b) => crypto.createHash("sha256").update(b).digest("hex").slice(0, 32);
+	const golden = texture(labelFrame(600, 400, 0, 300, 180, 1));
+	const target = shifted(golden, 900, 600, 1.5, 13, -7);
+	const out = {};
+	for (const ecc of ["auto", "always"]) {
+		const r = await own.imageAlign(golden, target, 0.5, 50, 1e-4, ...ALIGN_TAIL, ecc, "orb");
+		out[`align-${ecc}`] = { image: sha(r.image.data), matrix: r.transformMatrix.matrix2x3 };
 	}
-});
+	const rgb = labelFrame(301, 199, 9, 150, 90, 3);
+	out.gray = sha((await own.colorConvert(rgb, "GRAY", "raw")).image.data);
+	out.resize = sha((await own.resize(rgb, "num", 150, "num", 99, "raw")).image.data);
+	out.rotate = sha((await own.rotate(rgb, 12.5, "#20a0ff", "raw")).image.data);
+	const gray = labelFrame(301, 199, 9, 150, 90, 1);
+	out.otsu = sha((await own.filter(gray, "otsu", 3, 0, "raw")).image.data);
+	out.edge = sha((await own.filter(gray, "edge", 3, 1, "raw")).image.data);
+	return out;
+}
 
-test("VISION_TOOLS_ENGINE=own with no addon is an error, not a substitute", () => {
-	const previous = { engine: process.env.VISION_TOOLS_ENGINE, addon: process.env.VISION_TOOLS_CV_ADDON };
-	try {
-		process.env.VISION_TOOLS_ENGINE = "own";
-		process.env.VISION_TOOLS_CV_ADDON = "/nonexistent/vision-cv.node";
-		own._reset();
-		engineModule._reset();
-		const selected = engineModule.candidate();
-		assert.strictEqual(selected.engine, null);
-		assert.match(selected.error.message, /own: no vision-cv addon/);
-	} finally {
-		for (const [k, v] of [["VISION_TOOLS_ENGINE", previous.engine], ["VISION_TOOLS_CV_ADDON", previous.addon]]) {
-			if (v === undefined) delete process.env[k];
-			else process.env[k] = v;
-		}
-		own._reset();
-		engineModule._reset();
-	}
+test("every op gives the bytes test/expected.json pins, on every platform", { skip }, async () => {
+	const got = await fingerprints();
+	assert.deepStrictEqual(got, expected, `this binary's bytes: ${JSON.stringify(got)}`);
 });

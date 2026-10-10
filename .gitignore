@@ -27,8 +27,6 @@ Thumbs.db
 .vscode/
 .idea/
 
-# the OpenCV source and builds native/opencv/prebuild-linux.sh keeps
-.opencv-cache/
-.prebuild-cv-*/
-# vision-cv binaries stay out of git until how they ship is decided
-prebuilds/*/vision-cv*.node
+# opencv5/ is @graciousstar/opencv5, to move to its own repo; its binaries
+# ship in that package, not in this one (its own .gitignore covers the rest)
+opencv5/prebuilds/*/*.node

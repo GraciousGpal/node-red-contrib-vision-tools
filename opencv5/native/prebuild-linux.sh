@@ -1,27 +1,30 @@
 #!/bin/sh
-# Build the vision-cv addon for Linux in the same pinned images as the
-# native kernels (native/prebuild-linux.sh):
+# Build the addon for Linux in an image pinned by digest, so the same
+# source gives the same bytes (prebuilds/manifest.json; CI rebuilds the
+# x64 ones and fails on any difference):
 #
-#   sh native/opencv/prebuild-linux.sh x64|arm64 glibc|musl
+#   sh native/prebuild-linux.sh x64|arm64 glibc|musl
+#
+# glibc: manylinux2014 (CentOS 7, glibc 2.17 - past its end of life, kept
+#        because one binary then loads on any glibc from 2.17 on; GCC 10)
+# musl:  musllinux_1_2 (Alpine, GCC 14)
+# headers: node-api-headers 1.9.0 (node_api.h alone; the binary links no
+#        Node)
 #
 # Two steps, both inside the image: the static OpenCV 5 (build-opencv.sh,
 # the slow one - minutes) and the addon linked against it (build.sh,
-# seconds). The OpenCV install is kept in $VISION_CV_CACHE (default
-# .opencv-cache/ at the repo root, ignored by git) under a key of the
+# seconds). The OpenCV install is kept in $OPENCV5_CACHE (default
+# .opencv-cache/ at the package root, ignored by git) under a key of the
 # image digest, the OpenCV tarball's SHA-256 and build-opencv.sh's own
-# hash, so only a change to one of those rebuilds it (a CI job would cache
-# the directory on the same key; none does yet). VISION_CV_CACHE is a
-# path relative to the repo root, without spaces: the container sees it
-# under the repo's mount.
+# hash, so only a change to one of those rebuilds it; CI caches the
+# directory on the same key. OPENCV5_CACHE is a path relative to the
+# package root, without spaces: the container sees it under that mount.
 #
 # The OpenCV source is the 5.0.0 release tarball from GitHub, checked
 # against the SHA-256 below before anything is built from it.
 #
-# Writes prebuilds/linux-<arch>/vision-cv.<libc>.node. Built and tested so
-# far: x64 glibc and musl. The arm64 images are the kernels' and untried
-# for this build. Until the binaries ship, one left under prebuilds/ is
-# not in prebuilds/manifest.json and fails test/nativeKernelsLoader.test.js:
-# move it out, or point VISION_TOOLS_CV_ADDON at it from elsewhere.
+# Needs docker and npm on the host; writes
+# prebuilds/linux-<arch>/opencv5.<libc>.node.
 set -eu
 arch=$1
 libc=$2
@@ -34,10 +37,10 @@ arm64-musl) image=quay.io/pypa/musllinux_1_2_aarch64@sha256:83a69fa8383ba5ac2d4f
 esac
 OPENCV_VERSION=5.0.0
 OPENCV_SHA256=b0528f5a1d379d59d4701cb28c36e22214cc51cf64594e5b56f2d3e6c0233095
-cd "$(dirname "$0")/../.."
-cache=${VISION_CV_CACHE:-.opencv-cache}
+cd "$(dirname "$0")/.."
+cache=${OPENCV5_CACHE:-.opencv-cache}
 case "$cache" in
-/* | *:* | *" "* | *..*) echo "prebuild-linux.sh: VISION_CV_CACHE must be a relative path inside the repo, without spaces" >&2; exit 2 ;;
+/* | *:* | *" "* | *..*) echo "prebuild-linux.sh: OPENCV5_CACHE must be a relative path inside the repo, without spaces" >&2; exit 2 ;;
 esac
 mkdir -p "$cache" "prebuilds/linux-$arch"
 tarball=$cache/opencv-$OPENCV_VERSION.tar.gz
@@ -50,9 +53,9 @@ if [ "$got" != "$OPENCV_SHA256" ]; then
 	echo "prebuild-linux.sh: $tarball has SHA-256 $got, expected $OPENCV_SHA256" >&2
 	exit 1
 fi
-key=$(printf '%s %s %s' "$image" "$OPENCV_SHA256" "$(sha256sum native/opencv/build-opencv.sh | cut -d' ' -f1)" | sha256sum | cut -c1-16)
+key=$(printf '%s %s %s' "$image" "$OPENCV_SHA256" "$(sha256sum native/build-opencv.sh | cut -d' ' -f1)" | sha256sum | cut -c1-16)
 prefix=opencv-$OPENCV_VERSION-$arch-$libc-$key
-work=.prebuild-cv-$arch-$libc
+work=.prebuild-$arch-$libc
 rm -rf "$work"
 mkdir -p "$work"
 (cd "$work" && npm pack --silent node-api-headers@1.9.0 >/dev/null && tar xzf node-api-headers-1.9.0.tgz)
@@ -63,14 +66,14 @@ host=$(command -v cygpath >/dev/null 2>&1 && cygpath -m "$PWD" || echo "$PWD")
 docker run --rm -v "$host:/w" "$image" sh -c "
 	set -e
 	if [ ! -f /w/$cache/$prefix/.complete ]; then
-		sh /w/native/opencv/build-opencv.sh /w/$tarball /opt/opencv && touch /opt/opencv/.complete
+		sh /w/native/build-opencv.sh /w/$tarball /opt/opencv && touch /opt/opencv/.complete
 		rm -rf /w/$cache/$prefix.part && cp -r /opt/opencv /w/$cache/$prefix.part
 		mv /w/$cache/$prefix.part /w/$cache/$prefix
 	else
 		cp -r /w/$cache/$prefix /opt/opencv
 	fi
-	cp -r /w/native/opencv /tmp/src && cp -r /w/$work/package/include /tmp/include
+	cp -r /w/native /tmp/src && cp -r /w/$work/package/include /tmp/include
 	sh /tmp/src/build.sh /tmp/out.node /tmp/include /opt/opencv
-	cp /tmp/out.node /w/prebuilds/linux-$arch/vision-cv.$libc.node
-	chmod 644 /w/prebuilds/linux-$arch/vision-cv.$libc.node"
+	cp /tmp/out.node /w/prebuilds/linux-$arch/opencv5.$libc.node
+	chmod 644 /w/prebuilds/linux-$arch/opencv5.$libc.node"
 rm -rf "$work"

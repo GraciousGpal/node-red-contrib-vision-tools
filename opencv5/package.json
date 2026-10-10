@@ -1,0 +1,45 @@
+{
+  "name": "@graciousstar/opencv5",
+  "version": "0.1.0",
+  "description": "A few OpenCV 5 vision ops on raw image buffers - colorConvert, resize, filter, crop, rotate, ORB+ECC imageAlign - as a prebuilt N-API addon: async, bounds-checked, the same bytes on every CPU.",
+  "license": "Apache-2.0",
+  "author": "GraciousStar",
+  "keywords": [
+    "opencv",
+    "image",
+    "vision",
+    "alignment",
+    "orb",
+    "ecc",
+    "n-api",
+    "prebuilt"
+  ],
+  "repository": {
+    "type": "git",
+    "url": "git+https://github.com/GraciousGpal/opencv5.git"
+  },
+  "bugs": {
+    "url": "https://github.com/GraciousGpal/opencv5/issues"
+  },
+  "homepage": "https://github.com/GraciousGpal/opencv5#readme",
+  "main": "index.js",
+  "engines": {
+    "node": ">=18"
+  },
+  "scripts": {
+    "test": "node --test"
+  },
+  "dependencies": {
+    "sharp": "^0.35.3"
+  },
+  "devDependencies": {
+    "@techstark/opencv-js": "^5.0.0-release.1"
+  },
+  "files": [
+    "index.js",
+    "prebuilds/",
+    "README.md",
+    "LICENSE",
+    "NOTICE"
+  ]
+}

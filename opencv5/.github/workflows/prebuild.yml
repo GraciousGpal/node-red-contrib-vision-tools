@@ -1,0 +1,308 @@
+# Builds the addon for all seven platforms the package ships a binary
+# for, tests each binary on its own platform, and collects them into one
+# `prebuilds` artifact in the layout index.js loads from, with the
+# manifest it checks them against:
+#
+#   prebuilds/<platform>-<arch>/opencv5[.glibc|.musl].node
+#   prebuilds/manifest.json
+#
+# It builds and tests only; nothing is committed or published from here.
+# Each job first builds a static OpenCV 5 (several minutes on a hosted
+# runner) and caches it under a key of native/build-opencv.sh and
+# native/prebuild-linux.sh, which pin the image digests and the OpenCV
+# tarball's SHA-256, so it is rebuilt only when one of them changes.
+# The Linux binaries are built in images pinned by digest, so the same
+# source gives the same bytes: the x64 jobs fail when a rebuild differs
+# from the committed manifest. Every job also runs the test that pins each
+# op's output bytes (test/expected.json): every platform must give the
+# same.
+#
+# Written from the documentation of the runners, actions and images; it
+# has not run yet, so expect the first run to need fixes.
+
+name: prebuild
+
+on:
+  workflow_dispatch:
+  # any branch, so a feature branch's push produces the arm64 and macOS
+  # binaries a workstation cannot build; a tag push builds a release
+  push:
+    branches: ["**"]
+    tags: ["v*"]
+  pull_request:
+
+permissions:
+  contents: read
+
+env:
+  # Fails the job when the binary just built did not load: the tests skip
+  # themselves where it does not, and would pass
+  CHECK: >-
+    require('./index.js').load();
+    console.log('opencv5 binary loaded');
+
+defaults:
+  run:
+    # bash on Windows too, so the steps read the same everywhere
+    shell: bash
+
+jobs:
+  linux:
+    name: linux-${{ matrix.arch }} (${{ matrix.libc }})
+    runs-on: ${{ matrix.runner }}
+    timeout-minutes: 60
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - { arch: x64, libc: glibc, runner: ubuntu-24.04 }
+          - { arch: x64, libc: musl, runner: ubuntu-24.04 }
+          - { arch: arm64, libc: glibc, runner: ubuntu-24.04-arm }
+          - { arch: arm64, libc: musl, runner: ubuntu-24.04-arm }
+    env:
+      OUT: prebuilds/linux-${{ matrix.arch }}/opencv5.${{ matrix.libc }}.node
+    steps:
+      - uses: actions/checkout@v7
+
+      - uses: actions/setup-node@v7
+        with:
+          node-version: 22
+
+      - name: Check the runner is the arch being built
+        run: test "$(node -p 'process.platform + "-" + process.arch')" = "linux-${{ matrix.arch }}"
+
+      # prebuild-linux.sh names the install directory by its own key (image
+      # digest, tarball SHA-256, build-opencv.sh), so a stale restore is
+      # never used by mistake
+      - uses: actions/cache@v4
+        with:
+          path: .opencv-cache
+          key: opencv-linux-${{ matrix.arch }}-${{ matrix.libc }}-${{ hashFiles('native/build-opencv.sh', 'native/prebuild-linux.sh') }}
+
+      - name: Build OpenCV and the addon in the pinned image
+        run: |
+          rm -f "$OUT"
+          sh native/prebuild-linux.sh ${{ matrix.arch }} ${{ matrix.libc }}
+          ls -l "$OUT"
+
+      - name: Check the rebuild is the committed binary
+        if: matrix.arch == 'x64'
+        run: node native/manifest.js --check "$OUT"
+
+      - name: Check no symbol needs a glibc newer than 2.17
+        if: matrix.libc == 'glibc'
+        run: |
+          v=$(objdump -T "$OUT" | grep -o 'GLIBC_[0-9.]*' | sed 's/^GLIBC_//' | sort -uV | tail -1)
+          echo "highest glibc symbol version: ${v:-none}"
+          top=$(printf '%s\n2.17\n' "$v" | sort -V | tail -1)
+          if [ "$top" != "2.17" ]; then
+            echo "::error::$OUT needs glibc $v, newer than 2.17"
+            exit 1
+          fi
+
+      # The loader checks every prebuild against the manifest, so the one
+      # just built must be in it
+      - name: List the binary in the manifest
+        run: node native/manifest.js > /dev/null
+
+      - name: Test on the host (glibc)
+        if: matrix.libc == 'glibc'
+        run: |
+          npm install --no-audit --no-fund
+          node -e "$CHECK"
+          npm test
+
+      # docker run rather than a `container:` job: the runner's JavaScript
+      # actions need a glibc Node, which an Alpine container does not have
+      - name: Test in node:22-alpine (musl)
+        if: matrix.libc == 'musl'
+        run: |
+          docker run --rm -v "$PWD:/w" -w /w -e CHECK node:22-alpine sh -c '
+            set -e
+            npm install --no-audit --no-fund
+            node -e "$CHECK"
+            npm test
+          '
+
+      - name: Stage the binary
+        run: mkdir -p "dist/$(dirname "$OUT")" && cp "$OUT" "dist/$OUT"
+
+      - uses: actions/upload-artifact@v7
+        with:
+          name: prebuild-linux-${{ matrix.arch }}-${{ matrix.libc }}
+          path: dist/prebuilds/
+          if-no-files-found: error
+
+  windows:
+    name: win32-x64
+    # Visual Studio 2022, the generator native/build-opencv.sh names
+    runs-on: windows-2022
+    timeout-minutes: 60
+    env:
+      OUT: prebuilds/win32-x64/opencv5.node
+      OPENCV_PREFIX: C:/opencv5-cv
+    steps:
+      - uses: actions/checkout@v7
+
+      - uses: actions/setup-node@v7
+        with:
+          node-version: 22
+
+      - uses: actions/cache@v4
+        id: opencv
+        with:
+          path: C:/opencv5-cv
+          key: opencv-win32-x64-${{ hashFiles('native/build-opencv.sh', 'native/prebuild-linux.sh') }}
+
+      - name: Build OpenCV
+        if: steps.opencv.outputs.cache-hit != 'true'
+        run: |
+          v=$(sed -n 's/^OPENCV_VERSION=//p' native/prebuild-linux.sh)
+          sum=$(sed -n 's/^OPENCV_SHA256=//p' native/prebuild-linux.sh)
+          curl -fsSL -o "$RUNNER_TEMP/opencv.tar.gz" "https://github.com/opencv/opencv/archive/refs/tags/$v.tar.gz"
+          echo "$sum  $RUNNER_TEMP/opencv.tar.gz" | sha256sum -c -
+          sh native/build-opencv.sh "$RUNNER_TEMP/opencv.tar.gz" "$OPENCV_PREFIX"
+
+      - name: Build the addon with node-gyp
+        run: |
+          rm -rf "$OUT" native/build
+          (cd native && npx --yes node-gyp@12.4.0 rebuild)
+          mkdir -p "$(dirname "$OUT")"
+          cp native/build/Release/opencv5.node "$OUT"
+          rm -rf native/build
+          ls -l "$OUT"
+          node native/manifest.js > /dev/null
+
+      - run: npm install --no-audit --no-fund
+
+      - name: Check the prebuild loads
+        run: node -e "$CHECK"
+
+      - name: Tests
+        run: npm test
+
+      - name: Stage the binary
+        run: mkdir -p "dist/$(dirname "$OUT")" && cp "$OUT" "dist/$OUT"
+
+      - uses: actions/upload-artifact@v7
+        with:
+          name: prebuild-win32-x64
+          path: dist/prebuilds/
+          if-no-files-found: error
+
+  macos:
+    name: darwin-${{ matrix.arch }}
+    runs-on: ${{ matrix.runner }}
+    timeout-minutes: 60
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - arch: arm64
+            runner: macos-15
+          # the last Intel macOS image GitHub hosts in this line
+          - arch: x64
+            runner: macos-15-intel
+    env:
+      OUT: prebuilds/darwin-${{ matrix.arch }}/opencv5.node
+    steps:
+      - uses: actions/checkout@v7
+
+      - uses: actions/setup-node@v7
+        with:
+          node-version: 22
+
+      - name: Check the runner is the arch being built
+        run: test "$(node -p 'process.platform + "-" + process.arch')" = "darwin-${{ matrix.arch }}"
+
+      - name: Where the OpenCV build goes
+        run: echo "OPENCV_PREFIX=$RUNNER_TEMP/../opencv5-cv" >> "$GITHUB_ENV"
+
+      - uses: actions/cache@v4
+        id: opencv
+        with:
+          path: ${{ runner.temp }}/../opencv5-cv
+          key: opencv-darwin-${{ matrix.arch }}-${{ hashFiles('native/build-opencv.sh', 'native/prebuild-linux.sh') }}
+
+      # cmake is on the hosted macOS images; macOS 11 is the deployment
+      # target the addon's own link uses (native/build.sh)
+      - name: Build OpenCV
+        if: steps.opencv.outputs.cache-hit != 'true'
+        env:
+          MACOSX_DEPLOYMENT_TARGET: "11.0"
+        run: |
+          v=$(sed -n 's/^OPENCV_VERSION=//p' native/prebuild-linux.sh)
+          sum=$(sed -n 's/^OPENCV_SHA256=//p' native/prebuild-linux.sh)
+          curl -fsSL -o "$RUNNER_TEMP/opencv.tar.gz" "https://github.com/opencv/opencv/archive/refs/tags/$v.tar.gz"
+          echo "$sum  $RUNNER_TEMP/opencv.tar.gz" | shasum -a 256 -c -
+          sh native/build-opencv.sh "$RUNNER_TEMP/opencv.tar.gz" "$OPENCV_PREFIX"
+
+      - name: Build the addon
+        run: |
+          rm -f "$OUT"
+          mkdir -p "$(dirname "$OUT")"
+          sh native/build.sh "$OUT" "$(dirname "$(dirname "$(which node)")")/include/node" "$OPENCV_PREFIX"
+          node native/manifest.js > /dev/null
+
+      - run: npm install --no-audit --no-fund
+
+      - name: Check the prebuild loads
+        run: node -e "$CHECK"
+
+      - name: Tests
+        run: npm test
+
+      - name: Stage the binary
+        run: mkdir -p "dist/$(dirname "$OUT")" && cp "$OUT" "dist/$OUT"
+
+      - uses: actions/upload-artifact@v7
+        with:
+          name: prebuild-darwin-${{ matrix.arch }}
+          path: dist/prebuilds/
+          if-no-files-found: error
+
+  collect:
+    name: collect prebuilds
+    needs: [linux, windows, macos]
+    runs-on: ubuntu-24.04
+    timeout-minutes: 10
+    steps:
+      - uses: actions/checkout@v7
+
+      - uses: actions/setup-node@v7
+        with:
+          node-version: 22
+
+      # Each artifact holds <platform>-<arch>/<file>, so merging them into
+      # one directory gives the package's prebuilds/ back
+      - uses: actions/download-artifact@v8
+        with:
+          pattern: prebuild-*
+          merge-multiple: true
+          path: dist/prebuilds
+
+      - name: Check all seven are there, and write their manifest
+        run: |
+          missing=0
+          for f in \
+            linux-x64/opencv5.glibc.node \
+            linux-x64/opencv5.musl.node \
+            linux-arm64/opencv5.glibc.node \
+            linux-arm64/opencv5.musl.node \
+            win32-x64/opencv5.node \
+            darwin-arm64/opencv5.node \
+            darwin-x64/opencv5.node
+          do
+            if [ ! -s "dist/prebuilds/$f" ]; then
+              echo "::error::missing prebuilds/$f"
+              missing=1
+            fi
+          done
+          [ $missing = 0 ] || exit 1
+          node native/manifest.js dist/prebuilds
+
+      - uses: actions/upload-artifact@v7
+        with:
+          name: prebuilds
+          path: dist/
+          if-no-files-found: error

@@ -1,20 +1,20 @@
 #!/bin/sh
-# Build the minimal static OpenCV 5 the vision-cv addon links: the six
-# modules golden-compare's alignment and label-crop's ops need, and
-# nothing that reaches outside the process.
+# Build the minimal static OpenCV 5 the opencv5 addon links: the six
+# modules its ops need (colour conversion, resize, filters, rotation, and
+# ORB + ECC alignment), and nothing that reaches outside the process.
 #
-#   sh native/opencv/build-opencv.sh SRC.tar.gz PREFIX [JOBS]
+#   sh native/build-opencv.sh SRC.tar.gz PREFIX [JOBS]
 #
-# Runs inside the pinned image (native/opencv/prebuild-linux.sh), on any
+# Runs inside the pinned image (native/prebuild-linux.sh), on any
 # Linux or macOS host with cmake and a C++17 compiler, or on Windows from
 # git-bash with cmake and Visual Studio 2022 (MSVC, static CRT). SRC is
 # the opencv-5.0.0 source tarball; PREFIX receives the headers and the
 # static libraries (include/opencv5 and lib/ on Unix, include/ and
 # x64/vc17/staticlib/ on Windows).
 #
-# Measured on a 16-thread Ryzen 7840U: 105 s in manylinux2014 (GCC 10),
-# 175 s in musllinux_1_2 (GCC 14), 99 s with MSVC 19.44; 35 MB of static
-# libraries. Two clean builds in one image give the same addon bytes.
+# Measured on a 16-thread Ryzen 7840U: 85 s in manylinux2014 (GCC 10),
+# 149 s in musllinux_1_2 (GCC 14), 88 s with MSVC 19.44. Two clean
+# builds in one Linux image give the same addon bytes.
 #
 # Modules: core, imgproc, features (4.x features2d: ORB, BFMatcher),
 # flann, geometry (4.x calib3d's estimateAffine2D and USAC), video
@@ -22,16 +22,19 @@
 # geometry on flann, so all six are needed.
 #
 # Off: imgcodecs, highgui, videoio, dnn (codecs go through sharp, see
-# lib/ownCv.js); IPP, OpenCL, TBB, OpenMP, Eigen, LAPACK, ITT; KleidiCV and
+# index.js); IPP, OpenCL, TBB, OpenMP, Eigen, LAPACK, ITT; KleidiCV and
 # Carotene, the arm64 HAL replacements, so arm64 runs OpenCV's own code as
 # x64 does. Threads: OpenCV's pthreads backend.
 #
 # CPU: a baseline every machine of the arch has - x86-64-v2 (SSE4.2,
-# POPCNT) on x64, NEON on arm64 - with AVX2/AVX-512 (x64) and dotprod/fp16
-# (arm64) loops picked at run time by OpenCV's own cpuid checks, so no
-# binary needs AVX2. No fast-math, and -ffp-contract=off so the compiler
-# fuses no a * b + c the source did not ask for (OpenCV's own explicit FMA
-# intrinsics in its dispatched loops are unaffected). The build-info
+# POPCNT) on x64, NEON on arm64 - and nothing dispatched at run time
+# (CPU_DISPATCH empty), so no binary needs AVX2 and every CPU runs the
+# same code: the same bytes out on every machine. With AVX2 and AVX-512
+# dispatched, a SSE4.2-only CPU moved the rig's local alignment by up to
+# 0.34 px and its heat maps by bytes against an AVX2 one; the dispatched
+# loops were worth about 1 ms of a 9 ms alignment. No fast-math, and
+# -ffp-contract=off so the compiler fuses no a * b + c the source did not
+# ask for. The build-info
 # string skips the timestamp and the host kernel version, so the same
 # image gives the same bytes.
 #
@@ -49,8 +52,8 @@ tar xzf "$src" -C "$work"
 srcdir=$(ls -d "$work"/opencv-*)
 build=$work/build
 case "$(uname -m)" in
-x86_64 | amd64) cpu="-DCPU_BASELINE=SSE4_2;POPCNT -DCPU_DISPATCH=AVX;FP16;AVX2;AVX512_SKX" ;;
-aarch64 | arm64) cpu="-DCPU_BASELINE=NEON;FP16 -DCPU_DISPATCH=NEON_DOTPROD;NEON_FP16" ;;
+x86_64 | amd64) cpu="-DCPU_BASELINE=SSE4_2;POPCNT -DCPU_DISPATCH=" ;;
+aarch64 | arm64) cpu="-DCPU_BASELINE=NEON;FP16 -DCPU_DISPATCH=" ;;
 *) echo "build-opencv.sh: no CPU settings for $(uname -m)" >&2; exit 2 ;;
 esac
 case "$(uname -s)" in

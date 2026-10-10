@@ -1,20 +1,19 @@
-// The OpenCV ops golden-compare and label-crop need, as our own N-API
-// addon over a minimal static OpenCV 5 (native/opencv/build-opencv.sh):
-// the "own" engine of lib/engine.js, wrapped by lib/ownCv.js into the op
-// surface the rosepetal cpp-bridge and lib/cvjs.js share.
+// @graciousstar/opencv5's native half: a few vision ops as a plain N-API
+// addon over a minimal static OpenCV 5 (native/build-opencv.sh), wrapped
+// by index.js into the op surface of the @rosepetal/node-red-contrib-
+// image-tools cpp-bridge, which it replaces.
 //
-// Every op runs as async work on libuv's pool (as the bridge's do) and
-// returns a promise. Buffers are the caller's: an op reads its input and
-// writes into an output the caller sized - lib/ownCv.js does the size
-// arithmetic - and checks every length against the dimensions before
-// anything runs. Encoded images never reach this file: decoding and
-// encoding go through sharp (lib/ownCv.js), so OpenCV is built without
-// codecs.
+// Every op runs as async work on libuv's pool and returns a promise.
+// Buffers are the caller's: an op reads its input and writes into an
+// output the caller sized - index.js does the size arithmetic - and
+// checks every length against the dimensions before anything runs.
+// Encoded images never reach this file: decoding and encoding go through
+// sharp (index.js), so OpenCV is built without codecs.
 //
-// align() is rosepetal image-tools 1.6.4's imageAlign for the arguments
-// lib/nativeSeed.js passes (affine, features+ecc, ORB 800/1.2/5, Lowe
-// 0.75, estimateAffine2D USAC_MAGSAC 5 px, ECC skipped at >= 50 inliers
-// in "auto", nearest-neighbour inverse warp), minus its per-frame costs:
+// align() is rosepetal image-tools 1.6.4's imageAlign for affine motion,
+// the features+ecc pipeline and ORB (ORB 800/1.2/5, Lowe 0.75,
+// estimateAffine2D USAC_MAGSAC 5 px, ECC skipped at >= 50 inliers in
+// "auto", nearest-neighbour inverse warp), minus its per-frame costs:
 //   - the golden's small copy, ORB features and ECC-normalised copy are
 //     made once per golden handle (createGolden); rosepetal re-finds them
 //     every call through an FNV hash of 768 of the image's bytes, which
@@ -38,8 +37,8 @@
 #include <string>
 #include <vector>
 
-// The contract lib/ownCv.js was written against; it refuses any other.
-#define VT_CV_ABI 1
+// The contract index.js was written against; it refuses any other.
+#define OPENCV5_ABI 1
 
 namespace {
 
@@ -62,8 +61,15 @@ bool viewOf(napi_env env, napi_value v, View* out) {
 	napi_typedarray_type type;
 	size_t length;
 	void* data;
-	if (napi_get_typedarray_info(env, v, &type, &length, &data, nullptr, nullptr) != napi_ok) return false;
+	napi_value buffer;
+	if (napi_get_typedarray_info(env, v, &type, &length, &data, &buffer, nullptr) != napi_ok) return false;
 	if (type != napi_uint8_array && type != napi_uint8_clamped_array) return false;
+	// a detached store has no bytes to read; a resizable one could shrink
+	// under the pool thread, and index.js refuses those (N-API cannot
+	// tell). A store the caller transfers or shrinks while an op runs is
+	// outside the contract, as with every async op over a caller's buffer.
+	bool detached = false;
+	if (napi_is_detached_arraybuffer(env, buffer, &detached) != napi_ok || detached) return false;
 	out->data = static_cast<uint8_t*>(data);
 	out->bytes = length;
 	return true;
@@ -94,7 +100,7 @@ void setBool(napi_env env, napi_value o, const char* k, bool b) {
 }
 
 napi_value fail(napi_env env, const std::string& msg) {
-	napi_throw_error(env, "ERR_VT_CV_ARGS", msg.c_str());
+	napi_throw_error(env, "ERR_OPENCV5_ARGS", msg.c_str());
 	return nullptr;
 }
 
@@ -179,7 +185,7 @@ template <size_t N>
 bool args(napi_env env, napi_callback_info info, napi_value (&a)[N], void** data = nullptr) {
 	size_t argc = N;
 	napi_get_cb_info(env, info, &argc, a, nullptr, data);
-	return argc == N;
+	return argc >= N;  // the usual contract: extra arguments are ignored
 }
 
 // ---- pixel ops -------------------------------------------------------------
@@ -210,7 +216,7 @@ napi_value CvtColor(napi_env env, napi_callback_info info) {
 	job->code = code;
 	job->pin(env, a[0]);
 	job->pin(env, a[5]);
-	return queue(env, job, "vision-cv.cvtColor");
+	return queue(env, job, "opencv5.cvtColor");
 }
 
 // resize(src, w, h, ch, dst, dw, dh): INTER_LINEAR, as the bridge
@@ -237,12 +243,12 @@ napi_value Resize(napi_env env, napi_callback_info info) {
 	job->dst = cv::Mat(dh, dw, matType(ch), d.data);
 	job->pin(env, a[0]);
 	job->pin(env, a[4]);
-	return queue(env, job, "vision-cv.resize");
+	return queue(env, job, "opencv5.resize");
 }
 
 // filter(gray, w, h, kind, kernel, intensity, dst): kind 0 = otsu, 1 = edge.
 // "otsu" blurs `gray` IN PLACE before thresholding it: the bridge does,
-// and label-crop depends on it (lib/cvjs.js filter() has the story).
+// and callers written against it depend on it (README, filter).
 struct FilterJob : Job {
 	cv::Mat gray, dst;
 	int kind, kernel;
@@ -294,7 +300,7 @@ napi_value Filter(napi_env env, napi_callback_info info) {
 	job->intensity = intensity;
 	job->pin(env, a[0]);
 	job->pin(env, a[6]);
-	return queue(env, job, "vision-cv.filter");
+	return queue(env, job, "opencv5.filter");
 }
 
 // rotate(src, w, h, ch, dst, dw, dh, angleDeg, pad[4]): the bridge's
@@ -339,7 +345,7 @@ napi_value Rotate(napi_env env, napi_callback_info info) {
 	job->pad = cv::Scalar(p[0], p[1], p[2], p[3]);
 	job->pin(env, a[0]);
 	job->pin(env, a[4]);
-	return queue(env, job, "vision-cv.rotate");
+	return queue(env, job, "opencv5.rotate");
 }
 
 // ---- alignment -------------------------------------------------------------
@@ -418,7 +424,13 @@ napi_value CreateGolden(napi_env env, napi_callback_info info) {
 	return handle;
 }
 
-// what one pool thread keeps between frames
+// What one pool thread keeps between frames, so a frame's working copies
+// are not fresh pages every time: the frame at golden size (only when the
+// frame is not that size already), its small copy and that copy as float.
+// Bounded by the largest golden aligned on that thread - for a
+// 1475x2125 golden at scale 0.35, about 3.1 + 0.4 + 1.5 MB - times libuv's pool
+// (UV_THREADPOOL_SIZE, 4 by default), and held for the life of the
+// process; a later golden of another size reallocates them, not adds.
 thread_local cv::Mat tlResized, tlSmall, tlPrepared;
 
 struct AlignJob : Job {
@@ -579,7 +591,7 @@ napi_value Align(napi_env env, napi_callback_info info) {
 	job->pin(env, a[0]);  // keeps the golden alive while the work runs
 	job->pin(env, a[1]);
 	job->pin(env, a[4]);
-	return queue(env, job, "vision-cv.align");
+	return queue(env, job, "opencv5.align");
 }
 
 napi_value BuildInfo(napi_env env, napi_callback_info) {
@@ -597,9 +609,9 @@ napi_value guarded(napi_env env, napi_callback_info info) {
 	try {
 		return F(env, info);
 	} catch (const std::exception& e) {
-		napi_throw_error(env, "ERR_VT_CV", e.what());
+		napi_throw_error(env, "ERR_OPENCV5", e.what());
 	} catch (...) {
-		napi_throw_error(env, "ERR_VT_CV", "unknown native error");
+		napi_throw_error(env, "ERR_OPENCV5", "unknown native error");
 	}
 	return nullptr;
 }
@@ -621,11 +633,11 @@ NAPI_MODULE_INIT() {
 		napi_set_named_property(env, exports, f.name, v);
 	}
 	napi_value v;
-	napi_create_int32(env, VT_CV_ABI, &v);
+	napi_create_int32(env, OPENCV5_ABI, &v);
 	napi_set_named_property(env, exports, "abi", v);
 	napi_create_string_utf8(env, CV_VERSION, NAPI_AUTO_LENGTH, &v);
 	napi_set_named_property(env, exports, "opencv", v);
-	// COLOR_* codes for lib/ownCv.js, so it never hard-codes OpenCV's enum
+	// COLOR_* codes for index.js, so it never hard-codes OpenCV's enum
 	napi_value codes;
 	napi_create_object(env, &codes);
 	struct {

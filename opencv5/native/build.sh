@@ -1,8 +1,8 @@
 #!/bin/sh
-# Link the vision-cv addon (native/opencv/vision-cv.cc) against a static
+# Link the opencv5 addon (native/opencv5.cc) against a static
 # OpenCV from build-opencv.sh, with the compiler alone - no node-gyp:
 #
-#   sh native/opencv/build.sh OUT.node NODE_API_INCLUDE_DIR OPENCV_PREFIX
+#   sh native/build.sh OUT.node NODE_API_INCLUDE_DIR OPENCV_PREFIX
 #
 # The same floating-point rules as OpenCV's own build (no fast-math,
 # -ffp-contract=off) and the arch's baseline ISA, so the binary loads on
@@ -31,7 +31,7 @@ case "$(uname -s)" in
 Darwin)
 	# shellcheck disable=SC2086
 	$CXX $flags -mmacosx-version-min=11.0 -undefined dynamic_lookup -I"$inc" -I"$cvinc" \
-		-o "$out" "$here/vision-cv.cc" $libs $third
+		-o "$out" "$here/opencv5.cc" $libs $third
 	strip -x "$out"
 	;;
 *)
@@ -40,7 +40,7 @@ Darwin)
 	map=$(mktemp)
 	printf '{ global: napi_register_module_v1; node_api_module_get_api_version_v1; local: *; };\n' >"$map"
 	# shellcheck disable=SC2086
-	$CXX $flags -I"$inc" -I"$cvinc" -o "$out" "$here/vision-cv.cc" \
+	$CXX $flags -I"$inc" -I"$cvinc" -o "$out" "$here/opencv5.cc" \
 		-Wl,--start-group $libs $third -Wl,--end-group \
 		-Wl,--gc-sections -Wl,--exclude-libs,ALL -Wl,--as-needed -Wl,--version-script="$map" \
 		-static-libstdc++ -static-libgcc -lpthread -ldl
