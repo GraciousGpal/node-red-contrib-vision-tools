@@ -5,11 +5,19 @@
 #   sh native/notice-sources.sh            (after prebuild-linux.sh x64 musl)
 #
 # Links the addon once more in the musl image against the cached OpenCV,
-# with a link map, and keeps every archive member that put a non-empty
-# section into the output (after --gc-sections). For each, it prints the
-# source file and every copyright line in it. The OpenCV-wide lines (the
-# holders in OpenCV's own COPYRIGHT) are in NOTICE under OpenCV; any other
-# holder printed here needs its own entry there.
+# through native/build.sh itself - the shipped binary's flags, version
+# script and --exclude-libs included - with a link map, and keeps every
+# archive member that put a non-empty section into the output (after
+# --gc-sections). For each, it prints the source file and every copyright
+# line in it. The OpenCV-wide lines (the holders in OpenCV's own
+# COPYRIGHT) are in NOTICE under OpenCV; any other holder printed here
+# needs its own entry there.
+#
+# This is one platform's link map (Linux x64 musl). The other binaries
+# link the same OpenCV build configuration and the same addon source, so
+# they keep the same code, give or take what a different linker or
+# compiler inlines or discards; check another platform's map before
+# relying on a difference.
 set -eu
 cd "$(dirname "$0")/.."
 cache=${OPENCV5_CACHE:-.opencv-cache}
@@ -26,10 +34,8 @@ docker run --rm -v "$host:/w" "$image" sh -c "
 	set -e
 	cp -r /w/$prefix /opt/opencv
 	mkdir -p /tmp/src && tar xzf /w/$tarball -C /tmp/src
-	L=\$(find /opt/opencv -name 'libopencv_*.a' | sort); T=\$(find /opt/opencv -path '*3rdparty*' -name '*.a' | sort)
-	g++ -O3 -std=c++17 -fPIC -shared -msse4.2 -mpopcnt -ffp-contract=off -fvisibility=hidden \
-		-I/w/$work/package/include -I/opt/opencv/include/opencv5 -o /tmp/u.node /w/native/opencv5.cc \
-		-Wl,--start-group \$L \$T -Wl,--end-group -Wl,--gc-sections -static-libstdc++ -static-libgcc -Wl,-Map,/tmp/map
+	cp -r /w/native /tmp/native && cp -r /w/$work/package/include /tmp/include
+	OPENCV5_LINK_MAP=/tmp/map sh /tmp/native/build.sh /tmp/u.node /tmp/include /opt/opencv >/dev/null
 	# members with a kept, non-empty section: lines after the memory map header
 	# like ' .text.x  0xADDR  0xSIZE  /opt/opencv/lib/libopencv_core.a(foo.cpp.o)'
 	sed -n '/^Linker script and memory map/,\$p' /tmp/map |
@@ -42,7 +48,7 @@ docker run --rm -v "$host:/w" "$image" sh -c "
 		case \"\$lib\" in zlib) dir=3rdparty/zlib ;; *) dir=modules/\$lib ;; esac
 		src=\$(find /tmp/src/opencv-5.0.0/\$dir -name \"\$obj\" | head -1)
 		[ -n \"\$src\" ] || { echo \"? \$m\"; continue; }
-		lines=\$(grep -iE 'copyright' \"\$src\" | sed 's/^[ /*#]*//' | sort -u | tr '\\n' '|')
+		lines=\$(grep -iE 'copyright|written by|license' \"\$src\" | sed 's/^[ /*#]*//' | sort -u | tr '\\n' '|')
 		echo \"\${src#/tmp/src/opencv-5.0.0/}: \${lines:-(none; OpenCV's LICENSE)}\"
 	done < /tmp/members"
 rm -rf "$work"

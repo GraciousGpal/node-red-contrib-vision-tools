@@ -9,7 +9,9 @@
 # any CPU of its arch. libstdc++ and libgcc are linked in and every
 # OpenCV symbol is hidden, so it needs only libc and exports only the
 # N-API entry point. Linux links with full RELRO (-z relro -z now): every
-# symbol bound at load, the GOT read-only after.
+# symbol bound at load, the GOT read-only after. OPENCV5_LINK_MAP=<file>
+# also writes the Linux link's map there (native/notice-sources.sh); a
+# map changes nothing in the binary.
 set -eu
 out=$1
 inc=$2
@@ -44,7 +46,7 @@ Darwin)
 	$CXX $flags -I"$inc" -I"$cvinc" -o "$out" "$here/opencv5.cc" \
 		-Wl,--start-group $libs $third -Wl,--end-group \
 		-Wl,--gc-sections -Wl,--exclude-libs,ALL -Wl,--as-needed -Wl,-z,relro -Wl,-z,now -Wl,--version-script="$map" \
-		-static-libstdc++ -static-libgcc -lpthread -ldl
+		-static-libstdc++ -static-libgcc -lpthread -ldl ${OPENCV5_LINK_MAP:+-Wl,-Map,"$OPENCV5_LINK_MAP"}
 	rm -f "$map"
 	strip --strip-unneeded "$out"
 	;;
