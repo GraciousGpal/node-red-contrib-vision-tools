@@ -1,12 +1,17 @@
 # Builds the native kernels (native/kernels.cc) for every platform the
 # package ships a prebuild for, tests each binary on its own platform, and
 # collects them into one `prebuilds` artifact in the layout
-# lib/nativeKernels.js loads from:
+# lib/nativeKernels.js loads from, with the manifest it checks them
+# against:
 #
 #   prebuilds/<platform>-<arch>/vision-kernels[.glibc|.musl].node
+#   prebuilds/manifest.json
 #
 # It builds and tests only. Nothing is committed or published from here:
 # the binaries go into the package by hand, from the `prebuilds` artifact.
+# The Linux ones are built in images pinned by digest
+# (native/prebuild-linux.sh), so the same source gives the same bytes:
+# the linux-x64 jobs fail when a rebuild differs from the committed binary.
 #
 # This workflow has not been run yet. It was written from the documentation
 # of the runners, the actions and the images it uses; expect the first run
@@ -22,19 +27,29 @@ on:
     tags: ["v*"]
     paths:
       - "native/**"
+      - "prebuilds/**"
       - "lib/nativeKernels.js"
       - "lib/poolWorker.js"
+      - "lib/pool.js"
+      - "lib/parallel.js"
+      - "lib/compare.js"
       - "test/nativeKernels*.test.js"
       - "test/nativePipeline.test.js"
+      - "test/overlay.test.js"
       - "test/helpers/kernelCases.js"
       - ".github/workflows/prebuild.yml"
   pull_request:
     paths:
       - "native/**"
+      - "prebuilds/**"
       - "lib/nativeKernels.js"
       - "lib/poolWorker.js"
+      - "lib/pool.js"
+      - "lib/parallel.js"
+      - "lib/compare.js"
       - "test/nativeKernels*.test.js"
       - "test/nativePipeline.test.js"
+      - "test/overlay.test.js"
       - "test/helpers/kernelCases.js"
       - ".github/workflows/prebuild.yml"
 
@@ -50,6 +65,7 @@ env:
     const s = require('./lib/nativeKernels.js').status();
     console.log(s);
     if (!s.native) process.exit(1);
+  NATIVE_TESTS: test/nativeKernels.test.js test/nativeKernelsLoader.test.js test/nativePipeline.test.js test/overlay.test.js
 
 defaults:
   run:
@@ -57,47 +73,47 @@ defaults:
     shell: bash
 
 jobs:
-  linux-glibc:
-    name: linux-${{ matrix.arch }} (glibc)
+  linux:
+    name: linux-${{ matrix.arch }} (${{ matrix.libc }})
     runs-on: ${{ matrix.runner }}
     timeout-minutes: 40
     strategy:
       fail-fast: false
       matrix:
         include:
-          - arch: x64
-            runner: ubuntu-24.04
-            image: quay.io/pypa/manylinux2014_x86_64
-          - arch: arm64
-            runner: ubuntu-24.04-arm
-            image: quay.io/pypa/manylinux2014_aarch64
+          - { arch: x64, libc: glibc, runner: ubuntu-24.04 }
+          - { arch: x64, libc: musl, runner: ubuntu-24.04 }
+          - { arch: arm64, libc: glibc, runner: ubuntu-24.04-arm }
+          - { arch: arm64, libc: musl, runner: ubuntu-24.04-arm }
     env:
-      OUT: prebuilds/linux-${{ matrix.arch }}/vision-kernels.glibc.node
+      OUT: prebuilds/linux-${{ matrix.arch }}/vision-kernels.${{ matrix.libc }}.node
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@v7
 
-      - uses: actions/setup-node@v4
+      - uses: actions/setup-node@v7
         with:
           node-version: 22
 
       - name: Check the runner is the arch being built
         run: test "$(node -p 'process.platform + "-" + process.arch')" = "linux-${{ matrix.arch }}"
 
-      # Whatever binaries the checkout has would otherwise be uploaded with
-      # this one, and a native/build would be loaded instead of it.
-      - name: Clear old binaries
-        run: rm -rf prebuilds native/build
-
-      # manylinux2014 is glibc 2.17, which Node itself no longer runs on,
-      # so node_api.h comes from the runner's Node and is mounted in.
-      - name: Build in manylinux2014 (glibc 2.17)
+      # manylinux2014 (glibc 2.17) is CentOS 7, past its end of life; it is
+      # kept because a binary built against 2.17 loads on every glibc since.
+      # musllinux_1_2 for musl. Both pinned by digest in the script, with
+      # the node-api-headers it compiles against.
+      - name: Build in the pinned image
         run: |
-          cp -r "$(dirname "$(dirname "$(which node)")")/include/node" .node-include
-          mkdir -p "$(dirname "$OUT")"
-          docker run --rm -v "$PWD:/w" -w /w ${{ matrix.image }} \
-            sh -c "sh native/build.sh $OUT /w/.node-include && chmod 755 $OUT"
+          rm -f "$OUT"
+          sh native/prebuild-linux.sh ${{ matrix.arch }} ${{ matrix.libc }}
+          ls -l "$OUT"
+
+      # The shipped ones: the same source must give the same bytes
+      - name: Check the rebuild is the committed binary
+        if: matrix.arch == 'x64'
+        run: node native/manifest.js --check "$OUT"
 
       - name: Check no symbol needs a glibc newer than 2.17
+        if: matrix.libc == 'glibc'
         run: |
           v=$(objdump -T "$OUT" | grep -o 'GLIBC_[0-9.]*' | sed 's/^GLIBC_//' | sort -uV | tail -1)
           echo "highest glibc symbol version: ${v:-none}"
@@ -107,110 +123,85 @@ jobs:
             exit 1
           fi
 
+      # The loader checks every prebuild against the manifest, so the one
+      # just built must be in it
+      - name: List the binaries in the manifest
+        run: node native/manifest.js > /dev/null
+
       # Not npm ci: see the README. sharp's platform binaries are optional
       # dependencies, so nothing optional is left out either.
-      - run: npm install --no-audit --no-fund
-
-      - name: Check the prebuild loads
-        run: node -e "$NATIVE_CHECK"
-
-      - name: Native kernel tests
-        run: node --test test/nativeKernels.test.js test/nativeKernelsLoader.test.js test/nativePipeline.test.js
+      - name: Test on the host (glibc)
+        if: matrix.libc == 'glibc'
+        run: |
+          npm install --no-audit --no-fund
+          node -e "$NATIVE_CHECK"
+          node --test $NATIVE_TESTS
 
       # The whole suite once, on one platform, with each set of kernels
       - name: Whole suite, native kernels
-        if: matrix.arch == 'x64'
+        if: matrix.arch == 'x64' && matrix.libc == 'glibc'
         run: npm test
 
       - name: Whole suite, JS kernels
-        if: matrix.arch == 'x64'
+        if: matrix.arch == 'x64' && matrix.libc == 'glibc'
         run: npm test
         env:
           VISION_TOOLS_KERNELS: js
 
-      - uses: actions/upload-artifact@v4
-        with:
-          name: prebuild-linux-${{ matrix.arch }}-glibc
-          path: prebuilds/
-          if-no-files-found: error
-
-  linux-musl:
-    name: linux-${{ matrix.arch }} (musl)
-    runs-on: ${{ matrix.runner }}
-    timeout-minutes: 30
-    strategy:
-      fail-fast: false
-      matrix:
-        include:
-          - arch: x64
-            runner: ubuntu-24.04
-          - arch: arm64
-            runner: ubuntu-24.04-arm
-    env:
-      OUT: prebuilds/linux-${{ matrix.arch }}/vision-kernels.musl.node
-    steps:
-      - uses: actions/checkout@v4
-
-      - name: Clear old binaries
-        run: rm -rf prebuilds native/build
-
       # docker run rather than a `container:` job: the runner's JavaScript
       # actions need a glibc Node, which an Alpine container does not have.
-      # The host is glibc, so the musl binary is built and tested in there.
-      # The container runs as root; the files it leaves are still readable
-      # for the upload.
-      - name: Build and test in node:22-alpine
+      - name: Test in node:22-alpine (musl)
+        if: matrix.libc == 'musl'
         run: |
-          mkdir -p "$(dirname "$OUT")"
           docker run --rm -v "$PWD:/w" -w /w \
-            -e OUT -e NATIVE_CHECK -e VISION_TOOLS_FUZZ_ROUNDS \
+            -e NATIVE_CHECK -e NATIVE_TESTS -e VISION_TOOLS_FUZZ_ROUNDS \
             node:22-alpine sh -c '
               set -e
               test "$(node -p "process.platform + \"-\" + process.arch")" = "linux-${{ matrix.arch }}"
-              apk add --no-cache g++
-              sh native/build.sh "$OUT" /usr/local/include/node
-              chmod 755 "$OUT"
               npm install --no-audit --no-fund
               node -e "$NATIVE_CHECK"
-              node --test test/nativeKernels.test.js test/nativeKernelsLoader.test.js test/nativePipeline.test.js
+              node --test $NATIVE_TESTS
             '
 
-      - uses: actions/upload-artifact@v4
+      # This job's binary alone, at its place under prebuilds/
+      - name: Stage the binary
+        run: mkdir -p "dist/$(dirname "$OUT")" && cp "$OUT" "dist/$OUT"
+
+      - uses: actions/upload-artifact@v7
         with:
-          name: prebuild-linux-${{ matrix.arch }}-musl
-          path: prebuilds/
+          name: prebuild-linux-${{ matrix.arch }}-${{ matrix.libc }}
+          path: dist/prebuilds/
           if-no-files-found: error
 
   windows:
     name: win32-x64
-    # windows-2025 has Visual Studio 2022, which node-gyp finds
+    # windows-2025 now carries Visual Studio 2026; node-gyp finds it from
+    # 12.1 on, so the version is pinned
     runs-on: windows-2025
     timeout-minutes: 30
     env:
       OUT: prebuilds/win32-x64/vision-kernels.node
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@v7
 
-      - uses: actions/setup-node@v4
+      - uses: actions/setup-node@v7
         with:
           node-version: 22
 
       - name: Check the runner is the arch being built
         run: test "$(node -p 'process.platform + "-" + process.arch')" = "win32-x64"
 
-      - name: Clear old binaries
-        run: rm -rf prebuilds native/build
-
       # binding.gyp carries build.sh's flags; MSVC has no FMA contraction
-      # at /fp:precise. native/build goes once the binary is copied out,
-      # since the loader prefers it over prebuilds/.
+      # at /fp:precise
       - name: Build with node-gyp
         run: |
-          (cd native && npx --yes node-gyp@12 rebuild)
+          rm -rf "$OUT" native/build
+          (cd native && npx --yes node-gyp@12.4.0 rebuild)
           mkdir -p "$(dirname "$OUT")"
           cp native/build/Release/vision_kernels.node "$OUT"
           rm -rf native/build
           ls -l "$OUT"
+          node native/manifest.js > /dev/null
 
       - run: npm install --no-audit --no-fund
 
@@ -218,12 +209,15 @@ jobs:
         run: node -e "$NATIVE_CHECK"
 
       - name: Native kernel tests
-        run: node --test test/nativeKernels.test.js test/nativeKernelsLoader.test.js test/nativePipeline.test.js
+        run: node --test $NATIVE_TESTS
 
-      - uses: actions/upload-artifact@v4
+      - name: Stage the binary
+        run: mkdir -p "dist/$(dirname "$OUT")" && cp "$OUT" "dist/$OUT"
+
+      - uses: actions/upload-artifact@v7
         with:
           name: prebuild-win32-x64
-          path: prebuilds/
+          path: dist/prebuilds/
           if-no-files-found: error
 
   macos:
@@ -242,24 +236,23 @@ jobs:
     env:
       OUT: prebuilds/darwin-${{ matrix.arch }}/vision-kernels.node
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@v7
 
-      - uses: actions/setup-node@v4
+      - uses: actions/setup-node@v7
         with:
           node-version: 22
 
       - name: Check the runner is the arch being built
         run: test "$(node -p 'process.platform + "-" + process.arch')" = "darwin-${{ matrix.arch }}"
 
-      - name: Clear old binaries
-        run: rm -rf prebuilds native/build
-
       # build.sh targets macOS 11 and leaves N-API's symbols to the node
       # binary that loads the addon
       - name: Build
         run: |
+          rm -f "$OUT"
           mkdir -p "$(dirname "$OUT")"
           sh native/build.sh "$OUT" "$(dirname "$(dirname "$(which node)")")/include/node"
+          node native/manifest.js > /dev/null
 
       - run: npm install --no-audit --no-fund
 
@@ -267,29 +260,38 @@ jobs:
         run: node -e "$NATIVE_CHECK"
 
       - name: Native kernel tests
-        run: node --test test/nativeKernels.test.js test/nativeKernelsLoader.test.js test/nativePipeline.test.js
+        run: node --test $NATIVE_TESTS
 
-      - uses: actions/upload-artifact@v4
+      - name: Stage the binary
+        run: mkdir -p "dist/$(dirname "$OUT")" && cp "$OUT" "dist/$OUT"
+
+      - uses: actions/upload-artifact@v7
         with:
           name: prebuild-darwin-${{ matrix.arch }}
-          path: prebuilds/
+          path: dist/prebuilds/
           if-no-files-found: error
 
   collect:
     name: collect prebuilds
-    needs: [linux-glibc, linux-musl, windows, macos]
+    needs: [linux, windows, macos]
     runs-on: ubuntu-24.04
     timeout-minutes: 10
     steps:
+      - uses: actions/checkout@v7
+
+      - uses: actions/setup-node@v7
+        with:
+          node-version: 22
+
       # Each artifact holds <platform>-<arch>/<file>, so merging them into
       # one directory gives the package's prebuilds/ back.
-      - uses: actions/download-artifact@v4
+      - uses: actions/download-artifact@v8
         with:
           pattern: prebuild-*
           merge-multiple: true
           path: dist/prebuilds
 
-      - name: Check all seven are there
+      - name: Check all seven are there, and write their manifest
         run: |
           missing=0
           for f in \
@@ -306,12 +308,12 @@ jobs:
               missing=1
             fi
           done
-          (cd dist && find prebuilds -type f -exec ls -l {} +)
-          exit $missing
+          [ $missing = 0 ] || exit 1
+          node native/manifest.js dist/prebuilds
 
       # Uploaded from dist/, so the artifact unpacks to prebuilds/... at
       # the package root.
-      - uses: actions/upload-artifact@v4
+      - uses: actions/upload-artifact@v7
         with:
           name: prebuilds
           path: dist/
