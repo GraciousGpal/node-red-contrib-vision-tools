@@ -11,10 +11,11 @@ const path = require("node:path");
  * it drives the input listener. Attached to the node rather than returned
  * beside it because every caller takes the return value as the node.
  */
-function loadNode(file, config = {}, { id, comms } = {}) {
+function loadNode(file, config = {}, { id, comms, log } = {}) {
 	const routes = {};
 	const RED = {
 		comms,
+		log,
 		httpAdmin: {
 			get(path, ...handlers) {
 				routes[path] = handlers;

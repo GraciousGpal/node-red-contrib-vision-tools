@@ -31,6 +31,7 @@ const {
 const profileStore = require("./lib/profileStore.js");
 const { mergeRegister, slackLevel } = require("./lib/localAlign.js");
 const nuisance = require("./lib/nuisanceMap.js");
+const nativeKernels = require("./lib/nativeKernels.js");
 const {
 	clampInt,
 	clampFloat,
@@ -51,7 +52,23 @@ const {
  */
 const derivations = new Map();
 
+/**
+ * Which pool kernels this process runs, in one line at startup: the
+ * native ones, or the JS ones and why (lib/nativeKernels.js). A binary
+ * that is there and will not load is a warning; no binary for the
+ * platform, or VISION_TOOLS_KERNELS=js, is how it was meant to be.
+ */
+function logKernels(log) {
+	const k = nativeKernels.status();
+	const level = k.failed ? "warn" : "info";
+	if (!log || typeof log[level] !== "function") return;
+	if (k.native) log.info(`golden-compare: native pool kernels (${k.file})`);
+	else if (k.failed) log.warn(`golden-compare: native pool kernels did not load, using the JS ones - ${k.reason}`);
+	else log.info(`golden-compare: JS pool kernels - ${k.reason}`);
+}
+
 module.exports = (RED) => {
+	logKernels(RED.log);
 	/**
 	 * Every setting the editor saves and a message may override by the same
 	 * name: the runtime fallback and the clamp, declared once. The
