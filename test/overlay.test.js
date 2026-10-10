@@ -143,3 +143,49 @@ test("a thumbnail that fails to encode while the canvas is still being built fai
 	}
 	assert.deepEqual(unhandled, []);
 });
+
+const { HAS_SAB, takeShared, giveShared } = require("../lib/shared.js");
+const { poolSize } = require("../lib/pool.js");
+const NO_POOL = !HAS_SAB ? "no SharedArrayBuffer" : poolSize(4) < 2 ? "no worker pool on this host" : false;
+
+test("the pool fills a spare canvas with the grey as RGB, whatever the spare held", { skip: NO_POOL }, async () => {
+	const { expandGray } = require("../lib/compare.js");
+	const n = 1000 * 600 + 17;
+	const gray = new Uint8Array(n);
+	for (let i = 0; i < n; i++) gray[i] = (i * 2654435761) >>> 24;
+	const want = Buffer.alloc(n * 3);
+	for (let i = 0; i < n; i++) want[i * 3] = want[i * 3 + 1] = want[i * 3 + 2] = gray[i];
+	// the spare the canvas will be: full of the last frame's junk
+	const spare = takeShared(Uint8Array, n * 3, false);
+	spare.fill(7);
+	giveShared(spare);
+	const taken = [];
+	const take = (Ctor, len, zero) => {
+		const a = takeShared(Ctor, len, zero);
+		taken.push(a);
+		return a;
+	};
+	const got = await expandGray(gray, n, 4, take);
+	assert.equal(got.buffer, spare.buffer, "the spare, not a new buffer");
+	assert.deepEqual(taken, [got], "taken from the frame's scratch, to be handed back with it");
+	assert.ok(want.equals(Buffer.from(got.buffer, got.byteOffset, got.byteLength)));
+	giveShared(got);
+});
+
+test("the overlay drawn on the pool's spare canvas is the one drawn on a fresh canvas", { skip: NO_POOL }, async () => {
+	const golden = await prepareGolden(await sharp(labelSvg()).png().toBuffer(), CFG);
+	const frames = [
+		labelSvg('<rect x="300" y="500" width="90" height="60" fill="#000"/>'),
+		labelSvg('<circle cx="600" cy="900" r="40" fill="#000"/><rect x="200" y="300" width="4" height="4" fill="#666"/>'),
+	];
+	// png on the spare canvas, which the next frame takes again dirty; raw
+	// on a fresh one built on this thread, since it leaves with the message
+	for (const svg of [...frames, frames[0]]) {
+		const frame = await sharp(svg).png().toBuffer();
+		const png = await compareFrame(frame, golden, { ...CFG, heatmapFormat: "png", thumbnailWidth: 0 });
+		const raw = await compareFrame(frame, golden, { ...CFG, heatmapFormat: "raw", thumbnailWidth: 0 });
+		const decoded = await sharp(png.heatmap).raw().toBuffer();
+		assert.ok(Buffer.from(raw.heatmap.data).equals(decoded), "the two canvases' overlays differ");
+		assert.ok(png.printBlemish.regions.length + png.backgroundBlemish.regions.length > 0, "something drawn");
+	}
+});
