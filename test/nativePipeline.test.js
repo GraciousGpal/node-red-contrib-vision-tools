@@ -20,6 +20,13 @@ const { HAS_SAB } = require("../lib/shared.js");
 const nativeKernels = require("../lib/nativeKernels.js");
 
 const status = nativeKernels.status();
+// the native kernels as this process loads them: the prebuild, or a
+// build from source under VISION_TOOLS_KERNELS=source
+const NATIVE = nativeKernels.mode() === "source" ? "source" : undefined;
+const setKernels = (v) => {
+	if (v === undefined) delete process.env.VISION_TOOLS_KERNELS;
+	else process.env.VISION_TOOLS_KERNELS = v;
+};
 const SKIP = !HAS_SAB
 	? "no SharedArrayBuffer"
 	: poolSize(4) < 2
@@ -119,7 +126,7 @@ async function run(mode, golden, cfg) {
 	shutdown();
 	// the pool's workers are spawned after this, so they see it
 	if (mode === "js") process.env.VISION_TOOLS_KERNELS = "js";
-	else delete process.env.VISION_TOOLS_KERNELS;
+	else setKernels(NATIVE);
 	try {
 		const out = [];
 		for (const [name, svg] of FRAMES) {
@@ -134,7 +141,7 @@ async function run(mode, golden, cfg) {
 		return out;
 	} finally {
 		shutdown();
-		delete process.env.VISION_TOOLS_KERNELS;
+		setKernels(NATIVE);
 	}
 }
 
