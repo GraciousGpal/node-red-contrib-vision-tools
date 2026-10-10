@@ -90,9 +90,10 @@ authoritative list.
 | `lib/parallel.js` | parallel forms of the per-pixel stages (dilate, integral, warp, rectify, local-align field, threshold and histogram, the fused diff, the search's density sweeps and polish objective), each falling back to its serial twin when the pool is unavailable, the image is small, or one worker was asked for |
 | `lib/pool.js` | persistent worker-thread pool for the per-pixel stages: created once and never torn down, dispatches settled by id, `shouldParallelise` gate |
 | `lib/poolWorker.js` | worker side of the pool: the row/column-range kernels, asserted byte-identical to their serial reference implementations; runs the native twins of five of them where the addon loads |
-| `lib/nativeKernels.js` | loads the optional native kernels (a from-source build, else `prebuilds/<platform>-<arch>/vision-kernels[.glibc\|.musl].node`), refuses another kernel ABI, honours `VISION_TOOLS_KERNELS=js`, and hands a worker its kernels with the native ones in place; a dispatch the addon refuses runs on the JS kernel |
+| `lib/nativeKernels.js` | loads the optional native kernels (`prebuilds/<platform>-<arch>/vision-kernels[.glibc\|.musl].node`, checked against `prebuilds/manifest.json` before it is opened; a from-source build only with `VISION_TOOLS_KERNELS=source`), refuses another kernel ABI, honours `VISION_TOOLS_KERNELS=js`, and hands a worker its kernels with the native ones in place; a dispatch the addon refuses runs on the JS kernel |
 | `native/kernels.cc` | the native twins of `localField`, `localApply`, `binarize` (with the tone comparison), `toneCompare` and `diff`: plain N-API, no dependencies, the JS arithmetic in the JS order; checks every index a dispatch will make before it claims a chunk |
 | `native/build.sh`, `native/binding.gyp` | the two builds of it with the same flags (`-ffp-contract=off`, no fast-math, baseline ISA): the compiler alone for the Linux prebuilds and any Linux/macOS host, node-gyp for Windows and from source |
+| `native/prebuild-linux.sh`, `native/manifest.js` | the Linux prebuilds' reproducible build (images pinned by digest, node-api-headers 1.9.0) and the manifest of every shipped binary's size and SHA-256, which `--check` holds a rebuild to |
 | `prebuilds/` | the shipped binaries, built by `.github/workflows/prebuild.yml` (linux x64/arm64 glibc and musl, win32-x64, darwin arm64/x64) or by hand with `native/build.sh` |
 | `lib/shared.js` | `SharedArrayBuffer`-backed allocators for the buffers the pool operates on; plain buffers and `HAS_SAB === false` when it is unavailable. `takeShared`/`giveShared` keep a finished frame's full-size scratch for the next frame (at most 16 a size and 128 MB in all, least recently used size dropped first), so the workers do not collect inside frames |
 | `lib/transformFile.js` | trained-transform persistence and its validity guards (golden identity, working size); `validateTransformRecord` holds the checks so a legacy file and a profile's `transform` section go through the same rules, `strictContentKey` compares the content key on every read; reuses `lib/scaleFile.js`'s path and number helpers |
@@ -862,9 +863,14 @@ result cannot depend on whether a binary loaded. Three things hold that:
   FMA contraction on).
 
 A dispatch the addon cannot index - a missing buffer, one too short, a
-fractional radius - is refused before it claims a chunk and runs on the
-JS kernel instead: in the addon an out-of-bounds read is a crash of the
-whole Node-RED process, where in JS it is an `undefined`.
+fractional radius, a grid that is not exactly the one its cell makes of
+the image, a size past 2^24, a tone chunk that splits a row of blocks -
+is refused before it claims a chunk and runs on the JS kernel instead:
+in the addon an out-of-bounds access is a crash of the whole Node-RED
+process, where in JS it is an `undefined`. The ctx's properties are all
+read before any buffer's memory is taken, so a getter cannot free a
+buffer the kernel then reads; the scratch is grown before claiming, and
+an allocation that fails refuses the dispatch rather than aborting.
 
 With the checks that much quicker, the overlay's RGB canvas (9.4 MB of
 fresh pages a frame, built on the inspector thread while it waited) was

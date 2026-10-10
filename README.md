@@ -194,15 +194,36 @@ Any CPU of the architecture runs them (baseline x86-64 / armv8-a; the
 tile search picks an AVX2 build of its inner loop at run time on Linux
 x64 where the CPU has it).
 
+The Linux binaries are reproducible: `sh native/prebuild-linux.sh x64
+glibc|musl` builds one in an image pinned by digest
+(`quay.io/pypa/manylinux2014_x86_64@sha256:f6a6f153…` — CentOS 7 and past
+its end of life, kept for glibc 2.17 — and
+`quay.io/pypa/musllinux_1_2_x86_64@sha256:dc96c1f6…`, the full digests in
+the script) against `node-api-headers` 1.9.0, and gives the bytes
+`prebuilds/manifest.json` records:
+
+| binary | bytes | SHA-256 |
+| --- | ---: | --- |
+| `linux-x64/vision-kernels.glibc.node` | 96,320 | `e28aac3f97ad9e2b8de358b0984a6a31802a70f130cdcbfba355ebcb04a8a532` |
+| `linux-x64/vision-kernels.musl.node` | 116,400 | `339c6b1def8f58189450047b9fd677f1aa703da9a3a9992daff5356411fb9031` |
+
+The loader checks a binary's size and hash against that manifest before it
+opens it, and CI rebuilds both and fails on any difference.
+
 **Fallback.** Anything that stops the addon loading — no binary for the
-platform, a Node without N-API 8, a binary from another version of the
-kernels — leaves the JS kernels running, with one line in the Node-RED
+platform, one that is not the manifest's (a truncated binary is never
+opened: dlopen of one can take the process down), a Node without N-API 8,
+a binary from another version of the kernels — leaves the JS kernels
+running, with one line in the Node-RED
 log at startup saying which kernels it runs and why
 (`golden-compare: JS pool kernels - no prebuilt binary for …`; a binary
 that is there and fails to load is a warning). Set
 `VISION_TOOLS_KERNELS=js` to run the JS kernels anyway, which is how to
 check the two against each other on one host. The JS kernels stay the
-reference: the tests hold every native kernel to them byte for byte.
+reference: the tests hold every native kernel to them byte for byte. A
+dispatch the addon refuses — a buffer too short, a grid that is not its
+image's, a library caller's `localAlignMax` past 64 (the node clamps it
+to 16) — runs on its JS kernel too.
 
 **Building from source**, for a platform without a prebuild — from the
 package directory (`node_modules/@graciousstar/node-red-contrib-vision-tools`):
@@ -214,8 +235,11 @@ mkdir -p native/build/Release
 sh native/build.sh native/build/Release/vision_kernels.node "$(dirname "$(dirname "$(which node)")")/include/node"
 ```
 
-`native/build/Release/vision_kernels.node` is loaded in preference to the
-prebuilds. Whatever builds it must keep floating-point contraction off
+then set `VISION_TOOLS_KERNELS=source` in Node-RED's environment: only
+then is `native/build/Release/vision_kernels.node` loaded, in place of
+the prebuilds and without the manifest's check, so a stale local build is
+never picked up by accident. Whatever builds it must keep floating-point
+contraction off
 (`-ffp-contract=off`, no `-ffast-math`; MSVC `/fp:precise`), which both
 build files do: an FMA rounds once where the JS rounds twice, and the
 bytes would then depend on the CPU.

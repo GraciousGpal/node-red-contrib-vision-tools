@@ -22,8 +22,12 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   and musl), so there is no install script; `.github/workflows/prebuild.yml`
   builds and tests linux arm64, win32-x64 and macOS too (not yet run).
   Where no binary loads the JS kernels run, with one log line saying
-  why; `VISION_TOOLS_KERNELS=js` forces them. `native/` holds the sources
-  for a build from source (`npx node-gyp rebuild`, or `native/build.sh`).
+  why; `VISION_TOOLS_KERNELS=js` forces them. Each binary is checked
+  against `prebuilds/manifest.json` (size and SHA-256) before it is
+  opened, and the Linux ones rebuild byte for byte in images pinned by
+  digest (`native/prebuild-linux.sh`). `native/` holds the sources for a
+  build from source (`npx node-gyp rebuild`, or `native/build.sh`), which
+  loads with `VISION_TOOLS_KERNELS=source`.
 
 - **Per-golden profiles on `golden-compare` (`profileDir`, `msg.profile`).**
   The trained transform and the nuisance map each lived in one file per
