@@ -201,6 +201,16 @@ test("filter rejects a type it does not implement", { skip }, async () => {
 	);
 });
 
+test("filter edge refuses a kernel past 7, where the 16-bit Sobel overflows", { skip }, async () => {
+	await assert.rejects(
+		() => cvjs.filter(labelFrame(64, 48, 0, 30, 20, 1), "edge", 9, 1, "raw"),
+		RangeError,
+	);
+	// 7 itself is fine
+	const { image } = await cvjs.filter(labelFrame(64, 48, 0, 30, 20, 1), "edge", 7, 1, "raw");
+	assert.strictEqual(image.width, 64);
+});
+
 test("crop copies the requested rect and clamps one that runs off the frame", { skip }, async () => {
 	const frame = labelFrame(200, 150, 0, 100, 80, 1);
 	const { image } = await cvjs.crop(frame, 50, 35, 100, 80, false, "raw");
@@ -388,6 +398,31 @@ test("imageAlign reports failure rather than a garbage transform", { skip }, asy
 		assert.strictEqual(result.transformMatrix, null);
 		assert.strictEqual(result.image, null);
 	}
+});
+
+test("imageAlign caps ECC at 500 iterations, so a huge count cannot hold the event loop", { skip }, async () => {
+	// ECC runs on the event loop here (this engine is single-threaded); a
+	// count it never converges within would hold it for minutes. The count
+	// is what reaches OpenCV's TermCriteria, so watch that.
+	const cv = await cvjs.ready();
+	const TermCriteria = cv.TermCriteria;
+	const counts = [];
+	cv.TermCriteria = function (type, maxCount, epsilon) {
+		counts.push(maxCount);
+		return new TermCriteria(type, maxCount, epsilon);
+	};
+	try {
+		const golden = texture(labelFrame(160, 120, 0, 90, 60, 1), 60);
+		const target = rawImage(Buffer.from(golden.data), 160, 120, 1, "GRAY");
+		await imageAlign(
+			golden, target, 1, 1e9, 1e-4, "raw", 90, false, true, null,
+			"affine", "features+ecc", "always", "orb",
+		);
+	} finally {
+		cv.TermCriteria = TermCriteria;
+	}
+	assert.ok(counts.length > 0, "ECC was not reached");
+	assert.deepStrictEqual([...new Set(counts)], [500]);
 });
 
 test("imageAlign refuses an unsupported motion model or detector", { skip }, async () => {
