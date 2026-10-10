@@ -24,6 +24,15 @@ the 308 OpenCV-aligned frame-passes; blemish regions move on 4 frames,
 all bad parts that still fail (densities by up to 0.06, one speck by a
 pixel). The 16 frame-passes on the JS fallback are byte-identical.
 
+That is this rig's set. Sets built to sit at thresholds do flip: on
+`bench/synth/generate.js`'s default 253 frames, 7 verdicts under Sauvola
+thresholding (4 to pass, 3 to fail) and none at the other defaults; on a
+smaller 87-frame set, 5. The difference enters through the alignment's
+float arithmetic - an OpenCV 4.9 build with rosepetal's AVX2 baseline and
+fast-math reproduced it bit for bit, the same build without them already
+moved - so a rig is re-baselined with `bench/golden-drift.js` before it
+relies on the new engine.
+
 An earlier build of the same addon that dispatched AVX2/AVX-512 at run
 time aligned in 8.5 ms instead of 9.6, but an SSE4.2-only run of it moved
 the local alignment by up to 0.34 px and every heat map by bytes; the

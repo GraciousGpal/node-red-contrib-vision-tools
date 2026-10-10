@@ -1196,8 +1196,11 @@ machine. `imageAlign` is rosepetal's algorithm for the arguments
 input made once per golden buffer and the frame's working copies kept
 between calls. Against rosepetal's OpenCV 4 build the results moved a
 little - the alignment by hundredths of a pixel, no verdict on the rig's
-162 frames (CHANGELOG); `bench/golden-drift.js` holds a re-baseline to
-that.
+162 frames, but 7 of 253 synthetic frames built to sit at Sauvola's
+threshold (CHANGELOG): the float arithmetic of ORB/USAC/ECC without
+rosepetal's AVX2 baseline and fast-math, carried to the edges by the
+nearest-neighbour warp. A rig is re-baselined with `bench/golden-drift.js`
+before it relies on the new engine.
 
 **Why the WASM engine stays.** A platform with no opencv5 binary still runs
 `label-crop` and the fast alignment, ~4× slower and single-threaded;

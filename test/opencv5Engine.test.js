@@ -73,6 +73,22 @@ test("filter otsu and edge give the opencv.js engine's bytes, in-place blur incl
 	same((await own.filter(rgb, "otsu", 5, 0, "raw")).image, (await cvjs.filter(rgb, "otsu", 5, 0, "raw")).image);
 });
 
+test("both engines encode a BGR image with its own colours, as label-crop's encoded output needs", { skip: skipCross }, async () => {
+	const sharp = require("sharp");
+	const rgb = labelFrame(40, 30, 0, 20, 10, 3);
+	const bgr = { ...rgb, data: Buffer.from(rgb.data), colorSpace: "BGR" };
+	for (let i = 0; i < bgr.data.length; i += 3) [bgr.data[i], bgr.data[i + 2]] = [rgb.data[i + 2], rgb.data[i]];
+	for (const engine of [own, cvjs]) {
+		for (const fmt of ["png", "jpg"]) {
+			const encoded = (await engine.crop(bgr, 0, 0, 40, 30, false, fmt, 100)).image;
+			const { data } = await sharp(encoded).raw().toBuffer({ resolveWithObject: true });
+			if (fmt === "png") assert.ok(data.equals(rgb.data), `${fmt}: red and blue swapped`);
+			// a lossy check on jpg: the label's warm red channel stays the larger
+			else assert.ok(Math.abs(data[(15 * 40 + 20) * 3] - rgb.data[(15 * 40 + 20) * 3]) < 12, `${fmt}: red and blue swapped`);
+		}
+	}
+});
+
 test("crop gives the opencv.js engine's bytes; rotate its canvas, within one grey level", { skip: skipCross }, async () => {
 	const frame = labelFrame(240, 160, 0, 140, 80, 3);
 	same((await own.crop(frame, 200, -5, 100, 60, false, "raw")).image, (await cvjs.crop(frame, 200, -5, 100, 60, false, "raw")).image);

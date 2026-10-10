@@ -28,15 +28,40 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
     binaries give identical output, pinned by its tests - and it keys a
     golden's features by the golden itself. (Per arch: arm64's NEON
     multiply-add may round differently from x64's SSE.)
-  - **Results move a little; verdicts do not.** On the 162-frame
-    reference set (rig, 2 rounds × 2 passes, interleaved with 1.2's main):
-    148 pass / 14 fail, unchanged, with no grade or route change. The
-    alignment moves by at most 0.058 px, 0.0018° and 0.00007 in scale;
-    the local alignment's worst tile by up to 2.07 px; blemish regions
-    shift on 4 failing parts, which still fail; heat maps change bytes on
-    every OpenCV-aligned frame. No retraining is needed: trained
+  - **Results move a little, and a verdict at a threshold's edge can
+    change: re-baseline a rig before relying on it.** On the 162-frame
+    rig reference set (2 rounds × 2 passes, interleaved with 1.2's main)
+    no verdict changed: 148 pass / 14 fail, no grade or route change.
+    The alignment moved by at most 0.058 px, 0.0018° and 0.00007 in
+    scale; the local alignment's worst tile by up to 2.07 px; blemish
+    regions shifted on 4 failing parts, which still fail; heat maps
+    change bytes on every OpenCV-aligned frame. On synthetic sets, built
+    to sit at thresholds, verdicts do flip: 7 of 253 frames of
+    `bench/synth/generate.js`'s default set under Sauvola thresholding
+    (4 to pass, 3 to fail; 0 of 253 at the other defaults), and 5 of 87
+    on a smaller set - corrections and new escapes, accuracy about even.
+    They enter through the alignment's arithmetic, not its algorithm: an
+    OpenCV 4.9 build with rosepetal's AVX2 baseline and fast-math
+    reproduced rosepetal bit for bit, and the same build without them
+    already moved like this; the matrix moves by thousandths of a pixel,
+    and the nearest-neighbour warp, the local alignment and the blemish
+    regions after it pass that on at edges. Matching it would need the
+    AVX2 baseline and fast-math back. No retraining is needed: trained
     transforms, nuisance maps and profiles are unaffected.
-    `bench/golden-drift.js` checks a rig's own set against these bounds.
+    `bench/golden-drift.js` checks a rig's own set: verdicts exact,
+    everything else within stated bounds.
+  - **label-crop's output pixels move too:** on the 253-frame synthetic
+    set the detection (found or not, angle, corners) was identical on
+    every frame, and the cropped pixels identical on 165; on the other
+    88 OpenCV 5's revised bilinear rotation moved values by at most 3
+    grey levels, on up to 11% of a crop's values.
+  - **The engine says what it is.** `golden-compare` and `label-crop` log
+    their OpenCV engine at startup, and warn - with the loader's reason -
+    when it is opencv.js because opencv5 did not load: opencv.js is
+    slower and aligns differently (on the synthetic set it moves the
+    alignment by up to 1.25 px and changes more verdicts), so a rig must
+    not fall onto it unnoticed. The frame log names the engine where it
+    said "native".
   - **Faster:** a good frame 46.4 → 37.7 ms at the median, 61.0 → 47.4 ms
     at p95, 68.8 → 55.9 ms at p99; the OpenCV alignment 17.3 → 9.7 ms.
   - Until `@graciousstar/opencv5` is published and added to
@@ -44,6 +69,13 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
     and its binaries are built there, not committed:
     `opencv5/native/prebuild-linux.sh`. An installed copy of this package
     meanwhile runs on opencv.js.
+
+### Fixed
+
+- **An encoded output kept a BGR image's red and blue swapped** on both
+  engines (label-crop's png/jpg/webp output of a raw BGR frame); and
+  label-crop's *Optimise PNG* is honoured again (zlib level 9 with
+  adaptive filtering, else level 1).
 
 ### Added
 
@@ -53,8 +85,8 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   at any msg property. It replaces the `rp-resize` node of the rosepetal
   package with the same size rules, so the rig's "halve to inspection
   scale" steps give the frames the inspection was measured on, byte for
-  byte. `scripts/migrate-rp-nodes.js` rewrites a flows.json in place of
-  its `rp-resize` nodes (same ids, positions and wires) and removes
+  byte. `scripts/migrate-rp-nodes.js` writes a copy of a flows.json with
+  its `rp-resize` nodes replaced (same ids, positions and wires) and
   `rp-heat-diff` debug views, refusing - and changing nothing - when a node
   cannot be carried over exactly.
 

@@ -29,12 +29,13 @@ module.exports = (RED) => {
 	const { formatMs } = require("./lib/formatMs.js");
 
 	// Settle the engine choice and pay its start-up cost now rather than on
-	// the first frame: the WASM build takes ~200ms to instantiate.
-	require("./lib/engine.js")
-		.warmup()
-		.catch(() => {
-			// availability is reported per message, where it can reach a flow
-		});
+	// the first frame: the WASM build takes ~200ms to instantiate. Say which
+	// engine it is, and warn when opencv5 did not load.
+	const engines = require("./lib/engine.js");
+	engines.logEngine(RED.log, "label-crop");
+	engines.warmup().catch(() => {
+		// availability is reported per message, where it can reach a flow
+	});
 
 	const POLARITIES = ["auto", "light", "dark"];
 	const BOUNDARY_MODES = ["blob", "calipers", "upstream"];
@@ -172,11 +173,12 @@ module.exports = (RED) => {
 			const started = performance.now();
 			try {
 				if (!available()) {
-					const why = require("./lib/engine.js").candidate().error;
+					// the loader's own reasons, per engine tried: a pinned engine
+					// was the only one tried
+					const why = engines.candidate().error;
+					const pinned = engines.mode() === "auto" ? "" : ` (VISION_TOOLS_ENGINE=${engines.mode()})`;
 					throw new Error(
-						"label-crop: OpenCV engine unavailable - no @graciousstar/opencv5 " +
-							"binary loads here and @techstark/opencv-js (WASM, runs " +
-							`anywhere) is not installed${why ? ` (${why.message})` : ""}`,
+						`label-crop: OpenCV engine unavailable${pinned} - ${why ? why.message : "unknown"}`,
 					);
 				}
 				const options = { ...defaults };

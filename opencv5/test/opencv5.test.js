@@ -139,6 +139,21 @@ test("an encoded Buffer is decoded through sharp at its own channel count", { sk
 	assert.ok(Buffer.isBuffer(encoded) && encoded.subarray(1, 4).toString() === "PNG");
 });
 
+test("an encoded output keeps a BGR image's colours, and pngOptimize only shrinks the file", { skip }, async () => {
+	const sharp = require("sharp");
+	const rgb = labelFrame(40, 30, 0, 20, 10, 3);
+	const bgr = { ...rgb, data: Buffer.from(rgb.data), colorSpace: "BGR" };
+	for (let i = 0; i < bgr.data.length; i += 3) [bgr.data[i], bgr.data[i + 2]] = [rgb.data[i + 2], rgb.data[i]];
+	const fast = (await own.crop(bgr, 0, 0, 40, 30, false, "png", 90, false)).image;
+	const small = (await own.crop(bgr, 0, 0, 40, 30, false, "png", 90, true)).image;
+	for (const png of [fast, small]) {
+		const { data } = await sharp(png).raw().toBuffer({ resolveWithObject: true });
+		assert.ok(data.equals(rgb.data), "red and blue swapped");
+	}
+	assert.ok(small.length <= fast.length);
+	assert.strictEqual(bgr.data[0], rgb.data[2], "the caller's BGR buffer is left alone");
+});
+
 // ---- alignment ---------------------------------------------------------
 
 function shifted(golden, tw, th, mx, shiftX, shiftY) {

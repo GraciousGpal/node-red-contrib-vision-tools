@@ -118,7 +118,32 @@ test("resolve() agrees with candidate() and warmup() reports the name", { skip: 
 
 test("label-crop reports the engine as available on this host", { skip: !cvjsInstalled && !ownLoads }, () => {
 	// label-crop treats a missing engine as a setup error and refuses every
-	// frame; with either engine installed that state is unreachable.
-	const { available } = require("../lib/labelCrop.js");
-	assert.strictEqual(available(), true);
+	// frame; with either engine installed, auto never reaches that state
+	// (whatever VISION_TOOLS_ENGINE the suite itself runs under)
+	withMode("auto", () => {
+		const { available } = require("../lib/labelCrop.js");
+		assert.strictEqual(available(), true);
+	});
+});
+
+test("the engine is logged once per node type: info for opencv5, a warning for a fallback", { skip: !cvjsInstalled }, () => {
+	const lines = [];
+	const log = { info: (t) => lines.push(["info", t]), warn: (t) => lines.push(["warn", t]) };
+	withEnv({ VISION_TOOLS_ENGINE: undefined, OPENCV5_ADDON: "/nonexistent/opencv5.node" }, () => {
+		engineModule.logEngine(log, "label-crop");
+		engineModule.logEngine(log, "label-crop");
+	});
+	assert.strictEqual(lines.length, 1);
+	assert.strictEqual(lines[0][0], "warn");
+	assert.match(lines[0][1], /opencv\.js, because opencv5 did not load \(own: /);
+	lines.length = 0;
+	withMode("opencv-js", () => engineModule.logEngine(log, "golden-compare"));
+	assert.deepStrictEqual(lines, [["info", "golden-compare: OpenCV engine opencv.js (VISION_TOOLS_ENGINE=opencv-js)"]]);
+	if (ownLoads) {
+		lines.length = 0;
+		withMode("auto", () => engineModule.logEngine(log, "golden-compare"));
+		assert.deepStrictEqual(lines, [["info", "golden-compare: OpenCV engine opencv5"]]);
+	}
+	assert.strictEqual(engineModule.label("own"), "opencv5");
+	assert.strictEqual(engineModule.label("opencv-js"), "opencv.js");
 });

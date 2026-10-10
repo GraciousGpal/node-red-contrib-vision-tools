@@ -104,13 +104,24 @@ Which one answers is `lib/engine.js`'s decision: opencv5 where its binary
 loads, opencv.js otherwise. `VISION_TOOLS_ENGINE=own` or `=opencv-js`
 pins one - a pinned engine that cannot load is an error, never a silent
 substitution (`native`, the rosepetal addon's name up to 1.2, is read as
-`own`).
+`auto`, so an old setting keeps the fallback). `golden-compare` and
+`label-crop` log which engine they run on at startup, and **warn when it
+is opencv.js because opencv5 did not load**, with the loader's reason:
+opencv.js is slower, and its alignment is a different implementation, so
+verdicts near a threshold can differ from a rig tuned on opencv5.
 
 The two give the same `label-crop` results - `node bench/engine-parity.js`
 sweeps angles and label shapes and every field matches - and the same
 bytes from `colorConvert`, `resize`, `filter` and `crop`
 (`test/opencv5Engine.test.js`). `golden-compare`'s alignment is where they
 differ: `lib/cvjsAlign.js` is its own implementation of the same idea.
+
+Moving from the rosepetal engine (up to 1.2) to opencv5 moves results a
+little: no verdict changed on the 162-frame rig reference set, but 7 of
+253 synthetic frames built to sit at a threshold flipped (CHANGELOG).
+Re-baseline a rig before relying on it: dump its own set with
+`bench/golden-container-bench.js --dump` before and after, and check
+the two with `bench/golden-drift.js`.
 
 Measured in the rig's Alpine x64 container (Node 24), same frames
 (`node bench/engine-compare.js`):

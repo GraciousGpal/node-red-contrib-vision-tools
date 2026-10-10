@@ -207,15 +207,36 @@ async function decodeBuffer(buffer) {
 	return rawImage(data, info.width, info.height, info.channels);
 }
 
-async function deliver(image, fmt, quality) {
+/**
+ * A copy of the pixels in the R-G-B order sharp reads raw input in: a
+ * BGR or BGRA image has its first and third channels swapped, so it is
+ * not encoded with red and blue exchanged.
+ */
+function rgbOrder(raw) {
+	const out = Buffer.from(raw.view);
+	if (raw.colorSpace !== "BGR" && raw.colorSpace !== "BGRA") return out;
+	const c = raw.channels;
+	for (let i = 0; i < out.length; i += c) {
+		const b = out[i];
+		out[i] = out[i + 2];
+		out[i + 2] = b;
+	}
+	return out;
+}
+
+/** Raw straight through; jpg/png/webp through sharp. pngOptimize trades
+ * time for size: zlib level 9 with adaptive filtering, else level 1. */
+async function deliver(image, fmt, quality, pngOptimize) {
 	if (RAW_FORMATS.has(fmt)) return image;
 	const raw = describeRaw(image);
-	const pipeline = getSharp()(Buffer.from(raw.view), {
+	const pipeline = getSharp()(rgbOrder(raw), {
 		raw: { width: raw.width, height: raw.height, channels: raw.channels },
 	});
 	const q = Number.isFinite(quality) ? quality : 90;
 	if (fmt === "jpg" || fmt === "jpeg") return pipeline.jpeg({ quality: q }).toBuffer();
-	if (fmt === "png") return pipeline.png().toBuffer();
+	if (fmt === "png") {
+		return pipeline.png(pngOptimize ? { compressionLevel: 9, adaptiveFiltering: true } : { compressionLevel: 1 }).toBuffer();
+	}
 	if (fmt === "webp") return pipeline.webp({ quality: q }).toBuffer();
 	throw new Error(`opencv5: unsupported output format "${fmt}"`);
 }
@@ -233,7 +254,7 @@ async function convert(raw, target) {
 }
 
 /** colorConvert(image, targetColorSpace, [fmt], [quality]) -> {image, timing} */
-async function colorConvert(image, targetColorSpace, fmt, quality) {
+async function colorConvert(image, targetColorSpace, fmt, quality, pngOptimize) {
 	const t0 = performance.now();
 	const target = String(targetColorSpace || "RGB").toUpperCase();
 	if (!CHANNELS_OF[target]) throw new Error(`opencv5: unsupported colour space ${target}`);
@@ -242,12 +263,12 @@ async function colorConvert(image, targetColorSpace, fmt, quality) {
 		const copy = Buffer.allocUnsafeSlow(raw.view.byteLength);
 		copy.set(raw.view);
 		return {
-			image: await deliver(rawImage(copy, raw.width, raw.height, raw.channels, target), fmt, quality),
+			image: await deliver(rawImage(copy, raw.width, raw.height, raw.channels, target), fmt, quality, pngOptimize),
 			timing: timing(t0, "colorConvert"),
 		};
 	}
 	const { image: out, reply } = await convert(raw, target);
-	return { image: await deliver(out, fmt, quality), timing: timing(t0, "colorConvert", reply) };
+	return { image: await deliver(out, fmt, quality, pngOptimize), timing: timing(t0, "colorConvert", reply) };
 }
 
 /** A target size: num, pct/percent, scale/multiply; 0/NaN keeps the aspect ratio. */
@@ -267,7 +288,7 @@ function resolveDimension(mode, value, source) {
 }
 
 /** resize(image, wMode, wVal, hMode, hVal, [fmt], [quality]) -> {image, timing}; INTER_LINEAR */
-async function resize(image, wMode, wVal, hMode, hVal, fmt, quality) {
+async function resize(image, wMode, wVal, hMode, hVal, fmt, quality, pngOptimize) {
 	const t0 = performance.now();
 	const cv = load();
 	const raw = describeRaw(image);
@@ -279,7 +300,7 @@ async function resize(image, wMode, wVal, hMode, hVal, fmt, quality) {
 	const out = Buffer.allocUnsafeSlow(width * height * raw.channels);
 	const reply = await cv.resize(raw.view, raw.width, raw.height, raw.channels, out, width, height);
 	return {
-		image: await deliver(rawImage(out, width, height, raw.channels, raw.colorSpace), fmt, quality),
+		image: await deliver(rawImage(out, width, height, raw.channels, raw.colorSpace), fmt, quality, pngOptimize),
 		timing: timing(t0, "resize", reply),
 	};
 }
@@ -295,7 +316,7 @@ async function resize(image, wMode, wVal, hMode, hVal, fmt, quality) {
  *   "edge" - Sobel magnitude, |gx|/2 + |gy|/2 scaled by `intensity`; a
  *            continuous grey map, not a binary edge map.
  */
-async function filter(image, type, kernel, intensity, fmt, quality) {
+async function filter(image, type, kernel, intensity, fmt, quality, pngOptimize) {
 	const t0 = performance.now();
 	const cv = load();
 	const kind = String(type || "").toLowerCase();
@@ -309,13 +330,13 @@ async function filter(image, type, kernel, intensity, fmt, quality) {
 	const out = Buffer.allocUnsafeSlow(raw.width * raw.height);
 	const reply = await cv.filter(gray.view, raw.width, raw.height, kind === "otsu" ? 0 : 1, k, weight, out);
 	return {
-		image: await deliver(rawImage(out, raw.width, raw.height, 1, "GRAY"), fmt, quality),
+		image: await deliver(rawImage(out, raw.width, raw.height, 1, "GRAY"), fmt, quality, pngOptimize),
 		timing: timing(t0, kind, reply),
 	};
 }
 
 /** crop(image, x, y, w, h, normalized, [fmt], [quality]) -> {image, timing}; clamped into the frame */
-async function crop(image, x, y, w, h, normalized, fmt, quality) {
+async function crop(image, x, y, w, h, normalized, fmt, quality, pngOptimize) {
 	const t0 = performance.now();
 	const raw = describeRaw(image);
 	const sx = normalized ? raw.width : 1;
@@ -335,7 +356,7 @@ async function crop(image, x, y, w, h, normalized, fmt, quality) {
 		out.set(raw.view.subarray(from, from + cw * c), row * cw * c);
 	}
 	return {
-		image: await deliver(rawImage(out, cw, ch, c, raw.colorSpace), fmt, quality),
+		image: await deliver(rawImage(out, cw, ch, c, raw.colorSpace), fmt, quality, pngOptimize),
 		timing: timing(t0, "crop"),
 	};
 }
@@ -365,7 +386,7 @@ function padColour(padColor, channels) {
  * rotated frame (each side Math.trunc of the rotated extent), re-centred.
  * INTER_LINEAR, the border in `padColor`.
  */
-async function rotate(image, angleDeg, padColor, fmt, quality) {
+async function rotate(image, angleDeg, padColor, fmt, quality, pngOptimize) {
 	const t0 = performance.now();
 	const cv = load();
 	const raw = describeRaw(image);
@@ -388,7 +409,7 @@ async function rotate(image, angleDeg, padColor, fmt, quality) {
 		padColour(padColor, raw.channels),
 	);
 	return {
-		image: await deliver(rawImage(out, dstW, dstH, raw.channels, raw.colorSpace), fmt, quality),
+		image: await deliver(rawImage(out, dstW, dstH, raw.channels, raw.colorSpace), fmt, quality, pngOptimize),
 		timing: timing(t0, "rotate", reply),
 	};
 }
@@ -465,7 +486,7 @@ async function imageAlign(reference, target, scale, iterations, epsilon, fmt, qu
 	setImmediate(() => {
 		spare = out;
 	});
-	const image = r.success || returnImage !== false ? await deliver(rawImage(out, ref.width, ref.height, 1, "GRAY"), fmt, quality) : null;
+	const image = r.success || returnImage !== false ? await deliver(rawImage(out, ref.width, ref.height, 1, "GRAY"), fmt, quality, pngOptimize) : null;
 	return {
 		success: r.success,
 		image,

@@ -56,6 +56,7 @@ const BOUNDS = {
 	".toneBlemish.defectRatio": 0.002,
 	".printBlemish.worstMissing": 0.05,
 	".backgroundBlemish.worstExcess": 0.05,
+	".speckBlemish.count": 2,
 	".speckBlemish.area": 25,
 	".speckBlemish.largest": 25,
 };

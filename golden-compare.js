@@ -69,6 +69,9 @@ function logKernels(log) {
 
 module.exports = (RED) => {
 	logKernels(RED.log);
+	// which OpenCV the fast alignment and seed would use, and a warning when
+	// it is opencv.js because opencv5 did not load (lib/engine.js)
+	require("./lib/engine.js").logEngine(RED.log, "golden-compare");
 	/**
 	 * Every setting the editor saves and a message may override by the same
 	 * name: the runtime fallback and the clamp, declared once. The
@@ -1850,8 +1853,10 @@ module.exports = (RED) => {
 				}) `;
 				// which way the frame was aligned, and the align time by stage,
 				// so a slow frame says where it was slow without a debug node
+				// "native" is the OpenCV route: say which OpenCV answered
+				const engines = require("./lib/engine.js");
 				const route = result.transform.native
-					? "native"
+					? engines.label(engines.candidate().name)
 					: result.transform.seeded
 						? "js+seed"
 						: "js";
