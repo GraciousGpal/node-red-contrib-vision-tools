@@ -1,0 +1,67 @@
+#!/bin/sh
+# Build the vision-cv addon for Linux in the same pinned images as the
+# native kernels (native/prebuild-linux.sh):
+#
+#   sh native/opencv/prebuild-linux.sh x64|arm64 glibc|musl
+#
+# Two steps, both inside the image: the static OpenCV 5 (build-opencv.sh,
+# the slow one - minutes) and the addon linked against it (build.sh,
+# seconds). The OpenCV install is kept in $VISION_CV_CACHE (default
+# .opencv-cache/ at the repo root, ignored by git) under a key of the
+# image digest, the OpenCV tarball's SHA-256 and build-opencv.sh's own
+# hash, so only a change to one of those rebuilds it; CI caches that
+# directory on the same key.
+#
+# The OpenCV source is the 5.0.0 release tarball from GitHub, checked
+# against the SHA-256 below before anything is built from it.
+#
+# Writes prebuilds/linux-<arch>/vision-cv.<libc>.node.
+set -eu
+arch=$1
+libc=$2
+case "$arch-$libc" in
+x64-glibc) image=quay.io/pypa/manylinux2014_x86_64@sha256:f6a6f153c9cf45470507ebbc27013e5db14ce21331b62fd2c540561f25e5f0a5 ;;
+x64-musl) image=quay.io/pypa/musllinux_1_2_x86_64@sha256:dc96c1f69b8a6241bcc8175a8d89b1caf0dccf959ff111a2272c42747af38350 ;;
+arm64-glibc) image=quay.io/pypa/manylinux2014_aarch64@sha256:c10b5d2ce68a4426011b5b9b8492f01037b9d0fd2187ed1956b346aa42faeb17 ;;
+arm64-musl) image=quay.io/pypa/musllinux_1_2_aarch64@sha256:83a69fa8383ba5ac2d4f01597b791ebf93269c9748270b51b7a54fbba0dcdd39 ;;
+*) echo "usage: prebuild-linux.sh x64|arm64 glibc|musl" >&2; exit 2 ;;
+esac
+OPENCV_VERSION=5.0.0
+OPENCV_SHA256=b0528f5a1d379d59d4701cb28c36e22214cc51cf64594e5b56f2d3e6c0233095
+cd "$(dirname "$0")/../.."
+cache=${VISION_CV_CACHE:-.opencv-cache}
+mkdir -p "$cache" "prebuilds/linux-$arch"
+tarball=$cache/opencv-$OPENCV_VERSION.tar.gz
+if [ ! -f "$tarball" ]; then
+	curl -fsSL -o "$tarball.part" "https://github.com/opencv/opencv/archive/refs/tags/$OPENCV_VERSION.tar.gz"
+	mv "$tarball.part" "$tarball"
+fi
+got=$(sha256sum "$tarball" | cut -d' ' -f1)
+if [ "$got" != "$OPENCV_SHA256" ]; then
+	echo "prebuild-linux.sh: $tarball has SHA-256 $got, expected $OPENCV_SHA256" >&2
+	exit 1
+fi
+key=$(printf '%s %s %s' "$image" "$OPENCV_SHA256" "$(sha256sum native/opencv/build-opencv.sh | cut -d' ' -f1)" | sha256sum | cut -c1-16)
+prefix=opencv-$OPENCV_VERSION-$arch-$libc-$key
+work=.prebuild-cv-$arch-$libc
+rm -rf "$work"
+mkdir -p "$work"
+(cd "$work" && npm pack --silent node-api-headers@1.9.0 >/dev/null && tar xzf node-api-headers-1.9.0.tgz)
+# the builds in fixed paths inside the container, so no host path reaches
+# a binary (git-bash on Windows: no path conversion, a C:/ mount path)
+export MSYS_NO_PATHCONV=1
+host=$(command -v cygpath >/dev/null 2>&1 && cygpath -m "$PWD" || echo "$PWD")
+docker run --rm -v "$host:/w" "$image" sh -c "
+	set -e
+	if [ ! -d /w/$cache/$prefix/lib ]; then
+		sh /w/native/opencv/build-opencv.sh /w/$tarball /opt/opencv
+		rm -rf /w/$cache/$prefix.part && cp -r /opt/opencv /w/$cache/$prefix.part
+		mv /w/$cache/$prefix.part /w/$cache/$prefix
+	else
+		cp -r /w/$cache/$prefix /opt/opencv
+	fi
+	cp -r /w/native/opencv /tmp/src && cp -r /w/$work/package/include /tmp/include
+	sh /tmp/src/build.sh /tmp/out.node /tmp/include /opt/opencv
+	cp /tmp/out.node /w/prebuilds/linux-$arch/vision-cv.$libc.node
+	chmod 644 /w/prebuilds/linux-$arch/vision-cv.$libc.node"
+rm -rf "$work"
