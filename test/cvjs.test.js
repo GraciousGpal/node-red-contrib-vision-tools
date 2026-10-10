@@ -137,40 +137,36 @@ test("filter otsu returns a 0/255 mask covering the label", { skip }, async () =
 	assert.ok(Math.abs(got - expected) < 0.01, `mask fraction ${got} vs ${expected}`);
 });
 
-test("filter otsu blurs the caller's buffer in place, as the native engine does", { skip }, async () => {
-	// Bug-compatibility, deliberately: label-crop calls filter(det, "otsu")
-	// and then filter(det, "edge") on the same det, and hands det to
-	// refineRectBoundary as its grey image. On the native engine that det
-	// has been GaussianBlurred (3x3, sigma 0) in place, and the refinement
-	// depends on it - without the blur an axis-aligned label refines onto
-	// its own printed rules. See the note in lib/cvjs.js.
+test("filter otsu hands back the blurred grey and leaves the caller's buffer alone", { skip }, async () => {
+	// label-crop runs its edge filter and boundary refinement on the
+	// blurred grey (3x3, sigma 0) - without the blur an axis-aligned label
+	// refines onto its own printed rules. The engines used to write it over
+	// the caller's input; they return it now. See the note in lib/cvjs.js.
 	const frame = labelFrame(200, 150, 0, 100, 80, 1);
 	const before = Buffer.from(frame.data);
-	const { image } = await cvjs.filter(frame, "otsu", 3, 0, "raw");
+	const { image, blurred } = await cvjs.filter(frame, "otsu", 3, 0, "raw");
 
-	assert.notDeepStrictEqual(
-		Buffer.from(frame.data),
-		before,
-		"otsu must leave the blurred copy in the caller's buffer",
-	);
+	assert.deepStrictEqual(Buffer.from(frame.data), before, "otsu must not write to its input");
+	assert.strictEqual(blurred.width, 200);
+	assert.strictEqual(blurred.height, 150);
+	assert.strictEqual(blurred.channels, 1);
 	// a blur, not the mask: the boundary gains intermediate tones while the
 	// flat interior keeps its value
-	const values = new Set(frame.data);
-	assert.ok(values.size > 2, `input has ${values.size} levels, expected a blur`);
-	assert.strictEqual(frame.data[75 * 200 + 100], 235, "flat interior unchanged");
+	const values = new Set(blurred.data);
+	assert.ok(values.size > 2, `blurred has ${values.size} levels, expected a blur`);
+	assert.strictEqual(blurred.data[75 * 200 + 100], 235, "flat interior unchanged");
 	// and the mask itself is still binary
 	for (let i = 0; i < image.data.length; i++) {
 		assert.ok(image.data[i] === 0 || image.data[i] === 255);
 	}
 });
 
-test("filter otsu leaves a multi-channel input alone", { skip }, async () => {
-	// the write-back only has a meaningful destination for a single-channel
-	// image; an RGB caller must not have its pixels rewritten with grey
+test("filter otsu leaves a multi-channel input alone and blurs its grey", { skip }, async () => {
 	const frame = labelFrame(120, 90, 0, 60, 40, 3);
 	const before = Buffer.from(frame.data);
-	await cvjs.filter(frame, "otsu", 3, 0, "raw");
+	const { blurred } = await cvjs.filter(frame, "otsu", 3, 0, "raw");
 	assert.deepStrictEqual(Buffer.from(frame.data), before);
+	assert.strictEqual(blurred.channels, 1);
 });
 
 test("filter edge is a continuous gradient magnitude, not a binary map", { skip }, async () => {
@@ -400,11 +396,21 @@ test("imageAlign reports failure rather than a garbage transform", { skip }, asy
 	}
 });
 
-test("imageAlign caps ECC at 500 iterations, so a huge count cannot hold the event loop", { skip }, async () => {
+test("imageAlign refuses ECC past 500 iterations, so a huge count cannot hold the event loop", { skip }, async () => {
 	// ECC runs on the event loop here (this engine is single-threaded); a
-	// count it never converges within would hold it for minutes. The count
-	// is what reaches OpenCV's TermCriteria, so watch that.
+	// count it never converges within would hold it for minutes. opencv5
+	// refuses past 500, and so does this; 500 itself reaches OpenCV's
+	// TermCriteria as 500.
 	const cv = await cvjs.ready();
+	const golden = texture(labelFrame(160, 120, 0, 90, 60, 1), 60);
+	const target = rawImage(Buffer.from(golden.data), 160, 120, 1, "GRAY");
+	const align = (its) => imageAlign(
+		golden, target, 1, its, 1e-4, "raw", 90, false, true, null,
+		"affine", "features+ecc", "always", "orb",
+	);
+	await assert.rejects(align(1e9), RangeError);
+	await assert.rejects(align(501), RangeError);
+	await assert.rejects(align(0.4), RangeError);
 	const TermCriteria = cv.TermCriteria;
 	const counts = [];
 	cv.TermCriteria = function (type, maxCount, epsilon) {
@@ -412,28 +418,45 @@ test("imageAlign caps ECC at 500 iterations, so a huge count cannot hold the eve
 		return new TermCriteria(type, maxCount, epsilon);
 	};
 	try {
-		const golden = texture(labelFrame(160, 120, 0, 90, 60, 1), 60);
-		const target = rawImage(Buffer.from(golden.data), 160, 120, 1, "GRAY");
-		await imageAlign(
-			golden, target, 1, 1e9, 1e-4, "raw", 90, false, true, null,
-			"affine", "features+ecc", "always", "orb",
-		);
+		await align(500);
 	} finally {
 		cv.TermCriteria = TermCriteria;
 	}
-	assert.ok(counts.length > 0, "ECC was not reached");
 	assert.deepStrictEqual([...new Set(counts)], [500]);
 });
 
-test("imageAlign refuses an unsupported motion model or detector", { skip }, async () => {
+test("what opencv.js throws reaches a caller as an Error, never a bare number", { skip }, async () => {
+	// opencv.js throws a pointer for an OpenCV error; label-crop and
+	// nativeSeed read err.message
+	const cv = await cvjs.ready();
+	const { asError } = cvjs._internals;
+	let thrown;
+	try {
+		const m = new cv.Mat(4, 4, cv.CV_8UC1);
+		try {
+			cv.cvtColor(m, m, cv.COLOR_BGR2GRAY); // a 1-channel input: OpenCV refuses it
+		} finally {
+			m.delete();
+		}
+	} catch (err) {
+		thrown = err;
+	}
+	assert.notStrictEqual(thrown, undefined, "opencv.js accepted a 1-channel BGR2GRAY");
+	const err = asError(cv, thrown);
+	assert.ok(err instanceof Error);
+	assert.match(err.message, /cvjs|OpenCV/);
+	assert.strictEqual(asError(cv, new RangeError("x")).constructor, RangeError);
+});
+
+test("imageAlign refuses an unsupported motion model, pipeline or detector", { skip }, async () => {
 	const img = rawImage(Buffer.alloc(64 * 64, 10), 64, 64, 1, "GRAY");
 	await assert.rejects(
 		() => imageAlign(img, img, 1, 10, 1e-4, "raw", 90, false, true, null, "homography", "ecc", "auto", "orb"),
-		/motion/,
+		/supports affine, features\+ecc, orb/,
 	);
 	await assert.rejects(
 		() => imageAlign(img, img, 1, 10, 1e-4, "raw", 90, false, true, null, "affine", "features", "auto", "sift"),
-		/detector/,
+		/supports affine, features\+ecc, orb/,
 	);
 });
 

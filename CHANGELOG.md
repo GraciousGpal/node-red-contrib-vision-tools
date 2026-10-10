@@ -62,8 +62,14 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
     alignment by up to 1.25 px and changes more verdicts), so a rig must
     not fall onto it unnoticed. The frame log names the engine where it
     said "native".
-  - **Faster:** a good frame 46.4 → 37.7 ms at the median, 61.0 → 47.4 ms
-    at p95, 68.8 → 55.9 ms at p99; the OpenCV alignment 17.3 → 9.7 ms.
+  - **Timing:** in two locked, interleaved pairs on the rig a good frame
+    is about the same at the median (1.2: 43.6-46.8 ms, opencv5:
+    42.7-46.1 ms) and faster in the tail (p95 57.7-62.5 → 52.8-57.0 ms,
+    p99 67.6-68.8 → 62.7-64.4 ms); the OpenCV alignment 14.7-17.2 →
+    10.4-13.1 ms. opencv5 copies every input before it queues an op, so
+    nothing a caller does to its buffer can reach a running op - about
+    1-2 ms a frame, most of what an earlier, sharing build had gained
+    (37.7 ms at the median).
   - Until `@graciousstar/opencv5` is published and added to
     `dependencies`, it lives in `opencv5/` (bound for its own repository)
     and its binaries are built there, not committed:
@@ -76,6 +82,22 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   engines (label-crop's png/jpg/webp output of a raw BGR frame); and
   label-crop's *Optimise PNG* is honoured again (zlib level 9 with
   adaptive filtering, else level 1).
+- **label-crop no longer blurs a grey raw input.** The engine's Otsu
+  filter wrote its 3x3 blur back over its input, as the rosepetal bridge
+  did; for a grey raw frame no larger than the detection size that input
+  was the frame itself, so the crop came out blurred and the caller's
+  buffer was changed. The filter now hands the blur back and label-crop
+  uses it for the edge search as before - colour frames, encoded frames
+  and larger frames crop to the same bytes. Neither engine writes to an
+  input any more.
+- **The opencv.js fallback refuses what opencv5 refuses**, with the same
+  error types (`lib/engineLimits.js`): ECC iterations past 500, a
+  non-positive epsilon, an alignment copy under 32 px a side, a colour
+  image to align, a resize or rotation past 64 megapixels or 16384 px a
+  side (which blocked the event loop for seconds, or aborted the WASM
+  heap), an Otsu kernel past 31, an edge kernel past 7, a non-finite
+  angle. It used to clamp most of them. An OpenCV error from it is an
+  `Error`, not a bare number.
 
 ### Added
 

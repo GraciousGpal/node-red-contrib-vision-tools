@@ -63,14 +63,81 @@ test("resize gives the opencv.js engine's bytes, every size mode label-crop uses
 	}
 });
 
-test("filter otsu and edge give the opencv.js engine's bytes, in-place blur included", { skip: skipCross }, async () => {
+test("filter otsu and edge give the opencv.js engine's bytes, the blurred grey included", { skip: skipCross }, async () => {
 	const a = labelFrame(200, 150, 11, 120, 70, 1);
-	const b = labelFrame(200, 150, 11, 120, 70, 1);
-	same((await own.filter(a, "otsu", 3, 0, "raw")).image, (await cvjs.filter(b, "otsu", 3, 0, "raw")).image);
-	same(a, b); // both blurred their caller's buffer, identically
-	same((await own.filter(a, "edge", 3, 1, "raw")).image, (await cvjs.filter(b, "edge", 3, 1, "raw")).image);
+	const before = Buffer.from(a.data);
+	const mine = await own.filter(a, "otsu", 3, 0, "raw");
+	const theirs = await cvjs.filter(a, "otsu", 3, 0, "raw");
+	same(mine.image, theirs.image);
+	same(mine.blurred, theirs.blurred);
+	assert.deepStrictEqual(Buffer.from(a.data), before, "neither engine writes to its input");
+	same((await own.filter(mine.blurred, "edge", 3, 1, "raw")).image, (await cvjs.filter(theirs.blurred, "edge", 3, 1, "raw")).image);
 	const rgb = labelFrame(200, 150, 11, 120, 70, 3);
-	same((await own.filter(rgb, "otsu", 5, 0, "raw")).image, (await cvjs.filter(rgb, "otsu", 5, 0, "raw")).image);
+	const rgbMine = await own.filter(rgb, "otsu", 5, 0, "raw");
+	const rgbTheirs = await cvjs.filter(rgb, "otsu", 5, 0, "raw");
+	same(rgbMine.image, rgbTheirs.image);
+	same(rgbMine.blurred, rgbTheirs.blurred);
+});
+
+test("both engines refuse the same arguments, with the same error types", { skip: skipCross }, async () => {
+	const gray = labelFrame(100, 80, 0, 50, 30, 1);
+	const rgb = labelFrame(100, 80, 0, 50, 30, 3);
+	const tex = labelFrame(200, 160, 5, 120, 90, 1);
+	const align = (...over) => (e) => {
+		const a = [tex, tex, 0.5, 20, 1e-3, "raw", 90, false, true, null, "affine", "features+ecc", "auto", "orb"];
+		for (let i = 0; i < over.length; i += 2) a[over[i]] = over[i + 1];
+		return e.imageAlign(...a);
+	};
+	const cases = {
+		"resize 70000 wide": (e) => e.resize(gray, "num", 70000, "num", 1, "raw"),
+		"resize 20000x20000": (e) => e.resize(gray, "num", 20000, "num", 20000, "raw"),
+		"resize -5": (e) => e.resize(gray, "num", -5, "num", 10, "raw"),
+		"resize pct 0": (e) => e.resize(gray, "pct", 0, "pct", 50, "raw"),
+		"resize nothing": (e) => e.resize(gray, "num", 0, "num", 0, "raw"),
+		"filter sauvola": (e) => e.filter(gray, "sauvola", 3, 0, "raw"),
+		"filter otsu 33": (e) => e.filter(gray, "otsu", 33, 0, "raw"),
+		"filter edge 9": (e) => e.filter(gray, "edge", 9, 1, "raw"),
+		"crop NaN": (e) => e.crop(gray, NaN, 0, 10, 10, false, "raw"),
+		"crop string": (e) => e.crop(gray, "a", 0, 10, 10, false, "raw"),
+		"crop 0 wide": (e) => e.crop(gray, 0, 0, 0, 10, false, "raw"),
+		"rotate Infinity": (e) => e.rotate(gray, Infinity, "#000000", "raw"),
+		"rotate string": (e) => e.rotate(gray, "30", "#000000", "raw"),
+		"rotate past 16384": (e) => e.rotate(labelFrame(16000, 2, 0, 1, 1, 1), 45, "#000000", "raw"),
+		"Float32Array data": (e) => e.resize({ data: new Float32Array(100 * 80), width: 100, height: 80, channels: 1 }, "num", 10, "num", 10, "raw"),
+		"DataView data": (e) => e.resize({ data: new DataView(new ArrayBuffer(100 * 80)), width: 100, height: 80, channels: 1 }, "num", 10, "num", 10, "raw"),
+		"short data": (e) => e.resize({ data: Buffer.alloc(10), width: 100, height: 80, channels: 1 }, "num", 10, "num", 10, "raw"),
+		"resizable store": (e) => e.resize({ data: new Uint8Array(new ArrayBuffer(8000, { maxByteLength: 16000 })), width: 100, height: 80, channels: 1 }, "num", 10, "num", 10, "raw"),
+		"align iterations 501": align(3, 501),
+		"align iterations 0.4": align(3, 0.4),
+		"align iterations 1e9": align(3, 1e9),
+		"align iterations string": align(3, "30"),
+		"align epsilon -1": align(4, -1),
+		"align epsilon 0": align(4, 0),
+		"align scale 0": align(2, 0),
+		"align scale 1.5": align(2, 1.5),
+		"align scale 0.01 (a 2x2 copy)": align(2, 0.01),
+		"align homography": align(10, "homography"),
+		"align ecc only": align(11, "ecc"),
+		"align sift": align(13, "sift"),
+		"align polygon": align(9, [[0, 0], [1, 0], [1, 1]]),
+		"align colour": align(0, rgb),
+	};
+	const outcome = async (fn) => {
+		try {
+			await fn();
+			return "accepted";
+		} catch (err) {
+			return err && err.constructor ? err.constructor.name : typeof err;
+		}
+	};
+	const differ = [];
+	for (const [name, fn] of Object.entries(cases)) {
+		const mine = await outcome(() => fn(own));
+		const theirs = await outcome(() => fn(cvjs.imageAlign ? cvjs : { ...cvjs, imageAlign: require("../lib/cvjsAlign.js").imageAlign }));
+		if (mine === "accepted") differ.push(`${name}: opencv5 accepted it`);
+		else if (mine !== theirs) differ.push(`${name}: opencv5 ${mine}, opencv.js ${theirs}`);
+	}
+	assert.deepStrictEqual(differ, []);
 });
 
 test("both engines encode a BGR image with its own colours, as label-crop's encoded output needs", { skip: skipCross }, async () => {
