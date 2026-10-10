@@ -1,5 +1,34 @@
 # Golden-compare: NodeRed-Test container benchmark
 
+## Our own OpenCV 5 engine (October 2026)
+
+Good frames: **46.4 → 37.7 ms median, 61.0 → 47.4 ms p95, 68.8 → 55.9 ms
+p99**; the OpenCV alignment stage 17.3 → 9.7 ms. Main (2782f0e, the
+rosepetal engine) against the branch (`@graciousstar/opencv5`, loaded from
+its manifest-checked prebuild), interleaved ABBA ABBA: four runs of each,
+every run all 162 frames twice (never one frame twice in a row), one job
+on the host at a time. Per run, main: 46.1 / 47.0 / 46.2 / 46.3 ms median,
+60.1-61.8 p95, 66.1-71.1 p99; opencv5: 37.7 / 38.0 / 37.1 / 37.8 median,
+45.1-49.2 p95, 51.2-59.3 p99. The bench decoded and halved every fixture
+through opencv5 for both sides (it no longer needs the rosepetal bridge),
+so both saw the same frames.
+
+Verdicts: 148 pass / 14 fail on every run, no grade or route change. Each
+engine is deterministic run to run (0 differences), and opencv5's results
+are the same bytes with every AVX path disabled (`OPENCV_CPU_DISABLE`):
+it dispatches nothing at run time. Against main, `bench/golden-drift.js`
+passes: the alignment moves by at most 0.058 px (ox), 0.028 px (oy),
+0.0018° and 0.00007 in scale; the local alignment's mean by 0.035 px and
+its worst tile by 2.07 px; scores by 0.00025; heat maps change bytes on
+the 308 OpenCV-aligned frame-passes; blemish regions move on 4 frames,
+all bad parts that still fail (densities by up to 0.06, one speck by a
+pixel). The 16 frame-passes on the JS fallback are byte-identical.
+
+An earlier build of the same addon that dispatched AVX2/AVX-512 at run
+time aligned in 8.5 ms instead of 9.6, but an SSE4.2-only run of it moved
+the local alignment by up to 0.34 px and every heat map by bytes; the
+shipped build trades that millisecond for the same bytes on every CPU.
+
 ## Native kernels (October 2026)
 
 Good frames: **67 → 46 ms median, 83 → 59 ms p95, 89 → 65 ms p99** with

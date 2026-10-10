@@ -78,90 +78,48 @@ directory (`~/.node-red`):
 npm i @graciousstar/node-red-contrib-vision-tools
 ```
 
-Node 18 or newer. `sharp` and `zxing-wasm` are required and ship prebuilt
-binaries for the usual platforms.
-
-### `npm ci` does not work with this package
-
-Use `npm install`. This is an upstream packaging bug: the optional OpenCV
-engine declares `@rosepetal/node-red-contrib-image-tools-darwin-x64` in
-its `optionalDependencies`, and that package was never published — the
-registry 404s it while its four sibling platform packages resolve fine.
-`npm install` skips it, which is what optional means; `npm ci` then
-refuses the lockfile `npm install` produced, because the phantom is
-`Missing from lock file`. No lockfile satisfies both while the engine is
-in the tree:
-
-```
-npm error `npm ci` can only install packages when your package.json and
-npm error package-lock.json ... are in sync.
-npm error Missing: @rosepetal/node-red-contrib-image-tools-darwin-x64@ from lock file
-```
-
-If your build has to use `npm ci`, use `@techstark/opencv-js` as the OpenCV
-engine instead (see below) and leave the native one out of the tree
-entirely. Failing that, install the native engine's platform package for
-your own platform directly
-(`@rosepetal/node-red-contrib-image-tools-linux-x64`, `-linux-arm64`,
-`-linuxmusl-x64`, `-darwin-x64` or `-darwin-arm64`) without the engine
-package itself; or skip OpenCV altogether, which costs you `label-crop`
-and two opt-in `golden-compare` acceleration paths and nothing else.
+Node 18 or newer. `sharp`, `zxing-wasm` and `@graciousstar/opencv5` are
+required and ship prebuilt binaries for the usual platforms.
 
 ### The OpenCV engine
 
 `label-crop` and two optional `golden-compare` acceleration paths need
-OpenCV. Two engines can provide it, both **optional** dependencies — the
-package installs and every other node works without either, and
-`label-crop` reports a clear setup error rather than failing a part:
+OpenCV. Two engines provide it; the package installs and every other node
+works without either, and `label-crop` reports a clear setup error rather
+than failing a part:
 
-| | `@rosepetal/node-red-contrib-image-tools` | `@techstark/opencv-js` |
+| | [`@graciousstar/opencv5`](opencv5/README.md) | `@techstark/opencv-js` |
 |---|---|---|
-| kind | native C++ addon | opencv.js, WASM |
-| platforms | Linux x64/arm64, Alpine x64, macOS x64/arm64 | anywhere Node runs, **including win32** |
-| threading | native threads | single-threaded, on the event loop |
-| start-up | dlopen | ~200ms to instantiate, once per process |
-| codecs | decodes and encodes jpg/png/webp | none; raw in, raw out (this package delegates the two encode/decode points it needs to `sharp`) |
+| kind | our N-API addon over a static OpenCV 5 | opencv.js, WASM |
+| platforms | Linux x64/arm64 (glibc 2.17+, musl), Windows x64, macOS x64/arm64 | anywhere Node runs |
+| CPU | any of its arch (x86-64-v2, NEON baseline); the same bytes on every one | any |
+| threading | libuv's pool | single-threaded, on the event loop |
+| dependency | yes | optional |
 
-Which one answers is `lib/engine.js`'s decision. The default is the native
-addon where it has a prebuilt binary and the WASM build everywhere else.
-Set `VISION_TOOLS_ENGINE=native` or `VISION_TOOLS_ENGINE=opencv-js` to pin
-one — a pinned engine that cannot load is an error, never a silent
-substitution.
+Which one answers is `lib/engine.js`'s decision: opencv5 where its binary
+loads, opencv.js otherwise. `VISION_TOOLS_ENGINE=own` or `=opencv-js`
+pins one - a pinned engine that cannot load is an error, never a silent
+substitution (`native`, the rosepetal addon's name up to 1.2, is read as
+`own`).
 
-A third engine is in prototype: `VISION_TOOLS_ENGINE=own` runs our own
-addon over a minimal OpenCV 5 (`native/opencv/`, no AVX2 requirement,
-Windows included). It is never picked automatically and ships no binary
-yet; `VISION_TOOLS_CV_ADDON=/path/to/vision-cv.node` loads a local build.
+The two give the same `label-crop` results - `node bench/engine-parity.js`
+sweeps angles and label shapes and every field matches - and the same
+bytes from `colorConvert`, `resize`, `filter` and `crop`
+(`test/opencv5Engine.test.js`). `golden-compare`'s alignment is where they
+differ: `lib/cvjsAlign.js` is its own implementation of the same idea.
 
-On a host with both installed, the two produce **identical** `label-crop`
-results — `node bench/engine-parity.js` sweeps angles and label shapes and
-every field matches exactly. The one deliberate difference is the
-alignment warp's border fill, described in `lib/cvjsAlign.js`; it removes
-a false background defect the native fill produces at the frame edge.
+Measured in the rig's Alpine x64 container (Node 24), same frames
+(`node bench/engine-compare.js`):
 
-Measured on Alpine x64 (Node 24), same host, same frames:
-
-| | native | opencv-js |
+| | opencv5 | opencv-js |
 |---|---|---|
-| `label-crop`, 3MP frame | 34ms | 64ms |
-| `label-crop`, 24MP frame | 162ms | 375ms |
-| `imageAlign`, 768px | 12ms | 30ms |
-| `imageAlign`, 1024px | 18ms | 53ms |
+| `label-crop`, 12MP frame | 47ms | 210ms |
+| `imageAlign`, 1024px | 12ms | 51ms |
 
-So roughly **2–3× slower** on those ops, plus ~200ms once per process to
-instantiate the WASM runtime. Run `node bench/engine-compare.js` to measure
-your own hardware.
-
-End to end the gap can be wider. Replaying the real `golden-compare`
-handler in the Node-RED test container (`bench/golden-performance.md`,
-September 2026, before the current pipeline's speed-ups), the WASM-backed
-snapshot measured **456ms median** against native's **101ms**
-at 12 workers with a named golden. Both graded that sample identically,
-but their transforms and native/fallback paths differ, so read it as a
-comparison of these two implementations rather than a universal WASM
-penalty: the identical-results claim above is about `label-crop`, and
-`golden-compare`'s alignment is where the two engines can reach the same
-verdict by different routes.
+Until `@graciousstar/opencv5` is published it is a `file:opencv5`
+dependency on the directory it is developed in, and its binaries are
+built there (`opencv5/native/prebuild-linux.sh`, or its CI workflow)
+rather than committed here.
 
 ### Native kernels
 
@@ -1828,7 +1786,7 @@ nothing is found at all, one message with `msg.text = null`,
 
 ## Tests
 
-`npm test` (Node 18+, no test framework needed — `node --test`), 743
+`npm test` (Node 18+, no test framework needed — `node --test`), 750
 tests. Fixtures are generated with `sharp` rather than read from
 `data/sample_images`, so the suite runs anywhere; the real QC photos are
 gitignored. Coverage spans the lib pipeline (`compare`, `align`, `warp`,

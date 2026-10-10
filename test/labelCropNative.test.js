@@ -3,7 +3,8 @@ const assert = require("node:assert");
 const { labelCrop, available } = require("../lib/labelCrop.js");
 const { rawImage } = require("./helpers/synthetic.js");
 
-const nativeAvailable = process.platform !== "win32" && available();
+// any real engine: opencv5 has a Windows binary, and opencv.js runs anywhere
+const nativeAvailable = available();
 
 test("native OpenCV integration deskews a rotated label instead of doubling its angle", {
 	skip: !nativeAvailable,
