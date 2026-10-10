@@ -61,6 +61,12 @@
 namespace {
 
 const double INF = std::numeric_limits<double>::infinity();
+// see Ctx::dim
+constexpr int MAX_DIM = 1 << 24;
+// the field search's offset cap: lib/localAlign.js runs (2R + 1)^2
+// offsets a tile, and the node clamps localAlignMax to 16; past this a
+// library caller's dispatch runs on the JS kernel
+constexpr int MAX_OFFSET = 64;
 
 // ------------------------------------------------------------- napi glue
 
@@ -83,17 +89,67 @@ struct TypeOf<float> {
 	static constexpr napi_typedarray_type value = napi_float32_array;
 };
 
-// One dispatch's ctx object. Every read is checked: the first failure is
-// kept in `err` and the kernel throws it before it touches anything.
+// One dispatch's ctx object. Every property is read once, up front
+// (snapshot), and every check after that works on what was read: a getter
+// or a Proxy trap is JavaScript, and run between two reads it could detach
+// or shrink a buffer whose data pointer the first had already taken. After
+// the snapshot no JavaScript runs until the kernel returns. Every check
+// is kept: the first failure is in `err`, and the kernel throws it before
+// it claims or writes anything.
+struct Prop {
+	char key[40];
+	napi_value v;
+	// an array's elements (the tone check's darkest / lightest), up to 32
+	napi_value elems[32];
+	uint32_t n;
+};
 struct Ctx {
 	napi_env env;
-	napi_value obj;
 	const char* err = nullptr;
+	Prop props[48];
+	int count = 0;
 
+	// false with a JS exception pending (a getter threw), else true, with
+	// `err` set if the ctx has more properties than any kernel reads
+	bool snapshot(napi_value obj) {
+		napi_value names;
+		uint32_t n = 0;
+		if (napi_get_property_names(env, obj, &names) != napi_ok) return false;
+		if (napi_get_array_length(env, names, &n) != napi_ok) return false;
+		if (n > 48) {
+			fail("(too many properties)");
+			return true;
+		}
+		for (uint32_t i = 0; i < n; i++) {
+			Prop& p = props[count];
+			napi_value name;
+			size_t len = 0;
+			if (napi_get_element(env, names, i, &name) != napi_ok) return false;
+			if (napi_get_value_string_utf8(env, name, p.key, sizeof p.key, &len) != napi_ok) return false;
+			if (len >= sizeof p.key - 1) continue;  // no kernel reads a key that long
+			if (napi_get_property(env, obj, name, &p.v) != napi_ok) return false;
+			p.n = 0;
+			bool list = false;
+			napi_is_array(env, p.v, &list);
+			if (list) {
+				uint32_t m = 0;
+				if (napi_get_array_length(env, p.v, &m) != napi_ok) return false;
+				p.n = m > 32 ? 33 : m;
+				for (uint32_t j = 0; j < m && j < 32; j++)
+					if (napi_get_element(env, p.v, j, &p.elems[j]) != napi_ok) return false;
+			}
+			count++;
+		}
+		return true;
+	}
+	const Prop* prop(const char* k) const {
+		for (int i = 0; i < count; i++)
+			if (std::strcmp(props[i].key, k) == 0) return &props[i];
+		return nullptr;
+	}
 	napi_value get(const char* k) const {
-		napi_value v = nullptr;
-		napi_get_named_property(env, obj, k, &v);
-		return v;
+		const Prop* p = prop(k);
+		return p ? p->v : nullptr;
 	}
 	bool fail(const char* why) {
 		if (!err) err = why;
@@ -109,16 +165,19 @@ struct Ctx {
 		napi_get_value_double(env, v, &d);
 		return d;
 	}
-	// a whole number in [lo, 2^30]: the JS has integers here, and a
+	// a whole number in [lo, hi]: the JS has integers here, and a
 	// fraction or a NaN would index differently from it
-	int whole(const char* k, int lo = 0) {
+	int whole(const char* k, int lo = 0, int hi = 1 << 30) {
 		const double d = num(k);
-		if (!(d >= lo && d <= (1 << 30) && d == std::floor(d))) {
+		if (!(d >= lo && d <= hi && d == std::floor(d))) {
 			fail(k);
 			return lo;
 		}
 		return (int)d;
 	}
+	// a size in pixels, cells or blocks: at most 2^24, so that a sum or
+	// product of two of them, which the kernels take in int, cannot wrap
+	int dim(const char* k) { return whole(k, 1, MAX_DIM); }
 	// a typed view of type T with at least `min` elements, or null when
 	// absent and not `required`
 	template <class T>
@@ -153,25 +212,24 @@ struct Ctx {
 	// an array of Uint8Arrays (the tone check's darkest / lightest, one
 	// per slack level: lib/localAlign.js SLACK_LEVELS has nine)
 	uint32_t u8list(const char* k, size_t min, const uint8_t** out, uint32_t max) {
-		napi_value v = get(k);
+		const Prop* p = prop(k);
 		bool is = false;
-		if (v) napi_is_array(env, v, &is);
-		uint32_t n = 0;
-		if (is) napi_get_array_length(env, v, &n);
-		if (!is || n > max) {
+		if (p) napi_is_array(env, p->v, &is);
+		if (!is || p->n > max) {
 			fail(k);
 			return 0;
 		}
-		for (uint32_t i = 0; i < n; i++) {
-			napi_value e;
-			napi_get_element(env, v, i, &e);
-			out[i] = view<uint8_t>(e, min, k);
-		}
-		return n;
+		for (uint32_t i = 0; i < p->n; i++) out[i] = view<uint8_t>(p->elems[i], min, k);
+		return p->n;
 	}
 };
 
 inline size_t ceilDiv(size_t a, size_t b) { return (a + b - 1) / b; }
+
+// A grid's width must be the one its cell size makes of the image, not
+// merely enough: a wider one runs the kernels' x past the image (first *
+// cell in applyCells, as an int, reached 2^32 and wrote before `out`).
+inline bool exactGrid(int gridW, int width, int cell) { return (size_t)gridW == ceilDiv(width, cell); }
 
 // Atomics.add(next, 0, 1) on the dispatch's shared counter
 inline uint32_t claim(uint32_t* next) {
@@ -213,10 +271,14 @@ template <class T>
 struct Buf {
 	T* p;
 	size_t cap;
+	// at least n elements; null when the memory is not there. Each kernel
+	// grows its scratch to the most it will use before it claims a chunk
+	// (and refuses the dispatch when it cannot), so inside the kernel this
+	// only ever hands back what it already has.
 	T* need(size_t n) {
 		if (n > cap) {
 			void* q = std::realloc(p, n * sizeof(T));
-			if (!q) std::abort();
+			if (!q) return nullptr;
 			p = static_cast<T*>(q);
 			cap = n;
 		}
@@ -236,6 +298,9 @@ struct Scratch {
 	Buf<uint8_t> tileG, planes, hrow;
 	Buf<int32_t> cols;
 	ApplyScratch apply;
+	// setIsa("base"), for the tests: this thread's field search on the
+	// baseline build
+	bool forceBase;
 };
 Scratch& scratchOf(napi_env env) {
 	void* data = nullptr;
@@ -387,9 +452,7 @@ bool haveAvx2() { return __builtin_cpu_supports("avx2"); }
 bool haveAvx2() { return false; }
 #endif
 
-// setIsa("base") holds a process to the baseline build, for the tests
-bool forceBase = false;
-inline bool useAvx2() { return VT_AVX2_PATH && haveAvx2() && !forceBase; }
+inline bool useAvx2(const Scratch& sc) { return VT_AVX2_PATH && haveAvx2() && !sc.forceBase; }
 
 double parabolic(double before, double at, double after) {
 	if (!std::isfinite(before) || !std::isfinite(at) || !std::isfinite(after)) return 0;
@@ -408,7 +471,7 @@ struct FieldArgs {
 
 void fieldCells(const FieldArgs& a, int cellLo, int cellHi, Scratch& sc) {
 	const int tile = a.tile, R = a.maxOffset, w = a.width, h = a.height;
-	const bool avx2 = useAvx2();
+	const bool avx2 = useAvx2(sc);
 	for (int cell = cellLo; cell < cellHi; cell++) {
 		const int gy = cell / a.gridW;
 		const int gx = cell - gy * a.gridW;
@@ -602,23 +665,23 @@ struct ToneArgs {
 
 // The comparison's buffers, every index it will make checked first.
 // `height` is the rows the comparison covers.
-ToneArgs toneArgs(Ctx& c, int height) {
+ToneArgs toneArgs(Ctx& c, int height, int chunk) {
 	ToneArgs t{};
-	t.width = c.whole("width", 1);
+	t.width = c.dim("width");
 	t.height = height;
 	const size_t n = (size_t)t.width * height;
 	t.classes = c.arr<uint8_t>("classes", n);
 	t.gray = c.arr<uint8_t>("gray", n);
 	t.levels = c.u8list("darkest", n, t.darkest, 32);
 	const uint32_t lights = c.u8list("lightest", n, t.lightest, 32);
-	t.tile = c.whole("tile", 1);
-	t.slackGridW = c.whole("slackGridW", 1);
-	t.cell = c.whole("cell", 1);
-	t.cellsW = c.whole("cellsW", 1);
+	t.tile = c.dim("tile");
+	t.slackGridW = c.dim("slackGridW");
+	t.cell = c.dim("cell");
+	t.cellsW = c.dim("cellsW");
 	t.measuredBit = c.whole("measuredBit");
 	if (c.err) return t;
-	if ((size_t)t.cellsW * t.cell < (size_t)t.width) c.fail("cellsW");
-	if ((size_t)t.slackGridW * t.tile < (size_t)t.width) c.fail("slackGridW");
+	if (!exactGrid(t.cellsW, t.width, t.cell)) c.fail("cellsW");
+	if (!exactGrid(t.slackGridW, t.width, t.tile)) c.fail("slackGridW");
 	if (lights != t.levels) c.fail("lightest");
 	const size_t slack = (size_t)t.slackGridW * ceilDiv(height, t.tile);
 	t.tileLevel = c.arr<uint8_t>("tileLevel", slack);
@@ -635,9 +698,12 @@ ToneArgs toneArgs(Ctx& c, int height) {
 	t.rowSpecks = c.arr<uint32_t>("rowSpecks", (size_t)height, false);
 	t.blocks = c.arr<uint32_t>("blocks", 0, false);
 	if (t.blocks) {
-		t.blockSize = c.whole("blockSize", 1);
-		t.blocksW = c.whole("blocksW", 1);
-		if (!c.err && (size_t)t.blocksW * t.blockSize < (size_t)t.width) c.fail("blocksW");
+		t.blockSize = c.dim("blockSize");
+		t.blocksW = c.dim("blocksW");
+		if (!c.err && !exactGrid(t.blocksW, t.width, t.blockSize)) c.fail("blocksW");
+		// a block's count is a plain ++, so no two chunks may share a row
+		// of blocks: whole rows of them a chunk (lib/compare.js rowChunk)
+		if (!c.err && chunk % t.blockSize != 0) c.fail("chunk");
 		if (!c.err) t.blocks = c.arr<uint32_t>("blocks", (size_t)t.blocksW * ceilDiv(height, t.blockSize));
 	}
 	if (c.err) return t;
@@ -858,7 +924,8 @@ bool callArgs(napi_env env, napi_callback_info info, Call& out) {
 		return false;
 	}
 	out.c.env = env;
-	out.c.obj = argv[0];
+	// a getter that threw: its exception goes back to the caller as is
+	if (!out.c.snapshot(argv[0])) return false;
 	double d = 0;
 	if (argc >= 4 && napi_get_value_double(env, argv[3], &d) == napi_ok && d >= 0 && d < (1 << 20) && d == std::floor(d))
 		out.index = (int)d;
@@ -883,13 +950,13 @@ napi_value LocalField(napi_env env, napi_callback_info info) {
 	FieldArgs a{};
 	Claim cl;
 	cl.read(c);
-	a.width = c.whole("width", 1);
-	a.height = c.whole("height", 1);
-	a.tile = c.whole("tile", 1);
-	a.maxOffset = c.whole("maxOffset");
-	a.gridW = c.whole("gridW", 1);
+	a.width = c.dim("width");
+	a.height = c.dim("height");
+	a.tile = c.dim("tile");
+	a.maxOffset = c.whole("maxOffset", 0, MAX_OFFSET);
+	a.gridW = c.dim("gridW");
 	if (rejected(c)) return nullptr;
-	if ((size_t)(a.gridW - 1) * a.tile >= (size_t)a.width) c.fail("gridW");
+	if (!exactGrid(a.gridW, a.width, a.tile)) c.fail("gridW");
 	if ((size_t)cl.total > (size_t)a.gridW * ceilDiv(a.height, a.tile)) c.fail("total");
 	const size_t n = (size_t)a.width * a.height;
 	a.g = c.arr<uint8_t>("golden", n);
@@ -900,8 +967,15 @@ napi_value LocalField(napi_env env, napi_callback_info info) {
 	a.fx = c.arr<float>("fx", cl.total);
 	a.fy = c.arr<float>("fy", cl.total);
 	a.valid = c.arr<uint8_t>("valid", cl.total);
-	if (rejected(c)) return nullptr;
 	Scratch& sc = scratchOf(env);
+	{
+		// the most a tile's samples and frame window take
+		const size_t mw = std::min(a.tile, a.width), mh = std::min(a.tile, a.height), R = a.maxOffset;
+		if (!sc.tileG.need(ceilDiv(mw, SSD_STEP) * ceilDiv(mh, SSD_STEP)) ||
+		    !sc.planes.need(3 * ((mw + 2 * R + 2) / 3) * (mh + 2 * R)))
+			c.fail("(scratch: out of memory)");
+	}
+	if (rejected(c)) return nullptr;
 	cl.each([&](int lo, int hi) { fieldCells(a, lo, hi, sc); });
 	return nullptr;
 }
@@ -913,17 +987,17 @@ napi_value LocalApply(napi_env env, napi_callback_info info) {
 	ApplyArgs a{};
 	Claim cl;
 	cl.read(c);
-	a.width = c.whole("width", 1);
-	a.height = c.whole("height", 1);
-	a.tile = c.whole("tile", 1);
-	a.gridW = c.whole("gridW", 1);
-	a.gridH = c.whole("gridH", 1);
-	a.cell = c.whole("cell", 1);
-	a.cellsW = c.whole("cellsW", 1);
+	a.width = c.dim("width");
+	a.height = c.dim("height");
+	a.tile = c.dim("tile");
+	a.gridW = c.dim("gridW");
+	a.gridH = c.dim("gridH");
+	a.cell = c.dim("cell");
+	a.cellsW = c.dim("cellsW");
 	a.paperBit = c.whole("paperBit");
 	a.inkBit = c.whole("inkBit");
 	if (rejected(c)) return nullptr;
-	if ((size_t)a.cellsW * a.cell < (size_t)a.width) c.fail("cellsW");
+	if (!exactGrid(a.cellsW, a.width, a.cell)) c.fail("cellsW");
 	const size_t cells = (size_t)a.cellsW * ceilDiv(a.height, a.cell);
 	if ((size_t)cl.total > cells) c.fail("total");
 	const size_t n = (size_t)a.width * a.height;
@@ -937,8 +1011,13 @@ napi_value LocalApply(napi_env env, napi_callback_info info) {
 	a.histP = c.arr<uint32_t>("histP", cells * 256, a.classes != nullptr);
 	a.histK = c.arr<uint32_t>("histK", cells * 256, a.classes != nullptr);
 	a.counted = a.grey != nullptr || a.classes != nullptr;
-	if (rejected(c)) return nullptr;
 	ApplyScratch& sc = scratchOf(env).apply;
+	// a call's columns are at most a row
+	const size_t w = a.width;
+	if (!sc.gx0s.need(w) || !sc.gx1s.need(w) || !sc.cellOf.need(w) || !sc.wxs.need(w) || !sc.topX.need(w) ||
+	    !sc.stepX.need(w) || !sc.topY.need(w) || !sc.stepY.need(w))
+		c.fail("(scratch: out of memory)");
+	if (rejected(c)) return nullptr;
 	cl.each([&](int lo, int hi) { applyCells(a, lo, hi, sc); });
 	return nullptr;
 }
@@ -949,9 +1028,10 @@ napi_value Binarize(napi_env env, napi_callback_info info) {
 	Ctx& c = k.c;
 	Claim cl;
 	cl.read(c);
-	const int width = c.whole("width", 1);
+	const int width = c.dim("width");
 	// doubles, compared as the JS compares them: a level need not be whole
 	const double level = c.num("level"), margin = c.num("margin");
+	if (cl.total > MAX_DIM) c.fail("total");
 	if (rejected(c)) return nullptr;
 	const size_t n = (size_t)width * cl.total;
 	const uint8_t* G = c.arr<uint8_t>("gray", n);
@@ -961,7 +1041,7 @@ napi_value Binarize(napi_env env, napi_callback_info info) {
 	uint32_t* C = R ? c.arr<uint32_t>("counts", ((size_t)k.index + 1) * 3) : nullptr;
 	uint32_t* toneCounts = c.arr<uint32_t>("toneCounts", ((size_t)k.index + 1) * 2, false);
 	ToneArgs t{};
-	if (toneCounts) t = toneArgs(c, cl.total);
+	if (toneCounts) t = toneArgs(c, cl.total, cl.chunk);
 	if (rejected(c)) return nullptr;
 	const double floor_ = level - margin, ceil_ = level + margin;
 	uint32_t* tally = toneCounts ? toneCounts + (size_t)k.index * 2 : nullptr;
@@ -1010,11 +1090,11 @@ napi_value ToneCompare(napi_env env, napi_callback_info info) {
 	Ctx& c = k.c;
 	Claim cl;
 	cl.read(c);
-	const int height = c.whole("height", 1);
+	const int height = c.dim("height");
 	if (rejected(c)) return nullptr;
 	if (cl.total > height) c.fail("total");
 	uint32_t* toneCounts = c.arr<uint32_t>("toneCounts", ((size_t)k.index + 1) * 2);
-	ToneArgs t = toneArgs(c, height);
+	ToneArgs t = toneArgs(c, height, cl.chunk);
 	if (rejected(c)) return nullptr;
 	uint32_t* tally = toneCounts + (size_t)k.index * 2;
 	cl.each([&](int from, int to) {
@@ -1033,12 +1113,12 @@ napi_value Diff(napi_env env, napi_callback_info info) {
 	DiffArgs a{};
 	Claim cl;
 	cl.read(c);
-	a.width = c.whole("width", 1);
-	a.height = c.whole("height", 1);
-	a.blockSize = c.whole("blockSize", 1);
+	a.width = c.dim("width");
+	a.height = c.dim("height");
+	a.blockSize = c.dim("blockSize");
 	// JS: a radius or margin that is not above 0 is 0
 	const double radius = c.num("radius"), margin = c.num("margin");
-	a.radius = radius > 0 ? c.whole("radius") : 0;
+	a.radius = radius > 0 ? c.dim("radius") : 0;
 	if (rejected(c)) return nullptr;
 	a.margin = std::min(margin, (double)std::min(a.width / 2, a.height / 2)) > 0 ? c.whole("margin") : 0;
 	const size_t gridW = ceilDiv(a.width, a.blockSize), gridH = ceilDiv(a.height, a.blockSize);
@@ -1055,17 +1135,20 @@ napi_value Diff(napi_env env, napi_callback_info info) {
 	a.printBlocks = c.arr<uint32_t>("printBlocks", gridW * gridH);
 	a.backgroundBlocks = c.arr<uint32_t>("backgroundBlocks", gridW * gridH);
 	uint32_t* C = c.arr<uint32_t>("counts", ((size_t)k.index + 1) * 2);
+	Scratch& sc = scratchOf(env);
+	// a chunk's rows and its halo either side, at most the image
+	const size_t rows = std::min((size_t)a.height, (size_t)cl.chunk * a.blockSize + 2 * (size_t)a.radius);
+	if (!sc.hrow.need(rows * a.width) || !sc.cols.need(a.width)) c.fail("(scratch: out of memory)");
 	if (rejected(c)) return nullptr;
 	uint64_t tally[2] = {0, 0};
-	Scratch& sc = scratchOf(env);
 	cl.each([&](int from, int to) { diffRows(a, from, to, tally, sc); });
 	C[(size_t)k.index * 2] = (uint32_t)tally[0];
 	C[(size_t)k.index * 2 + 1] = (uint32_t)tally[1];
 	return nullptr;
 }
 
-// setIsa("base" | "auto"): which build of the field search runs; returns
-// the one that will ("avx2" or "base")
+// setIsa("base" | "auto"), for the tests: which build of the field search
+// this thread runs; returns the one it will ("avx2" or "base")
 napi_value SetIsa(napi_env env, napi_callback_info info) {
 	size_t argc = 1;
 	napi_value argv[1];
@@ -1076,10 +1159,10 @@ napi_value SetIsa(napi_env env, napi_callback_info info) {
 	if (argc) napi_typeof(env, argv[0], &t);
 	if (t == napi_string) {
 		napi_get_value_string_utf8(env, argv[0], buf, sizeof buf, &n);
-		forceBase = std::strcmp(buf, "base") == 0;
+		scratchOf(env).forceBase = std::strcmp(buf, "base") == 0;
 	}
 	napi_value r;
-	napi_create_string_utf8(env, useAvx2() ? "avx2" : "base", NAPI_AUTO_LENGTH, &r);
+	napi_create_string_utf8(env, useAvx2(scratchOf(env)) ? "avx2" : "base", NAPI_AUTO_LENGTH, &r);
 	return r;
 }
 

@@ -115,3 +115,123 @@ test("a refused dispatch runs on the JS kernel instead, with the JS kernel's byt
 	run.diff(viaNative, 0, ctx.total, 1);
 	assert.deepEqual(snapshot(viaNative), snapshot(js));
 });
+
+test("a grid wider than its image is refused: the resampling's x would run off the frame", { skip: SKIP }, () => {
+	// the review's trigger: 2^20 cells across a 100 px row, the last one
+	// claimed, put first * cell past 2^31 and wrote 4096 bytes before `out`
+	const sab = (Ctor, n) => new Ctor(new SharedArrayBuffer(n * Ctor.BYTES_PER_ELEMENT));
+	const next = sab(Uint32Array, 1);
+	next[0] = 2 ** 20 - 1;
+	const ctx = {
+		target: sab(Uint8Array, 100).buffer,
+		out: sab(Uint8Array, 100).buffer,
+		fx: sab(Float32Array, 13).buffer,
+		fy: sab(Float32Array, 13).buffer,
+		width: 100,
+		height: 1,
+		gridW: 13,
+		gridH: 1,
+		tile: 8,
+		cell: 4096,
+		cellsW: 2 ** 20,
+		grey: null,
+		classes: null,
+		histP: null,
+		histK: null,
+		paperBit: 0,
+		inkBit: 0,
+		next: next.buffer,
+		total: 2 ** 20,
+		chunk: 1,
+	};
+	assert.throws(() => addon.localApply(nativeKernels.views(ctx), 0, ctx.total, 0), { code: "ERR_VT_KERNEL_CTX" });
+	assert.equal(next[0], 2 ** 20 - 1, "nothing claimed");
+	// and every grid the kernels walk, one cell wider than its image
+	const wider = [
+		["localApply", "cellsW"],
+		["localField", "gridW"],
+		["toneCompare", "cellsW"],
+		["toneCompare", "slackGridW"],
+	];
+	for (const [name, key] of wider) {
+		const c = kernelCase(name, 3);
+		assert.throws(
+			() => addon[name](nativeKernels.views({ ...c, [key]: c[key] + 1 }), 0, c.total, 0),
+			{ code: "ERR_VT_KERNEL_CTX" },
+			`${name} ${key}`,
+		);
+	}
+	let blocked = null;
+	for (let seed = 1; blocked === null; seed++) {
+		const c = kernelCase("toneCompare", seed);
+		if (c.blocks) blocked = c;
+	}
+	assert.throws(
+		() => addon.toneCompare(nativeKernels.views({ ...blocked, blocksW: blocked.blocksW + 1 }), 0, blocked.total, 0),
+		{ code: "ERR_VT_KERNEL_CTX" },
+	);
+});
+
+test("a chunk that splits a row of blocks is refused, by the addon and by the JS kernel", { skip: SKIP }, () => {
+	let c = null;
+	for (let seed = 1; c === null; seed++) {
+		const k = kernelCase("toneCompare", seed);
+		if (k.blocks && k.blockSize > 1) c = k;
+	}
+	const split = { ...c, chunk: c.blockSize + 1 };
+	assert.throws(() => addon.toneCompare(nativeKernels.views(copyCtx(split)), 0, c.total, 0), { code: "ERR_VT_KERNEL_CTX" });
+	assert.throws(() => kernels.toneCompare(copyCtx(split), 0, c.total, 0), /splits the/);
+});
+
+test("a search box past the offset cap is refused", { skip: SKIP }, () => {
+	const c = kernelCase("localField", 3);
+	assert.throws(() => addon.localField(nativeKernels.views(copyCtx({ ...c, maxOffset: 65 })), 0, c.total, 0), {
+		code: "ERR_VT_KERNEL_CTX",
+	});
+});
+
+test("a getter that frees or shrinks a buffer read before it cannot leave the addon a dangling pointer", { skip: SKIP }, () => {
+	// every property is read before any buffer's memory is taken, so what
+	// a getter does is seen, and refused, rather than read after it is gone
+	const base = kernelCase("localField", 3);
+	const own = (b) => {
+		const a = new ArrayBuffer(b.byteLength);
+		new Uint8Array(a).set(new Uint8Array(b));
+		return a;
+	};
+	// detached: transferred away by a getter on a key read after it
+	const golden = new Uint8Array(own(base.golden));
+	const ctx = nativeKernels.views(copyCtx(base));
+	ctx.golden = golden;
+	Object.defineProperty(ctx, "valid", {
+		enumerable: true,
+		get() {
+			structuredClone(golden.buffer, { transfer: [golden.buffer] });
+			return new Uint8Array(base.valid.byteLength);
+		},
+	});
+	assert.throws(() => addon.localField(ctx, 0, base.total, 0), { code: "ERR_VT_KERNEL_CTX" });
+	// shrunk: a resizable buffer cut to nothing by the same getter
+	const store = new ArrayBuffer(base.target.byteLength, { maxByteLength: base.target.byteLength });
+	new Uint8Array(store).set(new Uint8Array(base.target));
+	const ctx2 = nativeKernels.views(copyCtx(base));
+	ctx2.target = new Uint8Array(store);
+	Object.defineProperty(ctx2, "valid", {
+		enumerable: true,
+		get() {
+			store.resize(0);
+			return new Uint8Array(base.valid.byteLength);
+		},
+	});
+	assert.throws(() => addon.localField(ctx2, 0, base.total, 0), { code: "ERR_VT_KERNEL_CTX" });
+	// a getter that throws: its own error, nothing claimed
+	const ctx3 = nativeKernels.views(copyCtx(base));
+	Object.defineProperty(ctx3, "fx", {
+		enumerable: true,
+		get() {
+			throw new Error("getter says no");
+		},
+	});
+	assert.throws(() => addon.localField(ctx3, 0, base.total, 0), /getter says no/);
+	assert.equal(ctx3.next[0], 0);
+});
