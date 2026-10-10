@@ -8,7 +8,8 @@
 # -ffp-contract=off) and the arch's baseline ISA, so the binary loads on
 # any CPU of its arch. libstdc++ and libgcc are linked in and every
 # OpenCV symbol is hidden, so it needs only libc and exports only the
-# N-API entry point.
+# N-API entry point. Linux links with full RELRO (-z relro -z now): every
+# symbol bound at load, the GOT read-only after.
 set -eu
 out=$1
 inc=$2
@@ -42,7 +43,7 @@ Darwin)
 	# shellcheck disable=SC2086
 	$CXX $flags -I"$inc" -I"$cvinc" -o "$out" "$here/opencv5.cc" \
 		-Wl,--start-group $libs $third -Wl,--end-group \
-		-Wl,--gc-sections -Wl,--exclude-libs,ALL -Wl,--as-needed -Wl,--version-script="$map" \
+		-Wl,--gc-sections -Wl,--exclude-libs,ALL -Wl,--as-needed -Wl,-z,relro -Wl,-z,now -Wl,--version-script="$map" \
 		-static-libstdc++ -static-libgcc -lpthread -ldl
 	rm -f "$map"
 	strip --strip-unneeded "$out"

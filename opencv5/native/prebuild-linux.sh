@@ -37,6 +37,7 @@ arm64-musl) image=quay.io/pypa/musllinux_1_2_aarch64@sha256:83a69fa8383ba5ac2d4f
 esac
 OPENCV_VERSION=5.0.0
 OPENCV_SHA256=b0528f5a1d379d59d4701cb28c36e22214cc51cf64594e5b56f2d3e6c0233095
+HEADERS_INTEGRITY=sha512-2oNILP4jXwRB4ywnYKjVk1YyJ96n2D4EOVJO6S3oYZ5PtbJrw3Yt9TpAuX3nBLMuzn74rnfGQrv13pS9vC+YiA==
 cd "$(dirname "$0")/.."
 cache=${OPENCV5_CACHE:-.opencv-cache}
 case "$cache" in
@@ -58,7 +59,14 @@ prefix=opencv-$OPENCV_VERSION-$arch-$libc-$key
 work=.prebuild-$arch-$libc
 rm -rf "$work"
 mkdir -p "$work"
-(cd "$work" && npm pack --silent node-api-headers@1.9.0 >/dev/null && tar xzf node-api-headers-1.9.0.tgz)
+(cd "$work" && npm pack --silent node-api-headers@1.9.0 >/dev/null)
+# the registry's integrity for that version, so a changed tarball stops here
+got=$(openssl dgst -sha512 -binary "$work/node-api-headers-1.9.0.tgz" | base64 | tr -d '\n')
+if [ "sha512-$got" != "$HEADERS_INTEGRITY" ]; then
+	echo "prebuild-linux.sh: node-api-headers-1.9.0.tgz is sha512-$got, expected $HEADERS_INTEGRITY" >&2
+	exit 1
+fi
+(cd "$work" && tar xzf node-api-headers-1.9.0.tgz)
 # the builds in fixed paths inside the container, so no host path reaches
 # a binary (git-bash on Windows: no path conversion, a C:/ mount path)
 export MSYS_NO_PATHCONV=1
