@@ -1,5 +1,9 @@
 node_modules/
 
+# a native kernels build from source (native/, npx node-gyp rebuild);
+# the shipped binaries are prebuilds/
+native/build/
+
 # Real QC photographs and calibration output: site data, not source. The
 # test suite generates its own fixtures with sharp so it runs anywhere.
 data/
