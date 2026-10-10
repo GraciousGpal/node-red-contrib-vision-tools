@@ -1228,17 +1228,16 @@ now holds the two engines to each other's bytes):
   parallel to it, and a sub-pixel difference picks the loser. Measured: a
   1200x750 label at angle 0 cropped 169px short.
 
-- **filter("otsu")'s side effect on its input.** The bridge GaussianBlurred
-  the image (kernel x kernel, sigma 0) and wrote that back over *the
-  caller's buffer* before thresholding. label-crop calls
-  `filter(det, "otsu")` and then `filter(det, "edge")` on the same `det`,
-  and passes `det` to `refineRectBoundary` as its grey image, so the
-  refinement has always run on a blurred copy it never asked for. The blur
-  is load-bearing: it softens thin printed rules more than the label's own
-  boundary step, which is the discrimination the refinement needs. Both
-  engines reproduce it. **The real fix belongs in label-crop**, which
-  should ask for the blurred copy it wants instead of inheriting one by
-  accident; until it does, the side effect is part of the contract.
+- **filter("otsu")'s blur.** The bridge GaussianBlurred the image (kernel
+  x kernel, sigma 0) and wrote that back over *the caller's buffer* before
+  thresholding, and label-crop's edge filter and `refineRectBoundary` came
+  to run on that blurred copy. The blur is load-bearing: it softens thin
+  printed rules more than the label's own boundary step, which is the
+  discrimination the refinement needs. Both engines now return it as
+  `blurred` instead of writing it back, and label-crop takes `det` from
+  it - the same bytes for the refinement, and no op writes to an input
+  (a grey raw frame no larger than the detection copy used to come back
+  blurred).
 
 One difference is deliberate and remains:
 

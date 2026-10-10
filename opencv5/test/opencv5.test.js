@@ -95,14 +95,29 @@ test("resize matches opencv.js down and up, 1 and 3 channels", { skip: skipCross
 	}
 });
 
-test("filter otsu blurs its input in place and thresholds it, as opencv.js", { skip: skipCross }, async () => {
+test("filter otsu hands back its blur and thresholds it, as opencv.js; edge matches too", { skip: skipCross }, async () => {
 	const a = labelFrame(200, 150, 11, 120, 70, 1);
 	const original = rawImage(Buffer.from(a.data), 200, 150, 1);
-	const mask = (await own.filter(a, "otsu", 3, 0, "raw")).image;
-	const blurred = await ref.blur(original, 3);
-	same(a, blurred);
-	same(mask, await ref.otsu(blurred));
-	same((await own.filter(a, "edge", 3, 1, "raw")).image, await ref.edge(a, 3, 1));
+	const { image: mask, blurred } = await own.filter(a, "otsu", 3, 0, "raw");
+	const want = await ref.blur(original, 3);
+	same(blurred, want);
+	same(mask, await ref.otsu(want));
+	same(a, original); // the input is not written to
+	same((await own.filter(blurred, "edge", 3, 1, "raw")).image, await ref.edge(blurred, 3, 1));
+});
+
+test("filter otsu leaves the caller's buffer as the caller left it, even rewritten mid-op", { skip }, async () => {
+	// review13 writeBack: a caller reusing its buffer for the next frame as
+	// soon as the call returns must keep that frame
+	const w = 640;
+	const h = 480;
+	const buf = texture(labelFrame(w, h, 0, 300, 200, 1)).data;
+	const p = own.filter(rawImage(buf, w, h), "otsu", 9, 1, "raw");
+	buf.fill(1);
+	const r = await p;
+	assert.ok(buf.every((v) => v === 1), "the op wrote into the caller's buffer");
+	assert.strictEqual(r.blurred.width, w);
+	assert.notStrictEqual(r.blurred.data.buffer, buf.buffer);
 });
 
 test("crop clamps into the frame; rotate is within one grey level of opencv.js", { skip: skipCross }, async () => {
@@ -339,6 +354,120 @@ test("rotate's pad colour is four numbers: an object with a getter is refused be
 	assert.strictEqual(ran, false, "no JS ran inside the addon");
 });
 
+// ---- the re-review's proofs of concept -----------------------------------
+
+/** `b` rewritten in its last 32 bytes so contentKey gives `a`'s key: the
+ * hash is four invertible multiply-xorshift lanes (review13 collision). */
+function collide(a, b) {
+	const M = (1n << 64n) - 1n;
+	const C = 0x9e3779b97f4a7c15n;
+	let inv = C;
+	for (let i = 0; i < 6; i++) inv = (inv * (2n - C * inv)) & M;
+	const unxorshift = (y) => {
+		let x = y;
+		for (let i = 0; i < 3; i++) x = y ^ (x >> 29n);
+		return x & M;
+	};
+	const lanes = (buf) => {
+		const lane = [0x9e3779b97f4a7c15n, 0xc2b2ae3d27d4eb4fn, 0x165667b19e3779f9n, 0x27d4eb2f165667c5n];
+		for (let i = 0; i + 32 <= buf.length; i += 32) {
+			for (let k = 0; k < 4; k++) {
+				const l = ((lane[k] ^ buf.readBigUInt64LE(i + 8 * k)) * C) & M;
+				lane[k] = l ^ (l >> 29n);
+			}
+		}
+		return lane;
+	};
+	const want = lanes(a);
+	const pre = lanes(b.subarray(0, b.length - 32));
+	for (let k = 0; k < 4; k++) b.writeBigUInt64LE(((unxorshift(want[k]) * inv) & M) ^ pre[k], b.length - 32 + 8 * k);
+	return b;
+}
+
+test("a golden built to share another's content key is not given the other's features", { skip }, async () => {
+	const cv = own.load();
+	const w = 400;
+	const h = 300; // 120000 bytes, a whole number of 32-byte blocks
+	const a = texture(labelFrame(w, h, 0, 200, 150, 1)).data;
+	const b = collide(a, texture(labelFrame(w, h, 0, 200, 150, 1), 300).data);
+	assert.strictEqual(cv.contentKey(a), cv.contentKey(b), "the crafted key collides");
+	assert.notDeepStrictEqual(a, b);
+	const tb = shifted(rawImage(b, w, h), w, h, 1, 6, -3);
+	await own.imageAlign(rawImage(a, w, h), shifted(rawImage(a, w, h), w, h, 1, 4, 2), 0.5, 50, 1e-4, ...ALIGN_TAIL, "auto", "orb");
+	const got = await own.imageAlign(rawImage(b, w, h), tb, 0.5, 50, 1e-4, ...ALIGN_TAIL, "auto", "orb");
+	const fresh = await cv.align(cv.createGolden(b, w, h, 0.5), tb.data, w, h, 50, 1e-4, false);
+	assert.deepStrictEqual(got.transformMatrix.matrix2x3, fresh.matrix);
+	assert.strictEqual(got.inliers, fresh.inliers);
+	// and the check itself
+	const handle = cv.createGolden(a, w, h, 0.5);
+	assert.strictEqual(cv.sameGolden(handle, a, w, h), true);
+	assert.strictEqual(cv.sameGolden(handle, b, w, h), false);
+	assert.strictEqual(cv.sameGolden(handle, a, h, w), false);
+});
+
+test("a raw image is read once: a getter cannot pass one check and then fail another", { skip }, async () => {
+	// review13 getters: .data answered a Buffer twice, then a Proxy over a
+	// resizable store
+	let reads = 0;
+	const real = Buffer.alloc(64 * 48 * 3, 9);
+	const ab = new ArrayBuffer(64 * 48 * 3 * 4, { maxByteLength: 64 * 48 * 3 * 8 });
+	const fake = new Proxy({}, { get: (_, k) => (k === "buffer" ? ab : k === "byteOffset" ? 0 : k === "byteLength" ? ab.byteLength : undefined) });
+	const image = { get data() { return ++reads <= 1 ? real : fake; }, width: 64, height: 48, channels: 3, colorSpace: "RGB" };
+	const r = await own.resize(image, "num", 32, "num", 20, "raw");
+	assert.strictEqual(reads, 1);
+	assert.strictEqual(r.image.width, 32);
+	// a typed array with its own `buffer` getter is seen for what it is
+	if (!ab.resizable) return;
+	const sneaky = new Uint8Array(ab, 0, 64 * 48 * 3);
+	Object.defineProperty(sneaky, "buffer", { get: () => new ArrayBuffer(8) });
+	await assert.rejects(own.resize({ data: sneaky, width: 64, height: 48, channels: 3 }, "num", 32, "num", 20, "raw"), /resizable/);
+});
+
+test("queued ops' input copies count as external memory until they complete", { skip }, async () => {
+	// review13 queueMemory: 100 queued 10 MB resizes held 1 GB that V8 saw
+	// as 13 MB
+	// V8's own count, read through N-API: Node 24's
+	// process.memoryUsage().external leaves napi_adjust_external_memory out
+	const cv = own.load();
+	const frame = Buffer.alloc(2000 * 1700 * 3, 5);
+	const base = cv._externalMemory();
+	const ps = [];
+	for (let i = 0; i < 20; i++) ps.push(own.resize(rawImage(frame, 2000, 1700, 3, "RGB"), "num", 64, "num", 64, "raw"));
+	const queued = cv._externalMemory() - base;
+	await Promise.all(ps);
+	const after = cv._externalMemory() - base;
+	assert.ok(queued >= 20 * frame.length * 0.9, `V8 was told of ${(queued / 1e6).toFixed(0)} MB for 20 x 10 MB queued`);
+	assert.ok(after < 2 * frame.length, `${(after / 1e6).toFixed(0)} MB still counted after they completed`);
+});
+
+test("running out of memory preparing a golden is not kept; the next align tries again", { skip }, async () => {
+	const cv = own.load();
+	const golden = texture(labelFrame(400, 300, 0, 200, 150, 1), 77);
+	const target = shifted(golden, 400, 300, 1, 5, 3);
+	cv._failNext(1);
+	await assert.rejects(own.imageAlign(golden, target, 0.5, 30, 1e-3, ...ALIGN_TAIL, "auto", "orb"), /bad_alloc|bad allocation/);
+	const r = await own.imageAlign(golden, target, 0.5, 30, 1e-3, ...ALIGN_TAIL, "auto", "orb");
+	assert.strictEqual(r.success, true);
+	// an OpenCV error is the image's and is kept: a flat golden has no
+	// features, which is not an error; nothing to provoke here beyond that
+});
+
+test("an allocation failing on the JS thread is a JS error, and nothing is held after it", { skip }, async () => {
+	const cv = own.load();
+	const frame = rawImage(Buffer.alloc(300 * 200 * 3, 7), 300, 200, 3, "RGB");
+	const base = cv._externalMemory();
+	for (const op of [
+		() => cv.resize(frame.data, 300, 200, 3, 50, 40),
+		() => cv.createGolden(Buffer.alloc(300 * 200), 300, 200, 0.5),
+	]) {
+		cv._failNext(2);
+		assert.throws(op, /bad_alloc|bad allocation/);
+	}
+	assert.ok(cv._externalMemory() - base < 1e6, "external memory left counted");
+	// and the addon carries on
+	assert.strictEqual((await own.resize(frame, "num", 50, "num", 40, "raw")).image.width, 50);
+});
+
 // ---- guards ------------------------------------------------------------
 
 test("an op whose buffer is shorter than its dimensions is refused before it runs", { skip }, () => {
@@ -375,7 +504,7 @@ test("bad arguments are TypeErrors and RangeErrors that say which", { skip }, as
 	await assert.rejects(own.resize(g, "num", 70000, "num", 1), RangeError);
 	await assert.rejects(own.filter({ data: new Float32Array(100 * 80), width: 100, height: 80, channels: 1 }, "otsu", 3, 1), TypeError);
 	await assert.rejects(own.filter({ data: new DataView(new ArrayBuffer(100 * 80)), width: 100, height: 80, channels: 1 }, "otsu", 3, 1), TypeError);
-	// the edge filter's 16-bit derivative overflows past a 7x7 kernel
+	// the edge filter takes a kernel up to 7, in JS and in the addon
 	await assert.rejects(own.filter(g, "edge", 9, 1), RangeError);
 	assert.throws(() => own.load().filter(g.data, 100, 80, 1, 9, 1), /bad arguments/);
 	// OPENCV5_ADDON at nothing says so
@@ -411,8 +540,11 @@ async function fingerprints() {
 	out.resize = sha((await own.resize(rgb, "num", 150, "num", 99, "raw")).image.data);
 	out.rotate = sha((await own.rotate(rgb, 12.5, "#20a0ff", "raw")).image.data);
 	const gray = labelFrame(301, 199, 9, 150, 90, 1);
-	out.otsu = sha((await own.filter(gray, "otsu", 3, 0, "raw")).image.data);
-	out.edge = sha((await own.filter(gray, "edge", 3, 1, "raw")).image.data);
+	const otsu = await own.filter(gray, "otsu", 3, 0, "raw");
+	out.otsu = sha(otsu.image.data);
+	// on the blurred grey, as label-crop runs it (and as these bytes were
+	// pinned when otsu still wrote the blur back over its input)
+	out.edge = sha((await own.filter(otsu.blurred, "edge", 3, 1, "raw")).image.data);
 	return out;
 }
 

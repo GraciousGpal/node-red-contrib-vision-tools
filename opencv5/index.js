@@ -39,7 +39,7 @@ const { performance } = require("node:perf_hooks");
 
 const PREBUILDS = path.join(__dirname, "prebuilds");
 // native/opencv5.cc OPENCV5_ABI
-const ABI = 2;
+const ABI = 3;
 
 function libc() {
 	if (process.platform !== "linux") return "";
@@ -140,37 +140,88 @@ function _reset() {
 
 const COLOR_SPACE_BY_CHANNELS = { 1: "GRAY", 3: "RGB", 4: "RGBA" };
 
+// The engine's own accessors, captured once: a typed array or buffer can
+// carry an own `buffer`, `byteLength` or `resizable` getter that says
+// something else, and these cannot be fooled by one.
+const getter = (proto, key) => {
+	const d = Object.getOwnPropertyDescriptor(proto, key);
+	return d && d.get;
+};
+const TYPED_ARRAY = Object.getPrototypeOf(Uint8Array.prototype);
+const viewBuffer = getter(TYPED_ARRAY, "buffer");
+const viewOffset = getter(TYPED_ARRAY, "byteOffset");
+const viewLength = getter(TYPED_ARRAY, "byteLength");
+const abResizable = getter(ArrayBuffer.prototype, "resizable");
+const sabGrowable = typeof SharedArrayBuffer === "function" ? getter(SharedArrayBuffer.prototype, "growable") : undefined;
+
+/** True for a store whose length can change under a view. */
+function resizableStore(buffer) {
+	for (const get of [abResizable, sabGrowable]) {
+		if (!get) continue;
+		try {
+			return get.call(buffer) === true;
+		} catch {
+			// not that kind of buffer
+		}
+	}
+	return false;
+}
+
+// the largest input the addon takes: 65536 a side, 1 GiB in all
+const MAX_INPUT_SIDE = 65536;
+const MAX_INPUT_BYTES = 2 ** 30;
+
+/**
+ * { view, width, height, channels, colorSpace } of a raw image, every
+ * property read exactly once (a getter cannot answer one check and then
+ * something else), and the view made over the bytes through the engine's
+ * own accessors.
+ */
 function describeRaw(image) {
-	if (!image || typeof image !== "object" || !ArrayBuffer.isView(image.data)) {
+	if (!image || typeof image !== "object") {
 		throw new TypeError("opencv5: expected a raw { data, width, height, channels } image");
 	}
+	const data = image.data;
+	const widthIn = image.width;
+	const heightIn = image.height;
+	const channelsIn = image.channels;
+	const colorSpaceIn = image.colorSpace;
+	const dtype = image.dtype;
 	// 8-bit data only: a Float32Array or a DataView over the same bytes
 	// would be read as something it is not
-	if (!(image.data instanceof Uint8Array || image.data instanceof Uint8ClampedArray)) {
-		throw new TypeError(`opencv5: raw data must be a Buffer or Uint8Array, not a ${image.data.constructor.name}`);
+	if (!ArrayBuffer.isView(data)) {
+		throw new TypeError("opencv5: expected a raw { data, width, height, channels } image");
 	}
-	const width = Number(image.width);
-	const height = Number(image.height);
+	if (!(data instanceof Uint8Array || data instanceof Uint8ClampedArray)) {
+		throw new TypeError(`opencv5: raw data must be a Buffer or Uint8Array, not a ${Object.prototype.toString.call(data).slice(8, -1)}`);
+	}
+	const width = Number(widthIn);
+	const height = Number(heightIn);
 	if (!Number.isInteger(width) || width <= 0 || !Number.isInteger(height) || height <= 0) {
 		throw new Error("opencv5: raw width and height must be positive integers");
 	}
-	if (image.dtype !== undefined && image.dtype !== "uint8") {
-		throw new Error(`opencv5: dtype ${image.dtype} is not supported (uint8 only)`);
+	if (dtype !== undefined && dtype !== "uint8") {
+		throw new Error(`opencv5: dtype ${dtype} is not supported (uint8 only)`);
 	}
-	const channels = Number(image.channels || (image.colorSpace === "GRAY" ? 1 : 3));
+	const channels = Number(channelsIn || (colorSpaceIn === "GRAY" ? 1 : 3));
 	if (!COLOR_SPACE_BY_CHANNELS[channels]) throw new Error(`opencv5: unsupported channel count ${channels}`);
-	const colorSpace = String(image.colorSpace || COLOR_SPACE_BY_CHANNELS[channels]).toUpperCase();
+	const colorSpace = String(colorSpaceIn || COLOR_SPACE_BY_CHANNELS[channels]).toUpperCase();
 	const bytes = width * height * channels;
-	const { data } = image;
-	if (data.byteLength < bytes) throw new Error(`opencv5: raw data is shorter than ${width}x${height}x${channels}`);
-	// the addon copies the input before it queues the op, so nothing done
-	// to this buffer afterwards reaches the pool; a store that can resize
-	// is refused all the same, as the length checked here is not a
-	// property it keeps
-	if (data.buffer.resizable || data.buffer.growable) {
+	if (width > MAX_INPUT_SIDE || height > MAX_INPUT_SIDE || bytes > MAX_INPUT_BYTES) {
+		throw new RangeError(`opencv5: a ${width}x${height}x${channels} image is past 65536 a side or 1 GiB`);
+	}
+	// real typed-array internals from here: nothing below runs caller code
+	const buffer = viewBuffer.call(data);
+	const offset = viewOffset.call(data);
+	if (viewLength.call(data) < bytes) throw new Error(`opencv5: raw data is shorter than ${width}x${height}x${channels}`);
+	// The addon copies the input on this thread before the op is queued,
+	// so a resize afterwards changes nothing it reads, and a store resized
+	// before then is caught by the addon's own length check. Refused anyway:
+	// the length checked here is not a property such a store keeps.
+	if (resizableStore(buffer)) {
 		throw new Error("opencv5: raw data on a resizable or growable buffer is not supported");
 	}
-	const view = new Uint8Array(data.buffer, data.byteOffset, bytes);
+	const view = new Uint8Array(buffer, offset, bytes);
 	return { view, width, height, channels, colorSpace };
 }
 
@@ -336,16 +387,18 @@ async function resize(image, wMode, wVal, hMode, hVal, fmt, quality, pngOptimize
 }
 
 /**
- * filter(image, type, kernel, intensity, [fmt], [quality]) -> {image, timing}
+ * filter(image, type, kernel, intensity, [fmt], [quality])
+ *   -> {image, blurred?, timing}
  *
  *   "otsu" - GaussianBlur(kernel, sigma 0; kernel 3-31), then a global Otsu
- *            threshold to a 0/255 mask. The blurred copy is written back
- *            over a single-channel input, as the rosepetal bridge did:
- *            callers written against it (label-crop's boundary refinement)
- *            read the blurred image afterwards.
+ *            threshold to a 0/255 mask. `blurred` is the blurred grey, a
+ *            raw image of its own. (The rosepetal bridge wrote it back over
+ *            the caller's input instead; nothing here writes to an input.)
  *   "edge" - Sobel magnitude, |gx|/2 + |gy|/2 scaled by `intensity`; a
  *            continuous grey map, not a binary edge map. Kernel 3-7: a
- *            larger one overflows the 16-bit derivative OpenCV computes.
+ *            chosen bound, the same on both engines, not a correctness
+ *            limit (the 16-bit derivative saturates on a strong step at 7
+ *            as at 9).
  */
 async function filter(image, type, kernel, intensity, fmt, quality, pngOptimize) {
 	const t0 = performance.now();
@@ -362,14 +415,12 @@ async function filter(image, type, kernel, intensity, fmt, quality, pngOptimize)
 	const raw = describeRaw(image);
 	const gray = raw.channels === 1 ? raw : describeRaw((await convert(raw, "GRAY")).image);
 	const reply = await cv.filter(gray.view, raw.width, raw.height, kind === "otsu" ? 0 : 1, k, weight);
-	// the bridge's write-back, into the caller's buffer if it is still there
-	if (reply.blurred && raw.channels === 1 && raw.view.byteLength === reply.blurred.length) {
-		raw.view.set(reply.blurred);
-	}
-	return {
+	const out = {
 		image: await deliver(rawImage(reply.data, raw.width, raw.height, 1, "GRAY"), fmt, quality, pngOptimize),
 		timing: timing(t0, kind, reply),
 	};
+	if (reply.blurred) out.blurred = rawImage(reply.blurred, raw.width, raw.height, 1, "GRAY");
+	return out;
 }
 
 /** crop(image, x, y, w, h, normalized, [fmt], [quality]) -> {image, timing}; clamped into the frame */
@@ -458,9 +509,12 @@ function goldenHandle(cv, ref, scale) {
 	// every byte hashed natively: about 0.2 ms for a 3 MP golden
 	const key = `${ref.width}x${ref.height}:${scale}:${cv.contentKey(ref.view)}`;
 	let handle = goldens.get(key);
-	if (handle) {
-		goldens.delete(key);
-	} else {
+	if (handle) goldens.delete(key);
+	// The hash is fast, not collision-proof: an image can be built to share
+	// another's key. So a hit is reused only when the golden holds exactly
+	// these bytes (a memcmp, about 0.3 ms for 3 MP) - which also catches a
+	// shared buffer rewritten between the hash and an earlier create.
+	if (!handle || !cv.sameGolden(handle, ref.view, ref.width, ref.height)) {
 		handle = cv.createGolden(ref.view, ref.width, ref.height, scale);
 		while (goldens.size >= MAX_GOLDENS) goldens.delete(goldens.keys().next().value);
 	}
