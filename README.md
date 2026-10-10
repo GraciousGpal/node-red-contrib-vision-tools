@@ -188,7 +188,14 @@ manager and `npm install --ignore-scripts` get the same files.
 | --- | --- |
 | Linux x64, glibc 2.17 or newer | `prebuilds/linux-x64/vision-kernels.glibc.node` |
 | Linux x64, musl (Alpine, the official Node-RED image) | `prebuilds/linux-x64/vision-kernels.musl.node` |
-| Linux arm64 (glibc, musl), Windows x64, macOS arm64/x64 | built by `.github/workflows/prebuild.yml`, not yet in a release |
+| Linux arm64, glibc / musl | `prebuilds/linux-arm64/vision-kernels.glibc.node` / `.musl.node` |
+| Windows x64 | `prebuilds/win32-x64/vision-kernels.node` |
+| macOS arm64 / x64 | `prebuilds/darwin-arm64/vision-kernels.node` / `prebuilds/darwin-x64/vision-kernels.node` |
+
+The Linux x64 binaries are built by hand or by CI in pinned images (below);
+the other five come from the CI run `.github/workflows/prebuild.yml` makes,
+which builds each on its own runner and runs the native parity and fuzz
+tests against the JS kernels there before it uploads it.
 
 Any CPU of the architecture runs them (baseline x86-64 / armv8-a; the
 tile search picks an AVX2 build of its inner loop at run time on Linux
@@ -207,8 +214,10 @@ the script) against `node-api-headers` 1.9.0, and gives the bytes
 | `linux-x64/vision-kernels.glibc.node` | 96,320 | `e28aac3f97ad9e2b8de358b0984a6a31802a70f130cdcbfba355ebcb04a8a532` |
 | `linux-x64/vision-kernels.musl.node` | 116,400 | `339c6b1def8f58189450047b9fd677f1aa703da9a3a9992daff5356411fb9031` |
 
-The loader checks a binary's size and hash against that manifest before it
-opens it, and CI rebuilds both and fails on any difference.
+The loader checks every binary's size and hash against that manifest
+before it opens it, and CI rebuilds the two Linux x64 binaries and fails
+on any difference. The other five are not reproducible this way (their
+toolchains are the runners'), so the manifest pins the bytes CI tested.
 
 **Fallback.** Anything that stops the addon loading — no binary for the
 platform, one that is not the manifest's (a truncated binary is never

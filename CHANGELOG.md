@@ -18,9 +18,10 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   46.5 ms at the median, 81.4 to 61.1 ms at p95 and 91.0 to 66.3 ms at
   p99, with `msg.result` and every heat map identical on all 648
   frame-passes. Prebuilt binaries ship in the package
-  (`prebuilds/<platform>-<arch>/`; this release: linux-x64 glibc 2.17+
-  and musl), so there is no install script; `.github/workflows/prebuild.yml`
-  builds and tests linux arm64, win32-x64 and macOS too (not yet run).
+  (`prebuilds/<platform>-<arch>/`: linux x64 and arm64, glibc 2.17+
+  and musl, win32-x64, darwin arm64 and x64), so there is no install
+  script; `.github/workflows/prebuild.yml` builds each on its own runner
+  and runs the native parity and fuzz tests there.
   Where no binary loads the JS kernels run, with one log line saying
   why; `VISION_TOOLS_KERNELS=js` forces them. Each binary is checked
   against `prebuilds/manifest.json` (size and SHA-256) before it is

@@ -1,4 +1,20 @@
 {
+	"darwin-arm64/vision-kernels.node": {
+		"size": 85024,
+		"sha256": "4a281170a3f35c171343316eacf3038ffdc6efaa02f501df46b7951dce92eb90"
+	},
+	"darwin-x64/vision-kernels.node": {
+		"size": 59656,
+		"sha256": "445819e3bf05276a150fa33ce1a8ac1c5c1edc798d6ded17394797ef46d8e1cf"
+	},
+	"linux-arm64/vision-kernels.glibc.node": {
+		"size": 67816,
+		"sha256": "9f8d2a38b41a123431e6fdb6f7da3dd6db36e777b9b9101eaf3d9bfec4c236ec"
+	},
+	"linux-arm64/vision-kernels.musl.node": {
+		"size": 132800,
+		"sha256": "6b4be2bb1499b4650e916a847957f47d9a55c6717855069a69a4b8acd0167864"
+	},
 	"linux-x64/vision-kernels.glibc.node": {
 		"size": 96320,
 		"sha256": "e28aac3f97ad9e2b8de358b0984a6a31802a70f130cdcbfba355ebcb04a8a532"
@@ -6,5 +22,9 @@
 	"linux-x64/vision-kernels.musl.node": {
 		"size": 116400,
 		"sha256": "339c6b1def8f58189450047b9fd677f1aa703da9a3a9992daff5356411fb9031"
+	},
+	"win32-x64/vision-kernels.node": {
+		"size": 177152,
+		"sha256": "f99c39c2002260b0496de733ef00af978d78350efcc4ff1c1dd130656a9f62ad"
 	}
 }
