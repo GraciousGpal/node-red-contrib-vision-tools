@@ -212,9 +212,12 @@ test("golden-compare says once which kernels it runs", () => {
 	const lines = [];
 	const log = { info: (m) => lines.push(["info", m]), warn: (m) => lines.push(["warn", m]) };
 	loadNode("golden-compare.js", {}, { log });
-	assert.equal(lines.length, 1, JSON.stringify(lines));
+	// the kernels' line; the OpenCV engine's is lib/engine.js's (engine.test.js)
+	const kernelLines = lines.filter(([, m]) => /pool kernels/.test(m));
+	assert.equal(kernelLines.length, 1, JSON.stringify(lines));
+	assert.ok(lines.some(([, m]) => /golden-compare: (OpenCV engine|no OpenCV engine)/.test(m)), JSON.stringify(lines));
 	const k = nativeKernels.status();
-	const [level, text] = lines[0];
+	const [level, text] = kernelLines[0];
 	assert.equal(level, k.failed ? "warn" : "info");
 	assert.ok(text.includes(k.native ? k.file : k.reason), text);
 });
