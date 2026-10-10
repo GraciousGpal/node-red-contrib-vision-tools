@@ -23,7 +23,8 @@
     "qr",
     "code128",
     "sharp",
-    "opencv"
+    "opencv",
+    "resize"
   ],
   "repository": {
     "type": "git",
@@ -39,6 +40,7 @@
       "golden-compare": "golden-compare.js",
       "checkerboard-calibrate": "checkerboard-calibrate.js",
       "perspective-rectify": "perspective-rectify.js",
+      "image-resize": "image-resize.js",
       "label-crop": "label-crop.js",
       "line-finder": "line-finder.js",
       "barcode-locate": "barcode-locate.js",

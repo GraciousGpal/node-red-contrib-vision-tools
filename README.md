@@ -37,6 +37,10 @@ in [CHANGELOG.md](CHANGELOG.md).
   `label-crop` and `golden-compare` the keystone-free view a square-on
   camera would. Measured once, applied per frame; nothing is detected on
   the production image.
+- **`resize`** (`image-resize`) — scales a frame or a golden by a factor
+  or to a size (bilinear, on the OpenCV engine), raw in and raw out - the
+  "halve to inspection scale" step in front of `golden-compare` and
+  `checkerboard-calibrate`.
 - **`label-crop`** — deskews and crops a physical label out of a frame,
   either by thresholding the whole frame and taking the dominant blob or,
   when the label's own boundary is fainter than its printed artwork, by
@@ -1100,6 +1104,30 @@ them: no scale file path, no calibration on disk, a calibration with no
 homography (one saved before this node existed — re-run
 `checkerboard-calibrate` with `msg.save: true`), or a corrupt file.
 
+## How `resize` works
+
+`image-resize` scales the image at its input property (`msg.payload` by
+default) and writes the result to its output property. Each side is
+**× factor** (`round(side × factor)`), **pixels**, or **auto** (from the
+other side, keeping the aspect ratio: `round(otherOut × side / otherIn)`)
+- the rules of the `rp-resize` node from
+`@rosepetal/node-red-contrib-image-tools` it replaces, so a flow migrated
+from it gets the same sizes. Bilinear (`INTER_LINEAR`) on the OpenCV
+engine, so the pixels are the ones `golden-compare`'s own working copies
+and `bench/golden-container-bench.js` produce.
+
+The input can be a raw `{ data, width, height, channels, colorSpace }`
+object, a bare raw Buffer with `msg.rawInfo` (or pdf-to-image's
+`msg.images`), an encoded image Buffer, or a file path; the output is the
+same raw object shape (channels and colour space kept) or a png or jpg
+Buffer. An input that is not an image, or a size that cannot be made,
+stops the message with an error: a frame at the wrong scale would be
+graded against the wrong golden.
+
+`scripts/migrate-rp-nodes.js` rewrites a flows.json's `rp-resize` nodes
+into this node (same ids, positions and wires) and removes
+`rp-heat-diff` debug views.
+
 ## How `label-crop` works
 
 > **When it helps, measured.** On this project's rig the label fills 85%
@@ -1789,7 +1817,7 @@ nothing is found at all, one message with `msg.text = null`,
 
 ## Tests
 
-`npm test` (Node 18+, no test framework needed — `node --test`), 750
+`npm test` (Node 18+, no test framework needed — `node --test`), 761
 tests. Fixtures are generated with `sharp` rather than read from
 `data/sample_images`, so the suite runs anywhere; the real QC photos are
 gitignored. Coverage spans the lib pipeline (`compare`, `align`, `warp`,

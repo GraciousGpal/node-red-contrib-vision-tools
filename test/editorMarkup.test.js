@@ -23,6 +23,7 @@ const HTML_FILES = [
 	"golden-compare.html",
 	"checkerboard-calibrate.html",
 	"perspective-rectify.html",
+	"image-resize.html",
 	"label-crop.html",
 	"line-finder.html",
 	"barcode-locate.html",

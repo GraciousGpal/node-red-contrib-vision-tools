@@ -1,0 +1,132 @@
+<script type="text/html" data-template-name="image-resize">
+  <div class="form-row">
+    <label for="node-input-name"><i class="fa fa-tag"></i> Name</label>
+    <input type="text" id="node-input-name" placeholder="Name" />
+  </div>
+  <div class="form-row">
+    <label for="node-input-inputPath"><i class="fa fa-sign-in"></i> Input</label>
+    <span>msg.</span><input type="text" id="node-input-inputPath" style="width:60%;" placeholder="payload" />
+  </div>
+  <div class="form-row">
+    <label for="node-input-outputPath"><i class="fa fa-sign-out"></i> Output</label>
+    <span>msg.</span><input type="text" id="node-input-outputPath" style="width:60%;" placeholder="payload" />
+  </div>
+  <div class="form-row">
+    <label for="node-input-widthMode"><i class="fa fa-arrows-h"></i> Width</label>
+    <select id="node-input-widthMode" style="width:120px;">
+      <option value="multiply">× factor</option>
+      <option value="set">pixels</option>
+      <option value="auto">auto</option>
+    </select>
+    <input type="text" id="node-input-widthValue" style="width:90px;" />
+  </div>
+  <div class="form-row">
+    <label for="node-input-heightMode"><i class="fa fa-arrows-v"></i> Height</label>
+    <select id="node-input-heightMode" style="width:120px;">
+      <option value="multiply">× factor</option>
+      <option value="set">pixels</option>
+      <option value="auto">auto</option>
+    </select>
+    <input type="text" id="node-input-heightValue" style="width:90px;" />
+    <span class="node-input-hint" style="margin-left:10px; color:#999;"
+      >auto keeps the aspect ratio from the other side</span
+    >
+  </div>
+  <div class="form-row">
+    <label for="node-input-outputFormat"><i class="fa fa-file-image-o"></i> Format</label>
+    <select id="node-input-outputFormat" style="width:110px;">
+      <option value="raw">raw</option>
+      <option value="png">png</option>
+      <option value="jpg">jpg</option>
+    </select>
+    <span style="margin:0 6px 0 12px;">quality</span>
+    <input type="number" id="node-input-outputQuality" min="1" max="100" style="width:70px;" />
+    <span class="node-input-hint" style="margin-left:10px; color:#999;"
+      >raw is what golden-compare and perspective-rectify want; quality is jpg only</span
+    >
+  </div>
+</script>
+
+<script type="text/html" data-help-name="image-resize">
+  <p>
+    Scale an image by a factor or to a size - for example halving camera
+    frames and the golden to the inspection scale before
+    <code>golden-compare</code>. Bilinear (OpenCV <code>INTER_LINEAR</code>),
+    on the same OpenCV engine <code>label-crop</code> uses.
+  </p>
+
+  <h3>Input</h3>
+  <p>
+    <code>msg.payload</code>, or the configured property: a raw
+    <code>{ data, width, height, channels, colorSpace }</code> object, a bare
+    raw Buffer with <code>msg.rawInfo</code> (or pdf-to-image's
+    <code>msg.images</code>), an encoded image Buffer (png, jpg, webp, tiff),
+    or a file path.
+  </p>
+
+  <h3>Size</h3>
+  <ul>
+    <li><b>× factor</b> - that side times the factor, rounded (0.5 halves it)</li>
+    <li><b>pixels</b> - that many pixels</li>
+    <li>
+      <b>auto</b> - from the other side, keeping the aspect ratio:
+      <code>round(otherOut × side / otherIn)</code>. Only one side can be auto.
+    </li>
+  </ul>
+  <p>The same rules, and so the same sizes, as the rp-resize node this replaces.</p>
+
+  <h3>Output</h3>
+  <p>
+    The resized image at the configured property: a raw
+    <code>{ data, width, height, channels, colorSpace, dtype }</code> object
+    with the input's channels and colour space, or an encoded png or jpg
+    Buffer. The rest of the message passes through.
+  </p>
+
+  <h3>Errors</h3>
+  <p>
+    An input that is not an image, a size that cannot be made (both sides
+    auto, a factor or size that is not positive), or no OpenCV engine at all
+    stops the message with an error a Catch node sees, and turns the status
+    red: a frame at the wrong scale would be graded against the wrong golden.
+  </p>
+</script>
+
+<script type="text/javascript">
+  RED.nodes.registerType("image-resize", {
+    category: "vision",
+    color: "#5DADE2",
+    defaults: {
+      name: { value: "" },
+      inputPath: { value: "payload" },
+      outputPath: { value: "payload" },
+      widthMode: { value: "multiply" },
+      widthValue: { value: "0.5" },
+      heightMode: { value: "auto" },
+      heightValue: { value: "" },
+      outputFormat: { value: "raw" },
+      outputQuality: { value: 90, validate: RED.validators.number(true) },
+    },
+    inputs: 1,
+    outputs: 1,
+    icon: "image-resize.svg",
+    label: function () {
+      return this.name || "resize";
+    },
+    paletteLabel: function () {
+      return "resize";
+    },
+    oneditprepare: function () {
+      const sync = function (side) {
+        const auto = $("#node-input-" + side + "Mode").val() === "auto";
+        $("#node-input-" + side + "Value").toggle(!auto);
+      };
+      ["width", "height"].forEach(function (side) {
+        $("#node-input-" + side + "Mode").on("change", function () {
+          sync(side);
+        });
+        sync(side);
+      });
+    },
+  });
+</script>

@@ -47,6 +47,17 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Added
 
+- **A `resize` node (`image-resize`).** Scales a frame or a golden by a
+  factor, to a size, or with one side auto from the aspect ratio, bilinear
+  on the OpenCV engine; raw in and raw out (or png/jpg), input and output
+  at any msg property. It replaces the `rp-resize` node of the rosepetal
+  package with the same size rules, so the rig's "halve to inspection
+  scale" steps give the frames the inspection was measured on, byte for
+  byte. `scripts/migrate-rp-nodes.js` rewrites a flows.json in place of
+  its `rp-resize` nodes (same ids, positions and wires) and removes
+  `rp-heat-diff` debug views, refusing - and changing nothing - when a node
+  cannot be carried over exactly.
+
 - **Native kernels for `golden-compare`'s pool.** The local alignment's
   tile search and resampling, the binarization with the tone comparison,
   the tone comparison alone and the one-pass diff have native twins

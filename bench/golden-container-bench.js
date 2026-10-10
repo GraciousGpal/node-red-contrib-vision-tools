@@ -173,18 +173,14 @@ async function main() {
 	const stem = rendered.filename || path.parse(pdfPath).name;
 	const dpi = rendered.dpi;
 	assert(!Array.isArray(rendered.payload), "expected exactly one golden page");
-	// Match the two deployed rp-resize nodes (0.5x), including OpenCV's filter.
-	const half = async (image) =>
-		(
-			await bridge.resize(
-				image,
-				"num",
-				Math.round(image.width / 2),
-				"num",
-				Math.round(image.height / 2),
-				"raw",
-			)
-		).image;
+	// Match the flow's two "halve" resize nodes (image-resize, × 0.5 with
+	// the height auto): their size rule, and OpenCV's INTER_LINEAR.
+	const { targetSize } = require(path.join(__dirname, "..", "image-resize.js"));
+	const halfRule = { widthMode: "multiply", widthValue: "0.5", heightMode: "auto" };
+	const half = async (image) => {
+		const size = targetSize(image.width, image.height, halfRule);
+		return (await bridge.resize(image, "num", size.width, "num", size.height, "raw")).image;
+	};
 	const golden = await half(rendered.payload);
 	const goldenKey = `pdf:${stem}:${dpi}:${golden.width}x${golden.height}`;
 	// [scratch] the flow's rectify node between "halve the frame" and compare
