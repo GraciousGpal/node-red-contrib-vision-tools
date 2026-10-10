@@ -1,9 +1,14 @@
 #!/bin/sh
 # Build the native kernels with the compiler alone - no node-gyp, no
-# Python, no Node: what the Linux prebuilds are made with, inside a
-# manylinux2014 (glibc 2.17) or Alpine (musl) image, and what any Linux
-# or macOS host can build from source with. node-gyp users have
+# Python, no Node: what the Linux prebuilds are made with and what any
+# Linux or macOS host can build from source with. node-gyp users have
 # binding.gyp, which carries the same flags.
+#
+# The shipped Linux binaries come from native/prebuild-linux.sh, which
+# runs this in images pinned by digest - quay.io/pypa/manylinux2014_*
+# (glibc 2.17, GCC 10) and quay.io/pypa/musllinux_1_2_* (Alpine, GCC 14) -
+# against node-api-headers 1.9.0, so a rebuild gives the same bytes as
+# prebuilds/manifest.json records.
 #
 #   sh native/build.sh OUT.node NODE_API_INCLUDE_DIR
 #

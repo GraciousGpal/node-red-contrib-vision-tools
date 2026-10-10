@@ -1,0 +1,10 @@
+{
+	"linux-x64/vision-kernels.glibc.node": {
+		"size": 96320,
+		"sha256": "e28aac3f97ad9e2b8de358b0984a6a31802a70f130cdcbfba355ebcb04a8a532"
+	},
+	"linux-x64/vision-kernels.musl.node": {
+		"size": 116400,
+		"sha256": "339c6b1def8f58189450047b9fd677f1aa703da9a3a9992daff5356411fb9031"
+	}
+}
