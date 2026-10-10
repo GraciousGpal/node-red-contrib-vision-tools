@@ -16,17 +16,18 @@
  * Each binary is built for its arch's baseline and nothing else
  * (x86-64-v2, NEON): it runs on any CPU of its arch and gives the same
  * bytes on every one. It keys a reference image's ORB features by the
- * identity of its buffer, so they are found once per reference.
+ * reference's content (a few of them kept), so they are found once per
+ * reference.
+ *
+ * Every op copies its input before the work is queued and replies with
+ * new buffers, so a caller may reuse, rewrite or transfer its buffers the
+ * moment a call returns.
  *
  * The addon: prebuilds/<platform>-<arch>/opencv5[.glibc|.musl].node,
  * checked against prebuilds/manifest.json (size and SHA-256) before it is
  * opened - dlopen of a truncated shared object can take the process down
  * before any error reaches JavaScript; or OPENCV5_ADDON=<path>, loaded
  * unchecked, for a local build.
- *
- * imageAlign()'s reply image is a buffer this thread reuses: it holds
- * until the event loop's next turn after the reply, not for as long as
- * the caller keeps it - copy out of it at once.
  */
 
 "use strict";
@@ -38,7 +39,7 @@ const { performance } = require("node:perf_hooks");
 
 const PREBUILDS = path.join(__dirname, "prebuilds");
 // native/opencv5.cc OPENCV5_ABI
-const ABI = 1;
+const ABI = 2;
 
 function libc() {
 	if (process.platform !== "linux") return "";
@@ -76,12 +77,21 @@ function unverified(file) {
 let addon;
 let loadError = null;
 
-/** The addon, or a throw saying why not. Once per thread (a worker
- * thread loads its own instance). */
+/**
+ * The addon, or a throw saying why not. Once per thread (a worker thread
+ * loads its own instance), and a failure is remembered too: what decides
+ * it - the files on disk, the manifest, OPENCV5_ADDON - does not change
+ * under a running process, and retrying a failed dlopen on every op would
+ * cost each one a stat and a hash. _reset() forgets it.
+ */
 function load() {
 	if (addon) return addon;
 	if (loadError) throw loadError;
 	const explicit = Boolean(process.env.OPENCV5_ADDON);
+	if (explicit && !fs.existsSync(path.resolve(process.env.OPENCV5_ADDON))) {
+		loadError = new Error(`OPENCV5_ADDON is ${process.env.OPENCV5_ADDON}, which does not exist`);
+		throw loadError;
+	}
 	const files = candidates().filter((f) => fs.existsSync(f));
 	const reasons = [];
 	for (const file of files) {
@@ -132,7 +142,12 @@ const COLOR_SPACE_BY_CHANNELS = { 1: "GRAY", 3: "RGB", 4: "RGBA" };
 
 function describeRaw(image) {
 	if (!image || typeof image !== "object" || !ArrayBuffer.isView(image.data)) {
-		throw new Error("opencv5: expected a raw { data, width, height, channels } image");
+		throw new TypeError("opencv5: expected a raw { data, width, height, channels } image");
+	}
+	// 8-bit data only: a Float32Array or a DataView over the same bytes
+	// would be read as something it is not
+	if (!(image.data instanceof Uint8Array || image.data instanceof Uint8ClampedArray)) {
+		throw new TypeError(`opencv5: raw data must be a Buffer or Uint8Array, not a ${image.data.constructor.name}`);
 	}
 	const width = Number(image.width);
 	const height = Number(image.height);
@@ -148,9 +163,10 @@ function describeRaw(image) {
 	const bytes = width * height * channels;
 	const { data } = image;
 	if (data.byteLength < bytes) throw new Error(`opencv5: raw data is shorter than ${width}x${height}x${channels}`);
-	// an op reads (and otsu writes) on a pool thread after this returns: a
-	// store that can shrink meanwhile is refused (the addon refuses a
-	// detached one)
+	// the addon copies the input before it queues the op, so nothing done
+	// to this buffer afterwards reaches the pool; a store that can resize
+	// is refused all the same, as the length checked here is not a
+	// property it keeps
 	if (data.buffer.resizable || data.buffer.growable) {
 		throw new Error("opencv5: raw data on a resizable or growable buffer is not supported");
 	}
@@ -243,14 +259,28 @@ async function deliver(image, fmt, quality, pngOptimize) {
 
 // ---- ops ---------------------------------------------------------------
 
+/** A finite number, or a TypeError/RangeError naming the argument. */
+function finite(value, name) {
+	if (typeof value !== "number") throw new TypeError(`opencv5: ${name} must be a number, got ${typeof value}`);
+	if (!Number.isFinite(value)) throw new RangeError(`opencv5: ${name} must be finite, got ${value}`);
+	return value;
+}
+
+// the largest output an op makes: 64 megapixels, 16384 a side (the addon
+// refuses 65536)
+function checkSize(width, height, op) {
+	if (width > 16384 || height > 16384 || width * height > 64 * 1024 * 1024) {
+		throw new RangeError(`opencv5: ${op} would make a ${width}x${height} image, past 64 megapixels or 16384 a side`);
+	}
+}
+
 async function convert(raw, target) {
 	const cv = load();
 	const code = cv.colorCodes[`${raw.colorSpace}>${target}`];
 	if (code === undefined) throw new Error(`opencv5: no conversion from ${raw.colorSpace} to ${target}`);
 	const channels = CHANNELS_OF[target];
-	const out = Buffer.allocUnsafeSlow(raw.width * raw.height * channels);
-	const reply = await cv.cvtColor(raw.view, raw.width, raw.height, raw.channels, code, out, channels);
-	return { image: rawImage(out, raw.width, raw.height, channels, target), reply };
+	const reply = await cv.cvtColor(raw.view, raw.width, raw.height, raw.channels, code, channels);
+	return { image: rawImage(reply.data, raw.width, raw.height, channels, target), reply };
 }
 
 /** colorConvert(image, targetColorSpace, [fmt], [quality]) -> {image, timing} */
@@ -275,15 +305,15 @@ async function colorConvert(image, targetColorSpace, fmt, quality, pngOptimize) 
 function resolveDimension(mode, value, source) {
 	const n = Number(value);
 	if (mode === "pct" || mode === "percent") {
-		if (!Number.isFinite(n) || n <= 0) throw new Error(`opencv5: resize needs a positive percentage, got ${value}`);
+		if (!Number.isFinite(n) || n <= 0) throw new RangeError(`opencv5: resize needs a positive percentage, got ${value}`);
 		return Math.max(1, Math.round(source * (n / 100)));
 	}
 	if (mode === "scale" || mode === "multiply") {
-		if (!Number.isFinite(n) || n <= 0) throw new Error(`opencv5: resize needs a positive scale factor, got ${value}`);
+		if (!Number.isFinite(n) || n <= 0) throw new RangeError(`opencv5: resize needs a positive scale factor, got ${value}`);
 		return Math.max(1, Math.round(source * n));
 	}
 	if (n === 0 || Number.isNaN(n)) return null;
-	if (!Number.isFinite(n) || n < 0) throw new Error(`opencv5: resize needs a positive size, got ${value}`);
+	if (!Number.isFinite(n) || n < 0) throw new RangeError(`opencv5: resize needs a positive size, got ${value}`);
 	return Math.max(1, Math.round(n));
 }
 
@@ -294,13 +324,13 @@ async function resize(image, wMode, wVal, hMode, hVal, fmt, quality, pngOptimize
 	const raw = describeRaw(image);
 	let width = resolveDimension(wMode, wVal, raw.width);
 	let height = resolveDimension(hMode, hVal, raw.height);
-	if (width === null && height === null) throw new Error("opencv5: resize needs at least one positive size");
+	if (width === null && height === null) throw new RangeError("opencv5: resize needs at least one positive size");
 	if (width === null) width = Math.max(1, Math.round((height * raw.width) / raw.height));
 	if (height === null) height = Math.max(1, Math.round((width * raw.height) / raw.width));
-	const out = Buffer.allocUnsafeSlow(width * height * raw.channels);
-	const reply = await cv.resize(raw.view, raw.width, raw.height, raw.channels, out, width, height);
+	checkSize(width, height, "resize");
+	const reply = await cv.resize(raw.view, raw.width, raw.height, raw.channels, width, height);
 	return {
-		image: await deliver(rawImage(out, width, height, raw.channels, raw.colorSpace), fmt, quality, pngOptimize),
+		image: await deliver(rawImage(reply.data, width, height, raw.channels, raw.colorSpace), fmt, quality, pngOptimize),
 		timing: timing(t0, "resize", reply),
 	};
 }
@@ -308,13 +338,14 @@ async function resize(image, wMode, wVal, hMode, hVal, fmt, quality, pngOptimize
 /**
  * filter(image, type, kernel, intensity, [fmt], [quality]) -> {image, timing}
  *
- *   "otsu" - GaussianBlur(kernel, sigma 0), then a global Otsu threshold
- *            to a 0/255 mask. The blurred copy is written back over a
- *            single-channel input, as the rosepetal bridge did: callers
- *            written against it (label-crop's boundary refinement) read
- *            the blurred image afterwards.
+ *   "otsu" - GaussianBlur(kernel, sigma 0; kernel 3-31), then a global Otsu
+ *            threshold to a 0/255 mask. The blurred copy is written back
+ *            over a single-channel input, as the rosepetal bridge did:
+ *            callers written against it (label-crop's boundary refinement)
+ *            read the blurred image afterwards.
  *   "edge" - Sobel magnitude, |gx|/2 + |gy|/2 scaled by `intensity`; a
- *            continuous grey map, not a binary edge map.
+ *            continuous grey map, not a binary edge map. Kernel 3-7: a
+ *            larger one overflows the 16-bit derivative OpenCV computes.
  */
 async function filter(image, type, kernel, intensity, fmt, quality, pngOptimize) {
 	const t0 = performance.now();
@@ -324,13 +355,19 @@ async function filter(image, type, kernel, intensity, fmt, quality, pngOptimize)
 		throw new Error(`opencv5: filter type "${type}" is not implemented (otsu, edge)`);
 	}
 	const k = Number.isFinite(kernel) && kernel >= 3 ? Math.round(kernel) | 1 : 3;
+	if (k > (kind === "edge" ? 7 : 31)) {
+		throw new RangeError(`opencv5: filter "${kind}" takes a kernel up to ${kind === "edge" ? 7 : 31}, got ${kernel}`);
+	}
 	const weight = Number.isFinite(intensity) && intensity > 0 ? intensity : 1;
 	const raw = describeRaw(image);
 	const gray = raw.channels === 1 ? raw : describeRaw((await convert(raw, "GRAY")).image);
-	const out = Buffer.allocUnsafeSlow(raw.width * raw.height);
-	const reply = await cv.filter(gray.view, raw.width, raw.height, kind === "otsu" ? 0 : 1, k, weight, out);
+	const reply = await cv.filter(gray.view, raw.width, raw.height, kind === "otsu" ? 0 : 1, k, weight);
+	// the bridge's write-back, into the caller's buffer if it is still there
+	if (reply.blurred && raw.channels === 1 && raw.view.byteLength === reply.blurred.length) {
+		raw.view.set(reply.blurred);
+	}
 	return {
-		image: await deliver(rawImage(out, raw.width, raw.height, 1, "GRAY"), fmt, quality, pngOptimize),
+		image: await deliver(rawImage(reply.data, raw.width, raw.height, 1, "GRAY"), fmt, quality, pngOptimize),
 		timing: timing(t0, kind, reply),
 	};
 }
@@ -339,12 +376,14 @@ async function filter(image, type, kernel, intensity, fmt, quality, pngOptimize)
 async function crop(image, x, y, w, h, normalized, fmt, quality, pngOptimize) {
 	const t0 = performance.now();
 	const raw = describeRaw(image);
+	for (const [v, name] of [[x, "x"], [y, "y"], [w, "width"], [h, "height"]]) finite(v, `crop ${name}`);
+	if (!(w > 0) || !(h > 0)) throw new RangeError(`opencv5: crop width and height must be positive, got ${w}x${h}`);
 	const sx = normalized ? raw.width : 1;
 	const sy = normalized ? raw.height : 1;
-	let x0 = Math.round(Number(x) * sx);
-	let y0 = Math.round(Number(y) * sy);
-	let cw = Math.round(Number(w) * sx);
-	let ch = Math.round(Number(h) * sy);
+	let x0 = Math.round(x * sx);
+	let y0 = Math.round(y * sy);
+	let cw = Math.round(w * sx);
+	let ch = Math.round(h * sy);
 	x0 = Math.max(0, Math.min(x0, raw.width - 1));
 	y0 = Math.max(0, Math.min(y0, raw.height - 1));
 	cw = Math.max(1, Math.min(cw, raw.width - x0));
@@ -390,64 +429,58 @@ async function rotate(image, angleDeg, padColor, fmt, quality, pngOptimize) {
 	const t0 = performance.now();
 	const cv = load();
 	const raw = describeRaw(image);
-	const angle = Number(angleDeg) || 0;
+	const angle = angleDeg === undefined || angleDeg === null ? 0 : finite(angleDeg, "rotate angle");
 	const rad = (angle * Math.PI) / 180;
 	const ca = Math.abs(Math.cos(rad));
 	const sa = Math.abs(Math.sin(rad));
 	const dstW = Math.max(1, Math.trunc(raw.height * sa + raw.width * ca));
 	const dstH = Math.max(1, Math.trunc(raw.height * ca + raw.width * sa));
-	const out = Buffer.allocUnsafeSlow(dstW * dstH * raw.channels);
-	const reply = await cv.rotate(
-		raw.view,
-		raw.width,
-		raw.height,
-		raw.channels,
-		out,
-		dstW,
-		dstH,
-		angle,
-		padColour(padColor, raw.channels),
-	);
+	checkSize(dstW, dstH, "rotate");
+	const [p0, p1, p2, p3] = padColour(padColor, raw.channels);
+	const reply = await cv.rotate(raw.view, raw.width, raw.height, raw.channels, dstW, dstH, angle, p0, p1, p2, p3);
 	return {
-		image: await deliver(rawImage(out, dstW, dstH, raw.channels, raw.colorSpace), fmt, quality, pngOptimize),
+		image: await deliver(rawImage(reply.data, dstW, dstH, raw.channels, raw.colorSpace), fmt, quality, pngOptimize),
 		timing: timing(t0, "rotate", reply),
 	};
 }
 
 // ---- alignment -------------------------------------------------------------
 
-// reference buffer -> Map("offset:WxH:scale" -> addon handle): the
-// reference's ORB features, found once and kept while the buffer lives.
-// Keyed by identity, so a caller must not rewrite a reference's bytes
-// and align against it again (a new reference is a new buffer).
-const goldens = new WeakMap();
-// this thread's reply image, reused while no other align is in flight:
-// a fresh 5 MP buffer a frame is pages to fault in every time
-let spare = null;
-let inFlight = 0;
+// "WxH:scale:content hash" -> addon handle holding that reference's ORB
+// features, most recently used last. Keyed by the reference's content, so
+// a buffer rewritten in place is a new golden, and bounded, so a caller
+// cycling through scales or goldens does not keep every one alive: each
+// holds the grey, its small copy and that copy as float.
+const goldens = new Map();
+const MAX_GOLDENS = 4;
 
 function goldenHandle(cv, ref, scale) {
-	const key = ref.data.buffer;
-	let byKey = goldens.get(key);
-	if (!byKey) goldens.set(key, (byKey = new Map()));
-	const id = `${ref.view.byteOffset}:${ref.width}x${ref.height}:${scale}`;
-	let handle = byKey.get(id);
-	if (!handle) byKey.set(id, (handle = cv.createGolden(ref.view, ref.width, ref.height, scale)));
+	// every byte hashed natively: about 0.2 ms for a 3 MP golden
+	const key = `${ref.width}x${ref.height}:${scale}:${cv.contentKey(ref.view)}`;
+	let handle = goldens.get(key);
+	if (handle) {
+		goldens.delete(key);
+	} else {
+		handle = cv.createGolden(ref.view, ref.width, ref.height, scale);
+		while (goldens.size >= MAX_GOLDENS) goldens.delete(goldens.keys().next().value);
+	}
+	goldens.set(key, handle);
 	return handle;
 }
 
 /**
  * imageAlign(reference, target, scale, iterations, epsilon, fmt, quality,
  *   pngOptimize, returnImage, polygon, motion, pipeline, eccRefine, detector)
- *   -> { success, image, transformMatrix: { matrix2x3 }, timing }
+ *   -> { success, image, transformMatrix: { matrix2x3 }, inliers, timing }
  *
  * The bridge's imageAlign, for grey images, affine motion and the
  * "features+ecc" pipeline with ORB; anything else is refused rather than
- * approximated. `scale` sizes the internal alignment copy; the matrix
- * maps reference coordinates into the target resized to the reference's
- * size, and the image is the target warped onto the reference (0 where
- * it does not reach). eccRefine "always" runs ECC after the feature
- * seed; "auto" skips it when the seed has 50 inliers or more.
+ * approximated. `scale` sizes the internal alignment copy, which must be
+ * at least 32 px a side; `iterations` is ECC's, 1-500. The matrix maps
+ * reference coordinates into the target resized to the reference's size,
+ * and the image - a new buffer every reply - is the target warped onto the
+ * reference (0 where it does not reach). eccRefine "always" runs ECC after
+ * the feature seed; "auto" skips it when the seed has 50 inliers or more.
  */
 async function imageAlign(reference, target, scale, iterations, epsilon, fmt, quality, pngOptimize, returnImage, polygon, motion, pipeline, eccRefine, detector) {
 	const t0 = performance.now();
@@ -460,33 +493,23 @@ async function imageAlign(reference, target, scale, iterations, epsilon, fmt, qu
 	const ref = describeRaw(reference);
 	const tgt = describeRaw(target);
 	if (ref.channels !== 1 || tgt.channels !== 1) throw new Error("opencv5: imageAlign takes grey images");
-	ref.data = reference.data;
 	const s = Number(scale);
-	if (!(s > 0 && s <= 1)) throw new Error(`opencv5: imageAlign scale must be in (0, 1], got ${scale}`);
+	if (!(s > 0 && s <= 1)) throw new RangeError(`opencv5: imageAlign scale must be in (0, 1], got ${scale}`);
+	const its = Math.round(finite(iterations, "imageAlign iterations"));
+	if (its < 1 || its > cv.maxIterations) {
+		throw new RangeError(`opencv5: imageAlign iterations must be 1-${cv.maxIterations}, got ${iterations}`);
+	}
+	const eps = finite(epsilon, "imageAlign epsilon");
+	if (!(eps > 0)) throw new RangeError(`opencv5: imageAlign epsilon must be positive, got ${epsilon}`);
+	const small = [Math.round(ref.width * s), Math.round(ref.height * s)];
+	if (Math.min(...small) < cv.minAlignSide) {
+		throw new RangeError(
+			`opencv5: imageAlign's copy at scale ${s} would be ${small.join("x")} px; it needs at least ${cv.minAlignSide} a side`,
+		);
+	}
 	const handle = goldenHandle(cv, ref, s);
-	const n = ref.width * ref.height;
-	let out;
-	// taken, not shared: until the setImmediate below gives it back, an
-	// align started meanwhile gets a fresh buffer
-	if (inFlight === 0 && spare !== null && spare.length === n) {
-		out = spare;
-		spare = null;
-	} else {
-		out = Buffer.allocUnsafeSlow(n);
-	}
-	inFlight++;
-	let r;
-	try {
-		r = await cv.align(handle, tgt.view, tgt.width, tgt.height, out, Math.round(iterations), Number(epsilon), eccRefine === "always");
-	} finally {
-		inFlight--;
-	}
-	// free for reuse once this reply's caller has had its turn: what it
-	// does with the image straight after the await runs before this
-	setImmediate(() => {
-		spare = out;
-	});
-	const image = r.success || returnImage !== false ? await deliver(rawImage(out, ref.width, ref.height, 1, "GRAY"), fmt, quality, pngOptimize) : null;
+	const r = await cv.align(handle, tgt.view, tgt.width, tgt.height, its, eps, eccRefine === "always");
+	const image = r.success || returnImage !== false ? await deliver(rawImage(r.data, ref.width, ref.height, 1, "GRAY"), fmt, quality, pngOptimize) : null;
 	return {
 		success: r.success,
 		image,

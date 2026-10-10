@@ -3,24 +3,31 @@
 // by index.js into the op surface of the @rosepetal/node-red-contrib-
 // image-tools cpp-bridge, which it replaces.
 //
-// Every op runs as async work on libuv's pool and returns a promise.
-// Buffers are the caller's: an op reads its input and writes into an
-// output the caller sized - index.js does the size arithmetic - and
-// checks every length against the dimensions before anything runs.
+// Every op runs as async work on libuv's pool and returns a promise. No
+// pool thread ever touches memory JavaScript can reach:
+//   - every argument that is not a buffer is read first, while nothing has
+//     been looked at yet (reading an element can run a getter);
+//   - every input buffer is then copied into memory this file owns, on the
+//     JS thread, before the work is queued - so a caller who transfers,
+//     detaches or rewrites its buffer while the op runs changes nothing;
+//   - every output is a Buffer created here before the work is queued and
+//     handed to the caller only when the op is done, so no caller holds it
+//     while a pool thread writes it.
+// The copy costs a memcpy of the input into reused staging memory - about
+// 1.2 ms for a 10 MB RGB frame on the rig; a caller's buffer detached
+// while an op ran used to be a use-after-free.
+//
 // Encoded images never reach this file: decoding and encoding go through
 // sharp (index.js), so OpenCV is built without codecs.
 //
 // align() is rosepetal image-tools 1.6.4's imageAlign for affine motion,
 // the features+ecc pipeline and ORB (ORB 800/1.2/5, Lowe 0.75,
 // estimateAffine2D USAC_MAGSAC 5 px, ECC skipped at >= 50 inliers in
-// "auto", nearest-neighbour inverse warp), minus its per-frame costs:
-//   - the golden's small copy, ORB features and ECC-normalised copy are
-//     made once per golden handle (createGolden); rosepetal re-finds them
-//     every call through an FNV hash of 768 of the image's bytes, which
-//     two goldens can share;
-//   - the frame's golden-sized resize and small copies live in buffers
-//     kept between calls on each pool thread;
-//   - the warp writes straight into the caller's output.
+// "auto", nearest-neighbour inverse warp), minus its per-frame costs: the
+// golden's small copy, ORB features and ECC-normalised copy are made once
+// per golden handle (createGolden; index.js keys handles by the golden's
+// content), and the frame's working copies live in buffers kept between
+// calls on each pool thread.
 
 #include <node_api.h>
 
@@ -32,13 +39,15 @@
 
 #include <chrono>
 #include <cmath>
+#include <algorithm>
+#include <cstdio>
 #include <cstring>
 #include <mutex>
 #include <string>
 #include <vector>
 
 // The contract index.js was written against; it refuses any other.
-#define OPENCV5_ABI 1
+#define OPENCV5_ABI 2
 
 namespace {
 
@@ -47,32 +56,19 @@ double ms(Clock::time_point a, Clock::time_point b) {
 	return std::chrono::duration<double, std::milli>(b - a).count();
 }
 
+// limits every op holds to: a side, a whole image, and ECC's iterations
+constexpr int kMaxSide = 1 << 16;
+constexpr uint64_t kMaxBytes = uint64_t(1) << 30;
+constexpr int kMaxIterations = 500;
+// ORB's five-level pyramid on a copy smaller than this throws inside
+// OpenCV; the alignment copy must be at least this on each side
+constexpr int kMinSmallSide = 32;
+
 // ---- N-API plumbing ------------------------------------------------------
 
-struct View {
-	uint8_t* data = nullptr;
-	size_t bytes = 0;
-};
-
-// A typed array's bytes (Buffer included), or false.
-bool viewOf(napi_env env, napi_value v, View* out) {
-	bool is = false;
-	if (napi_is_typedarray(env, v, &is) != napi_ok || !is) return false;
-	napi_typedarray_type type;
-	size_t length;
-	void* data;
-	napi_value buffer;
-	if (napi_get_typedarray_info(env, v, &type, &length, &data, &buffer, nullptr) != napi_ok) return false;
-	if (type != napi_uint8_array && type != napi_uint8_clamped_array) return false;
-	// a detached store has no bytes to read; a resizable one could shrink
-	// under the pool thread, and index.js refuses those (N-API cannot
-	// tell). A store the caller transfers or shrinks while an op runs is
-	// outside the contract, as with every async op over a caller's buffer.
-	bool detached = false;
-	if (napi_is_detached_arraybuffer(env, buffer, &detached) != napi_ok || detached) return false;
-	out->data = static_cast<uint8_t*>(data);
-	out->bytes = length;
-	return true;
+napi_value fail(napi_env env, const std::string& msg) {
+	napi_throw_error(env, "ERR_OPENCV5_ARGS", msg.c_str());
+	return nullptr;
 }
 
 bool intOf(napi_env env, napi_value v, int* out) {
@@ -99,39 +95,121 @@ void setBool(napi_env env, napi_value o, const char* k, bool b) {
 	napi_set_named_property(env, o, k, v);
 }
 
-napi_value fail(napi_env env, const std::string& msg) {
-	napi_throw_error(env, "ERR_OPENCV5_ARGS", msg.c_str());
-	return nullptr;
-}
-
-// width * height * channels fits in `bytes`, all positive and sane
-bool fits(int w, int h, int ch, size_t bytes) {
-	if (w <= 0 || h <= 0 || ch <= 0 || w > 1 << 16 || h > 1 << 16) return false;
-	return static_cast<uint64_t>(w) * h * ch <= bytes;
+// w x h x ch is a sane image size
+bool sane(int w, int h, int ch) {
+	if (w <= 0 || h <= 0 || ch <= 0 || w > kMaxSide || h > kMaxSide) return false;
+	return static_cast<uint64_t>(w) * h * ch <= kMaxBytes;
 }
 
 int matType(int ch) {
 	return ch == 1 ? CV_8UC1 : ch == 3 ? CV_8UC3 : ch == 4 ? CV_8UC4 : -1;
 }
 
-// One async op: the JS values it touches are pinned by reference until it
-// completes; execute() runs on the pool and must not touch napi.
+/**
+ * Staging memory for the input copies, reused between ops: a fresh 10 MB
+ * allocation per frame costs more in first-touch page faults (~5 ms on the
+ * rig) than the copy itself (~1 ms). An op takes a block at least the size
+ * it needs and gives it back when it completes; at most kPoolBytes are
+ * kept, the rest freed.
+ */
+class StagingPool {
+	std::mutex mu_;
+	std::vector<cv::Mat> free_;  // CV_8UC1 rows of 1 x bytes
+	size_t kept_ = 0;
+	static constexpr size_t kPoolBytes = size_t(64) << 20;
+
+public:
+	cv::Mat take(size_t bytes) {
+		{
+			std::lock_guard<std::mutex> lock(mu_);
+			size_t best = free_.size();
+			for (size_t i = 0; i < free_.size(); i++) {
+				const size_t have = free_[i].total();
+				if (have >= bytes && (best == free_.size() || have < free_[best].total())) best = i;
+			}
+			if (best != free_.size()) {
+				cv::Mat m = free_[best];
+				kept_ -= m.total();
+				free_.erase(free_.begin() + static_cast<long>(best));
+				return m;
+			}
+		}
+		return cv::Mat(1, static_cast<int>(bytes), CV_8UC1);
+	}
+	void give(const cv::Mat& block) {
+		if (block.empty()) return;
+		std::lock_guard<std::mutex> lock(mu_);
+		if (kept_ + block.total() > kPoolBytes) return;  // freed with the last header
+		kept_ += block.total();
+		free_.push_back(block);
+	}
+};
+
+StagingPool* staging() {
+	// one per process, never destroyed: pool threads may still hand blocks
+	// back while an environment is torn down
+	static StagingPool* pool = new StagingPool();
+	return pool;
+}
+
+/**
+ * A copy of the first w x h x ch bytes of a Uint8Array (a Buffer included)
+ * in staging memory this file owns, as an h x w Mat over `block`, or
+ * false. Called after every other argument has been read, and nothing JS
+ * can run between the look and the copy. The caller gives `block` back.
+ */
+bool copyIn(napi_env env, napi_value v, int w, int h, int ch, cv::Mat* out, cv::Mat* block) {
+	bool is = false;
+	if (napi_is_typedarray(env, v, &is) != napi_ok || !is) return false;
+	napi_typedarray_type type;
+	size_t length;
+	void* data;
+	napi_value buffer;
+	if (napi_get_typedarray_info(env, v, &type, &length, &data, &buffer, nullptr) != napi_ok) return false;
+	if (type != napi_uint8_array && type != napi_uint8_clamped_array) return false;
+	bool detached = false;
+	if (napi_is_detached_arraybuffer(env, buffer, &detached) != napi_ok || detached) return false;
+	if (!sane(w, h, ch) || static_cast<uint64_t>(w) * h * ch > length) return false;
+	const size_t bytes = static_cast<size_t>(w) * h * ch;
+	*block = staging()->take(bytes);
+	std::memcpy(block->data, data, bytes);
+	*out = cv::Mat(h, w, matType(ch), block->data);
+	return true;
+}
+
+// One async op. execute() runs on the pool and touches only memory this
+// file owns; the output Buffers are pinned until the op completes.
 struct Job {
 	napi_async_work work = nullptr;
 	napi_deferred deferred = nullptr;
 	std::vector<napi_ref> pins;
 	std::string error;
-	Clock::time_point queued = Clock::now();
 	double taskMs = 0;
-	virtual ~Job() = default;
+	// the staging block the input was copied into, given back when the op ends
+	cv::Mat block;
+	virtual ~Job() { staging()->give(block); }
 	virtual void execute() = 0;
-	// the resolved value; null resolves to { taskMs }
+	// the resolved value; null resolves to { timing }
 	virtual napi_value result(napi_env env) { return nullptr; }
 
-	void pin(napi_env env, napi_value v) {
+	napi_value pinned(napi_env env, size_t i) {
+		napi_value v;
+		napi_get_reference_value(env, pins[i], &v);
+		return v;
+	}
+
+	/** A new Buffer of `bytes` the op writes through `mat` (h x w x type);
+	 * handed to JS only in result(). */
+	bool output(napi_env env, int w, int h, int type, cv::Mat* mat) {
+		void* data;
+		napi_value buf;
+		const size_t bytes = static_cast<size_t>(w) * h * CV_ELEM_SIZE(type);
+		if (napi_create_buffer(env, bytes, &data, &buf) != napi_ok) return false;
 		napi_ref r;
-		napi_create_reference(env, v, 1, &r);
+		if (napi_create_reference(env, buf, 1, &r) != napi_ok) return false;
 		pins.push_back(r);
+		*mat = cv::Mat(h, w, type, data);
+		return true;
 	}
 };
 
@@ -152,7 +230,6 @@ void runJob(napi_env, void* data) {
 
 void completeJob(napi_env env, napi_status status, void* data) {
 	auto* job = static_cast<Job*>(data);
-	for (napi_ref r : job->pins) napi_delete_reference(env, r);
 	if (status == napi_ok && job->error.empty()) {
 		napi_value v = job->result(env);
 		if (v == nullptr) napi_create_object(env, &v);
@@ -168,16 +245,21 @@ void completeJob(napi_env env, napi_status status, void* data) {
 		napi_create_error(env, nullptr, msg, &err);
 		napi_reject_deferred(env, job->deferred, err);
 	}
+	for (napi_ref r : job->pins) napi_delete_reference(env, r);
 	napi_delete_async_work(env, job->work);
 	delete job;
 }
 
 napi_value queue(napi_env env, Job* job, const char* name) {
 	napi_value promise, resource;
-	napi_create_promise(env, &job->deferred, &promise);
-	napi_create_string_utf8(env, name, NAPI_AUTO_LENGTH, &resource);
-	napi_create_async_work(env, nullptr, resource, runJob, completeJob, job, &job->work);
-	napi_queue_async_work(env, job->work);
+	if (napi_create_promise(env, &job->deferred, &promise) != napi_ok ||
+	    napi_create_string_utf8(env, name, NAPI_AUTO_LENGTH, &resource) != napi_ok ||
+	    napi_create_async_work(env, nullptr, resource, runJob, completeJob, job, &job->work) != napi_ok ||
+	    napi_queue_async_work(env, job->work) != napi_ok) {
+		for (napi_ref r : job->pins) napi_delete_reference(env, r);
+		delete job;
+		return fail(env, std::string(name) + ": could not queue the work");
+	}
 	return promise;
 }
 
@@ -188,9 +270,17 @@ bool args(napi_env env, napi_callback_info info, napi_value (&a)[N], void** data
 	return argc >= N;  // the usual contract: extra arguments are ignored
 }
 
+// { data } for a job with one output
+napi_value dataResult(napi_env env, Job* job) {
+	napi_value r;
+	napi_create_object(env, &r);
+	napi_set_named_property(env, r, "data", job->pinned(env, 0));
+	return r;
+}
+
 // ---- pixel ops -------------------------------------------------------------
 
-// cvtColor(src, w, h, srcCh, code, dst, dstCh)
+// cvtColor(src, w, h, srcCh, code, dstCh) -> { data }
 struct CvtColorJob : Job {
 	cv::Mat src, dst;
 	int code;
@@ -199,68 +289,70 @@ struct CvtColorJob : Job {
 		cv::cvtColor(src, out, code);
 		if (out.data != dst.data) throw std::runtime_error("cvtColor: the conversion does not give the output asked for");
 	}
+	napi_value result(napi_env env) override { return dataResult(env, this); }
 };
 
 napi_value CvtColor(napi_env env, napi_callback_info info) {
-	napi_value a[7];
-	if (!args(env, info, a)) return fail(env, "cvtColor(src, w, h, srcCh, code, dst, dstCh)");
-	View s, d;
+	napi_value a[6];
+	if (!args(env, info, a)) return fail(env, "cvtColor(src, w, h, srcCh, code, dstCh)");
 	int w, h, sc, code, dc;
-	if (!viewOf(env, a[0], &s) || !viewOf(env, a[5], &d) || !intOf(env, a[1], &w) || !intOf(env, a[2], &h) ||
-	    !intOf(env, a[3], &sc) || !intOf(env, a[4], &code) || !intOf(env, a[6], &dc) || matType(sc) < 0 ||
-	    matType(dc) < 0 || !fits(w, h, sc, s.bytes) || !fits(w, h, dc, d.bytes))
+	if (!intOf(env, a[1], &w) || !intOf(env, a[2], &h) || !intOf(env, a[3], &sc) || !intOf(env, a[4], &code) ||
+	    !intOf(env, a[5], &dc) || matType(sc) < 0 || matType(dc) < 0 || !sane(w, h, std::max(sc, dc)))
 		return fail(env, "cvtColor: bad arguments");
 	auto* job = new CvtColorJob();
-	job->src = cv::Mat(h, w, matType(sc), s.data);
-	job->dst = cv::Mat(h, w, matType(dc), d.data);
 	job->code = code;
-	job->pin(env, a[0]);
-	job->pin(env, a[5]);
+	if (!copyIn(env, a[0], w, h, sc, &job->src, &job->block) || !job->output(env, w, h, matType(dc), &job->dst)) {
+		for (napi_ref r : job->pins) napi_delete_reference(env, r);
+		delete job;
+		return fail(env, "cvtColor: bad arguments");
+	}
 	return queue(env, job, "opencv5.cvtColor");
 }
 
-// resize(src, w, h, ch, dst, dw, dh): INTER_LINEAR, as the bridge
+// resize(src, w, h, ch, dw, dh) -> { data }: INTER_LINEAR, as the bridge
 struct ResizeJob : Job {
 	cv::Mat src, dst;
 	void execute() override {
-		cv::Mat out = dst;  // a header over the caller's buffer: written in place
+		cv::Mat out = dst;
 		cv::resize(src, out, dst.size(), 0, 0, cv::INTER_LINEAR);
 		if (out.data != dst.data) throw std::runtime_error("resize: reallocated its output");
 	}
+	napi_value result(napi_env env) override { return dataResult(env, this); }
 };
 
 napi_value Resize(napi_env env, napi_callback_info info) {
-	napi_value a[7];
-	if (!args(env, info, a)) return fail(env, "resize(src, w, h, ch, dst, dw, dh)");
-	View s, d;
+	napi_value a[6];
+	if (!args(env, info, a)) return fail(env, "resize(src, w, h, ch, dw, dh)");
 	int w, h, ch, dw, dh;
-	if (!viewOf(env, a[0], &s) || !viewOf(env, a[4], &d) || !intOf(env, a[1], &w) || !intOf(env, a[2], &h) ||
-	    !intOf(env, a[3], &ch) || !intOf(env, a[5], &dw) || !intOf(env, a[6], &dh) || matType(ch) < 0 ||
-	    !fits(w, h, ch, s.bytes) || !fits(dw, dh, ch, d.bytes))
+	if (!intOf(env, a[1], &w) || !intOf(env, a[2], &h) || !intOf(env, a[3], &ch) || !intOf(env, a[4], &dw) ||
+	    !intOf(env, a[5], &dh) || matType(ch) < 0 || !sane(w, h, ch) || !sane(dw, dh, ch))
 		return fail(env, "resize: bad arguments");
 	auto* job = new ResizeJob();
-	job->src = cv::Mat(h, w, matType(ch), s.data);
-	job->dst = cv::Mat(dh, dw, matType(ch), d.data);
-	job->pin(env, a[0]);
-	job->pin(env, a[4]);
+	if (!copyIn(env, a[0], w, h, ch, &job->src, &job->block) || !job->output(env, dw, dh, matType(ch), &job->dst)) {
+		for (napi_ref r : job->pins) napi_delete_reference(env, r);
+		delete job;
+		return fail(env, "resize: bad arguments");
+	}
 	return queue(env, job, "opencv5.resize");
 }
 
-// filter(gray, w, h, kind, kernel, intensity, dst): kind 0 = otsu, 1 = edge.
-// "otsu" blurs `gray` IN PLACE before thresholding it: the bridge does,
-// and callers written against it depend on it (README, filter).
+// filter(gray, w, h, kind, kernel, intensity) -> { data, blurred? }
+// kind 0 = otsu: GaussianBlur, then Otsu; `blurred` is the blurred grey,
+// which index.js writes back over the caller's input as the bridge did.
+// kind 1 = edge: Sobel magnitude; kernel 1-7, since a larger one overflows
+// the 16-bit derivative.
 struct FilterJob : Job {
-	cv::Mat gray, dst;
+	cv::Mat gray, dst, blurred;
 	int kind, kernel;
 	double intensity;
 	double level = 0;
 	void execute() override {
 		if (kind == 0) {
-			cv::Mat blurred;
-			cv::GaussianBlur(gray, blurred, cv::Size(kernel, kernel), 0, 0, cv::BORDER_DEFAULT);
-			blurred.copyTo(gray);
+			cv::Mat b = blurred;
+			cv::GaussianBlur(gray, b, cv::Size(kernel, kernel), 0, 0, cv::BORDER_DEFAULT);
+			if (b.data != blurred.data) throw std::runtime_error("filter: reallocated its output");
 			cv::Mat out = dst;
-			level = cv::threshold(gray, out, 0, 255, cv::THRESH_BINARY | cv::THRESH_OTSU);
+			level = cv::threshold(blurred, out, 0, 255, cv::THRESH_BINARY | cv::THRESH_OTSU);
 			if (out.data != dst.data) throw std::runtime_error("filter: reallocated its output");
 		} else {
 			cv::Mat gx, gy, ax, ay;
@@ -274,39 +366,41 @@ struct FilterJob : Job {
 		}
 	}
 	napi_value result(napi_env env) override {
-		napi_value r;
-		napi_create_object(env, &r);
-		if (kind == 0) setNum(env, r, "level", level);
+		napi_value r = dataResult(env, this);
+		if (kind == 0) {
+			setNum(env, r, "level", level);
+			napi_set_named_property(env, r, "blurred", pinned(env, 1));
+		}
 		return r;
 	}
 };
 
 napi_value Filter(napi_env env, napi_callback_info info) {
-	napi_value a[7];
-	if (!args(env, info, a)) return fail(env, "filter(gray, w, h, kind, kernel, intensity, dst)");
-	View s, d;
+	napi_value a[6];
+	if (!args(env, info, a)) return fail(env, "filter(gray, w, h, kind, kernel, intensity)");
 	int w, h, kind, kernel;
 	double intensity;
-	if (!viewOf(env, a[0], &s) || !viewOf(env, a[6], &d) || !intOf(env, a[1], &w) || !intOf(env, a[2], &h) ||
-	    !intOf(env, a[3], &kind) || !intOf(env, a[4], &kernel) || !numOf(env, a[5], &intensity) ||
-	    (kind != 0 && kind != 1) || kernel < 1 || kernel > 31 || kernel % 2 == 0 || !fits(w, h, 1, s.bytes) ||
-	    !fits(w, h, 1, d.bytes))
+	if (!intOf(env, a[1], &w) || !intOf(env, a[2], &h) || !intOf(env, a[3], &kind) || !intOf(env, a[4], &kernel) ||
+	    !numOf(env, a[5], &intensity) || (kind != 0 && kind != 1) || kernel < 1 || kernel % 2 == 0 ||
+	    kernel > (kind == 0 ? 31 : 7) || !sane(w, h, 1))
 		return fail(env, "filter: bad arguments");
 	auto* job = new FilterJob();
-	job->gray = cv::Mat(h, w, CV_8UC1, s.data);
-	job->dst = cv::Mat(h, w, CV_8UC1, d.data);
 	job->kind = kind;
 	job->kernel = kernel;
 	job->intensity = intensity;
-	job->pin(env, a[0]);
-	job->pin(env, a[6]);
+	if (!copyIn(env, a[0], w, h, 1, &job->gray, &job->block) || !job->output(env, w, h, CV_8UC1, &job->dst) ||
+	    (kind == 0 && !job->output(env, w, h, CV_8UC1, &job->blurred))) {
+		for (napi_ref r : job->pins) napi_delete_reference(env, r);
+		delete job;
+		return fail(env, "filter: bad arguments");
+	}
 	return queue(env, job, "opencv5.filter");
 }
 
-// rotate(src, w, h, ch, dst, dw, dh, angleDeg, pad[4]): the bridge's
-// rotate - getRotationMatrix2D about the source centre, shifted to the
-// centre of the dw x dh canvas the caller sized, INTER_LINEAR,
-// BORDER_CONSTANT in the pad colour
+// rotate(src, w, h, ch, dw, dh, angleDeg, p0, p1, p2, p3) -> { data }: the
+// bridge's rotate - getRotationMatrix2D about the source centre, shifted
+// to the centre of the dw x dh canvas the caller sized, INTER_LINEAR,
+// BORDER_CONSTANT in the pad colour (four numbers, so reading it runs no JS)
 struct RotateJob : Job {
 	cv::Mat src, dst;
 	double angle;
@@ -319,33 +413,65 @@ struct RotateJob : Job {
 		cv::warpAffine(src, out, m, dst.size(), cv::INTER_LINEAR, cv::BORDER_CONSTANT, pad);
 		if (out.data != dst.data) throw std::runtime_error("rotate: reallocated its output");
 	}
+	napi_value result(napi_env env) override { return dataResult(env, this); }
 };
 
 napi_value Rotate(napi_env env, napi_callback_info info) {
-	napi_value a[9];
-	if (!args(env, info, a)) return fail(env, "rotate(src, w, h, ch, dst, dw, dh, angleDeg, pad)");
-	View s, d;
+	napi_value a[11];
+	if (!args(env, info, a)) return fail(env, "rotate(src, w, h, ch, dw, dh, angleDeg, p0, p1, p2, p3)");
 	int w, h, ch, dw, dh;
-	double angle;
-	if (!viewOf(env, a[0], &s) || !viewOf(env, a[4], &d) || !intOf(env, a[1], &w) || !intOf(env, a[2], &h) ||
-	    !intOf(env, a[3], &ch) || !intOf(env, a[5], &dw) || !intOf(env, a[6], &dh) || !numOf(env, a[7], &angle) ||
-	    matType(ch) < 0 || !fits(w, h, ch, s.bytes) || !fits(dw, dh, ch, d.bytes))
+	double angle, p[4];
+	if (!intOf(env, a[1], &w) || !intOf(env, a[2], &h) || !intOf(env, a[3], &ch) || !intOf(env, a[4], &dw) ||
+	    !intOf(env, a[5], &dh) || !numOf(env, a[6], &angle) || !numOf(env, a[7], &p[0]) || !numOf(env, a[8], &p[1]) ||
+	    !numOf(env, a[9], &p[2]) || !numOf(env, a[10], &p[3]) || matType(ch) < 0 || !sane(w, h, ch) ||
+	    !sane(dw, dh, ch))
 		return fail(env, "rotate: bad arguments");
-	double p[4];
-	for (int i = 0; i < 4; i++) {
-		napi_value e;
-		if (napi_get_element(env, a[8], i, &e) != napi_ok || !numOf(env, e, &p[i])) {
-			return fail(env, "rotate: bad pad colour");
-		}
-	}
 	auto* job = new RotateJob();
-	job->src = cv::Mat(h, w, matType(ch), s.data);
-	job->dst = cv::Mat(dh, dw, matType(ch), d.data);
 	job->angle = angle;
 	job->pad = cv::Scalar(p[0], p[1], p[2], p[3]);
-	job->pin(env, a[0]);
-	job->pin(env, a[4]);
+	if (!copyIn(env, a[0], w, h, ch, &job->src, &job->block) || !job->output(env, dw, dh, matType(ch), &job->dst)) {
+		for (napi_ref r : job->pins) napi_delete_reference(env, r);
+		delete job;
+		return fail(env, "rotate: bad arguments");
+	}
 	return queue(env, job, "opencv5.rotate");
+}
+
+// contentKey(bytes) -> 16 hex digits: a 64-bit hash of every byte, for
+// index.js to key a golden by what it holds (about 0.2 ms for 3 MB)
+napi_value ContentKey(napi_env env, napi_callback_info info) {
+	napi_value a[1];
+	if (!args(env, info, a)) return fail(env, "contentKey(bytes)");
+	bool is = false;
+	napi_typedarray_type type;
+	size_t length;
+	void* data;
+	napi_value buffer;
+	if (napi_is_typedarray(env, a[0], &is) != napi_ok || !is ||
+	    napi_get_typedarray_info(env, a[0], &type, &length, &data, &buffer, nullptr) != napi_ok ||
+	    (type != napi_uint8_array && type != napi_uint8_clamped_array))
+		return fail(env, "contentKey: not a Uint8Array");
+	const auto* p = static_cast<const uint8_t*>(data);
+	// four interleaved multiply-xorshift lanes over 8-byte words, then the tail
+	uint64_t lane[4] = {0x9e3779b97f4a7c15ULL, 0xc2b2ae3d27d4eb4fULL, 0x165667b19e3779f9ULL, 0x27d4eb2f165667c5ULL};
+	size_t i = 0;
+	for (; i + 32 <= length; i += 32) {
+		for (int k = 0; k < 4; k++) {
+			uint64_t w;
+			std::memcpy(&w, p + i + 8 * k, 8);
+			lane[k] = (lane[k] ^ w) * 0x9e3779b97f4a7c15ULL;
+			lane[k] ^= lane[k] >> 29;
+		}
+	}
+	uint64_t h = length * 0xff51afd7ed558ccdULL;
+	for (int k = 0; k < 4; k++) h = (h ^ lane[k]) * 0xc4ceb9fe1a85ec53ULL, h ^= h >> 32;
+	for (; i < length; i++) h = (h ^ p[i]) * 0x100000001b3ULL;
+	h ^= h >> 33;
+	char hex[17];
+	std::snprintf(hex, sizeof hex, "%016llx", static_cast<unsigned long long>(h));
+	napi_value r;
+	napi_create_string_utf8(env, hex, 16, &r);
+	return r;
 }
 
 // ---- alignment -------------------------------------------------------------
@@ -365,38 +491,49 @@ bool eccPrepare(const cv::Mat& src, cv::Mat& dst) {
 	return true;
 }
 
-void smallOf(const cv::Mat& full, double scale, cv::Mat& out) {
-	const int w = std::max(1, static_cast<int>(std::round(full.cols * scale)));
-	const int h = std::max(1, static_cast<int>(std::round(full.rows * scale)));
-	cv::resize(full, out, cv::Size(w, h));
+cv::Size smallSize(int w, int h, double scale) {
+	return cv::Size(std::max(1, static_cast<int>(std::round(w * scale))), std::max(1, static_cast<int>(std::round(h * scale))));
 }
 
+void smallOf(const cv::Mat& full, double scale, cv::Mat& out) { cv::resize(full, out, smallSize(full.cols, full.rows, scale)); }
+
+const napi_type_tag kGoldenTag = {0x6f70656e63763567ULL, 0x676f6c64656e3031ULL};
+
 // One golden at one alignment scale. Its derived data is made on the pool,
-// by whichever align gets there first, and read-only after that.
+// by whichever align gets there first, and read-only after that; an
+// OpenCV error making it is kept and every align against it rejects.
 struct Golden {
-	cv::Mat gray;  // our own copy: the caller's buffer may be reused
+	cv::Mat gray;  // our own copy
 	double scale;
 	std::once_flag once;
 	cv::Mat small, des, prepared;
 	std::vector<cv::KeyPoint> kp;
 	bool preparedOk = false;
-	// what V8 is told this holds outside its heap: the grey copy, its
-	// small copy and the float ECC copy of that (ORB's data is small)
-	int64_t bytes() const { return static_cast<int64_t>(gray.total() * (1 + 5 * scale * scale)); }
+	std::string initError;
+	// what V8 was told this holds outside its heap: the grey, the small
+	// copy, its float ECC copy and ORB's 800 x 32-byte descriptors
+	int64_t accounted = 0;
 
 	void init() {
 		std::call_once(once, [this] {
-			smallOf(gray, scale, small);
-			orb()->detectAndCompute(small, cv::noArray(), kp, des);
-			preparedOk = eccPrepare(small, prepared);
+			try {
+				smallOf(gray, scale, small);
+				orb()->detectAndCompute(small, cv::noArray(), kp, des);
+				preparedOk = eccPrepare(small, prepared);
+			} catch (const std::exception& e) {
+				initError = std::string("the golden's features: ") + e.what();
+			} catch (...) {
+				initError = "the golden's features: unknown native error";
+			}
 		});
+		if (!initError.empty()) throw std::runtime_error(initError);
 	}
 };
 
 void deleteGolden(napi_env env, void* data, void*) {
 	auto* golden = static_cast<Golden*>(data);
 	int64_t now;
-	napi_adjust_external_memory(env, -golden->bytes(), &now);
+	napi_adjust_external_memory(env, -golden->accounted, &now);
 	delete golden;
 }
 
@@ -404,31 +541,43 @@ void deleteGolden(napi_env env, void* data, void*) {
 napi_value CreateGolden(napi_env env, napi_callback_info info) {
 	napi_value a[4];
 	if (!args(env, info, a)) return fail(env, "createGolden(gray, w, h, scale)");
-	View g;
 	int w, h;
 	double scale;
-	if (!viewOf(env, a[0], &g) || !intOf(env, a[1], &w) || !intOf(env, a[2], &h) || !numOf(env, a[3], &scale) ||
-	    !fits(w, h, 1, g.bytes) || !(scale > 0 && scale <= 1))
+	if (!intOf(env, a[1], &w) || !intOf(env, a[2], &h) || !numOf(env, a[3], &scale) || !(scale > 0 && scale <= 1) ||
+	    !sane(w, h, 1))
 		return fail(env, "createGolden: bad arguments");
+	const cv::Size s = smallSize(w, h, scale);
+	if (s.width < kMinSmallSide || s.height < kMinSmallSide) {
+		return fail(env, "createGolden: the alignment copy would be " + std::to_string(s.width) + "x" +
+		                     std::to_string(s.height) + " px; it needs at least " + std::to_string(kMinSmallSide) +
+		                     " a side (a larger scale or golden)");
+	}
 	auto* golden = new Golden();
-	golden->gray = cv::Mat(h, w, CV_8UC1, g.data).clone();
 	golden->scale = scale;
+	cv::Mat staged, block;
+	if (!copyIn(env, a[0], w, h, 1, &staged, &block)) {
+		delete golden;
+		return fail(env, "createGolden: bad arguments");
+	}
+	golden->gray = staged.clone();  // its own memory, for as long as it lives
+	staging()->give(block);
 	napi_value handle;
 	if (napi_create_external(env, golden, deleteGolden, nullptr, &handle) != napi_ok) {
 		delete golden;
 		return fail(env, "createGolden: no handle");
 	}
-	// so the GC weighs a golden by what it holds, not by its handle
+	napi_type_tag_object(env, handle, &kGoldenTag);
+	golden->accounted = static_cast<int64_t>(w) * h + static_cast<int64_t>(s.width) * s.height * 5 + 800 * 32;
 	int64_t now;
-	napi_adjust_external_memory(env, golden->bytes(), &now);
+	napi_adjust_external_memory(env, golden->accounted, &now);
 	return handle;
 }
 
 // What one pool thread keeps between frames, so a frame's working copies
 // are not fresh pages every time: the frame at golden size (only when the
 // frame is not that size already), its small copy and that copy as float.
-// Bounded by the largest golden aligned on that thread - for a
-// 1475x2125 golden at scale 0.35, about 3.1 + 0.4 + 1.5 MB - times libuv's pool
+// Bounded by the largest golden aligned on that thread - for a 1475x2125
+// golden at scale 0.35, about 3.1 + 0.4 + 1.5 MB - times libuv's pool
 // (UV_THREADPOOL_SIZE, 4 by default), and held for the life of the
 // process; a later golden of another size reallocates them, not adds.
 thread_local cv::Mat tlResized, tlSmall, tlPrepared;
@@ -539,8 +688,7 @@ struct AlignJob : Job {
 	}
 
 	napi_value result(napi_env env) override {
-		napi_value r, matrix, stages;
-		napi_create_object(env, &r);
+		napi_value r = dataResult(env, this), matrix, stages;
 		setBool(env, r, "success", success);
 		setBool(env, r, "ecc", ranEcc);
 		setNum(env, r, "inliers", inliers);
@@ -561,36 +709,40 @@ struct AlignJob : Job {
 	}
 };
 
-// align(golden, target, tW, tH, out, iterations, eps, eccAlways)
+// align(golden, target, tW, tH, iterations, eps, eccAlways) -> { data, ... }
 napi_value Align(napi_env env, napi_callback_info info) {
-	napi_value a[8];
-	if (!args(env, info, a)) return fail(env, "align(golden, target, tW, tH, out, iterations, eps, eccAlways)");
+	napi_value a[7];
+	if (!args(env, info, a)) return fail(env, "align(golden, target, tW, tH, iterations, eps, eccAlways)");
 	void* ptr = nullptr;
 	napi_valuetype t;
+	bool tagged = false;
 	napi_typeof(env, a[0], &t);
-	if (t != napi_external || napi_get_value_external(env, a[0], &ptr) != napi_ok || ptr == nullptr)
+	if (t != napi_external || napi_check_object_type_tag(env, a[0], &kGoldenTag, &tagged) != napi_ok || !tagged ||
+	    napi_get_value_external(env, a[0], &ptr) != napi_ok || ptr == nullptr)
 		return fail(env, "align: not a golden handle");
 	auto* golden = static_cast<Golden*>(ptr);
-	View tv, ov;
 	int tW, tH, iterations;
 	double eps;
 	bool eccAlways = false;
-	const int gW = golden->gray.cols, gH = golden->gray.rows;
-	if (!viewOf(env, a[1], &tv) || !viewOf(env, a[4], &ov) || !intOf(env, a[2], &tW) || !intOf(env, a[3], &tH) ||
-	    !intOf(env, a[5], &iterations) || !numOf(env, a[6], &eps) ||
-	    napi_get_value_bool(env, a[7], &eccAlways) != napi_ok || iterations < 1 || !(eps > 0) ||
-	    !fits(tW, tH, 1, tv.bytes) || !fits(gW, gH, 1, ov.bytes))
-		return fail(env, "align: bad arguments");
+	if (!intOf(env, a[2], &tW) || !intOf(env, a[3], &tH) || !intOf(env, a[4], &iterations) ||
+	    !numOf(env, a[5], &eps) || napi_get_value_bool(env, a[6], &eccAlways) != napi_ok || iterations < 1 ||
+	    iterations > kMaxIterations || !(eps > 0) || !sane(tW, tH, 1))
+		return fail(env, "align: bad arguments (iterations 1-" + std::to_string(kMaxIterations) + ")");
 	auto* job = new AlignJob();
 	job->golden = golden;
-	job->target = cv::Mat(tH, tW, CV_8UC1, tv.data);
-	job->out = cv::Mat(gH, gW, CV_8UC1, ov.data);
 	job->iterations = iterations;
 	job->eps = eps;
 	job->eccAlways = eccAlways;
-	job->pin(env, a[0]);  // keeps the golden alive while the work runs
-	job->pin(env, a[1]);
-	job->pin(env, a[4]);
+	if (!copyIn(env, a[1], tW, tH, 1, &job->target, &job->block) ||
+	    !job->output(env, golden->gray.cols, golden->gray.rows, CV_8UC1, &job->out)) {
+		for (napi_ref r : job->pins) napi_delete_reference(env, r);
+		delete job;
+		return fail(env, "align: bad arguments");
+	}
+	// keeps the golden alive while the work runs
+	napi_ref r;
+	napi_create_reference(env, a[0], 1, &r);
+	job->pins.push_back(r);
 	return queue(env, job, "opencv5.align");
 }
 
@@ -625,7 +777,8 @@ NAPI_MODULE_INIT() {
 	} fns[] = {
 	    {"cvtColor", guarded<CvtColor>},         {"resize", guarded<Resize>}, {"filter", guarded<Filter>},
 	    {"rotate", guarded<Rotate>},             {"createGolden", guarded<CreateGolden>},
-	    {"align", guarded<Align>},               {"buildInfo", guarded<BuildInfo>},
+	    {"align", guarded<Align>},               {"contentKey", guarded<ContentKey>},
+	    {"buildInfo", guarded<BuildInfo>},
 	};
 	for (const auto& f : fns) {
 		napi_value v;
@@ -635,6 +788,10 @@ NAPI_MODULE_INIT() {
 	napi_value v;
 	napi_create_int32(env, OPENCV5_ABI, &v);
 	napi_set_named_property(env, exports, "abi", v);
+	napi_create_int32(env, kMaxIterations, &v);
+	napi_set_named_property(env, exports, "maxIterations", v);
+	napi_create_int32(env, kMinSmallSide, &v);
+	napi_set_named_property(env, exports, "minAlignSide", v);
 	napi_create_string_utf8(env, CV_VERSION, NAPI_AUTO_LENGTH, &v);
 	napi_set_named_property(env, exports, "opencv", v);
 	// COLOR_* codes for index.js, so it never hard-codes OpenCV's enum

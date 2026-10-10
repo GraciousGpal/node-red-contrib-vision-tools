@@ -58,7 +58,7 @@ test("a pinned engine is never substituted when it cannot load", () => {
 		const selected = engineModule.candidate();
 		assert.strictEqual(selected.engine, null);
 		assert.strictEqual(selected.name, null);
-		assert.match(selected.error.message, /own: no opencv5 binary/);
+		assert.match(selected.error.message, /own: OPENCV5_ADDON is \/nonexistent\/opencv5\.node, which does not exist/);
 	});
 });
 

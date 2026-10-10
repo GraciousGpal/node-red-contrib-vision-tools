@@ -1,14 +1,14 @@
 {
 	"linux-x64/opencv5.glibc.node": {
-		"size": 6501632,
-		"sha256": "abf53407ee8ad610ab32929dcb3fed9e526257de309a2633d2f5f5d10f4783b9"
+		"size": 6520536,
+		"sha256": "31e81d3a4b81656b6e63bf599242f9d50e6d72227c0313709f06c05fb4abc6fa"
 	},
 	"linux-x64/opencv5.musl.node": {
-		"size": 7006160,
-		"sha256": "92f098ebc52d56abe5d9668f09812c1de794edc077b24dd02cf84e2c1d7f56cb"
+		"size": 7018448,
+		"sha256": "9ebf79fe907101b34e25328c95cdcacf8d04ec069c5aa64b61bf7d8c4114e9ca"
 	},
 	"win32-x64/opencv5.node": {
-		"size": 5046272,
-		"sha256": "01e36c0159373ab71dfe44c1587f6ce989b6e5f44a2077cd2668d141ca538d2d"
+		"size": 5054976,
+		"sha256": "9095954b9ecc8e0c24862ddf6dd39e563d3792209ce5ff22642485dec88ea812"
 	}
 }
