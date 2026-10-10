@@ -8,6 +8,23 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Added
 
+- **Native kernels for `golden-compare`'s pool.** The local alignment's
+  tile search and resampling, the binarization with the tone comparison,
+  the tone comparison alone and the one-pass diff have native twins
+  (`native/kernels.cc`, plain N-API, no dependencies) that give the JS
+  kernels' bytes: the JS arithmetic in the JS order, built without
+  floating-point contraction. On the rig (1475x2125 golden, 12 workers,
+  all 162 sample frames twice, interleaved) a good frame went from 65.9 to
+  46.5 ms at the median, 81.4 to 61.1 ms at p95 and 91.0 to 66.3 ms at
+  p99, with `msg.result` and every heat map identical on all 648
+  frame-passes. Prebuilt binaries ship in the package
+  (`prebuilds/<platform>-<arch>/`; this release: linux-x64 glibc 2.17+
+  and musl), so there is no install script; `.github/workflows/prebuild.yml`
+  builds and tests linux arm64, win32-x64 and macOS too (not yet run).
+  Where no binary loads the JS kernels run, with one log line saying
+  why; `VISION_TOOLS_KERNELS=js` forces them. `native/` holds the sources
+  for a build from source (`npx node-gyp rebuild`, or `native/build.sh`).
+
 - **Per-golden profiles on `golden-compare` (`profileDir`, `msg.profile`).**
   The trained transform and the nuisance map each lived in one file per
   node, tied to one golden, so a node running a second artwork refused
@@ -405,6 +422,14 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   on the tray (a homography removes 18% of it), not the camera.
 
 ### Changed
+
+- **The overlay's canvas is built off the inspector thread.** With the
+  native kernels the checks finished before the inspector thread had
+  built the 9.4 MB RGB canvas on fresh pages (overlay 5.9 → 8.9 ms on the
+  rig). An encoded overlay's canvas is now a spare buffer the pool fills;
+  a raw one, which leaves with the message, is built by a worker beside
+  the pool in memory of its own and moved back. The same pixels; with the
+  JS kernels too, a good frame went from 65.9 to 62.9 ms at the median.
 
 - **`golden-compare` runs a good frame in about half the time.** On the
   rig's 1475x2125 golden at 12 workers the median good frame went from

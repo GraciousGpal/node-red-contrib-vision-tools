@@ -89,7 +89,11 @@ authoritative list.
 | `lib/components.js` | connected components for region extraction |
 | `lib/parallel.js` | parallel forms of the per-pixel stages (dilate, integral, warp, rectify, local-align field, threshold and histogram, the fused diff, the search's density sweeps and polish objective), each falling back to its serial twin when the pool is unavailable, the image is small, or one worker was asked for |
 | `lib/pool.js` | persistent worker-thread pool for the per-pixel stages: created once and never torn down, dispatches settled by id, `shouldParallelise` gate |
-| `lib/poolWorker.js` | worker side of the pool: the row/column-range kernels, asserted byte-identical to their serial reference implementations |
+| `lib/poolWorker.js` | worker side of the pool: the row/column-range kernels, asserted byte-identical to their serial reference implementations; runs the native twins of five of them where the addon loads |
+| `lib/nativeKernels.js` | loads the optional native kernels (a from-source build, else `prebuilds/<platform>-<arch>/vision-kernels[.glibc\|.musl].node`), refuses another kernel ABI, honours `VISION_TOOLS_KERNELS=js`, and hands a worker its kernels with the native ones in place; a dispatch the addon refuses runs on the JS kernel |
+| `native/kernels.cc` | the native twins of `localField`, `localApply`, `binarize` (with the tone comparison), `toneCompare` and `diff`: plain N-API, no dependencies, the JS arithmetic in the JS order; checks every index a dispatch will make before it claims a chunk |
+| `native/build.sh`, `native/binding.gyp` | the two builds of it with the same flags (`-ffp-contract=off`, no fast-math, baseline ISA): the compiler alone for the Linux prebuilds and any Linux/macOS host, node-gyp for Windows and from source |
+| `prebuilds/` | the shipped binaries, built by `.github/workflows/prebuild.yml` (linux x64/arm64 glibc and musl, win32-x64, darwin arm64/x64) or by hand with `native/build.sh` |
 | `lib/shared.js` | `SharedArrayBuffer`-backed allocators for the buffers the pool operates on; plain buffers and `HAS_SAB === false` when it is unavailable. `takeShared`/`giveShared` keep a finished frame's full-size scratch for the next frame (at most 16 a size and 128 MB in all, least recently used size dropped first), so the workers do not collect inside frames |
 | `lib/transformFile.js` | trained-transform persistence and its validity guards (golden identity, working size); `validateTransformRecord` holds the checks so a legacy file and a profile's `transform` section go through the same rules, `strictContentKey` compares the content key on every read; reuses `lib/scaleFile.js`'s path and number helpers |
 | `lib/profileStore.js` | per-golden profile files (`<dir>/<id>.json`): `profileIdFor` names one from `msg.profile`, the golden's source-file stem or its content hash; `readProfile` returns the stat that matches the content; `writeProfileSection` merges one section under a per-path lock, writes a temp file and renames it over |
@@ -826,6 +830,71 @@ than 64 workers cannot silently drop defect counts.
 What does not parallelise: the polish is a sequential descent, each step
 depending on the last; and PNG inflate inside `sharp` is serial, so decode
 stays ~135ms whatever the core count.
+
+### Native kernels
+
+Five pool kernels have native twins (`native/kernels.cc`, loaded by
+`lib/nativeKernels.js`): the local alignment's tile search and
+resampling, the binarization with the tone comparison riding on it, the
+tone comparison alone, and the one-pass diff. They are a port, not a
+reimplementation - the JS arithmetic in the JS order, doubles where the
+JS has doubles, `Math.round`'s ties toward +Infinity - so a frame's
+result cannot depend on whether a binary loaded. Three things hold that:
+
+- **No floating-point licence.** Built with `-ffp-contract=off` and
+  without fast-math (MSVC `/fp:precise`): GCC fuses `a + b * c` into an
+  FMA by default on arm64, an FMA rounds once where V8 rounds twice, and
+  the resampling's rounded displacements would then differ on ties.
+  Baseline ISA too, so one binary loads on every CPU of its arch; the one
+  loop that gained from AVX2, the tile search's integer SSD, is built
+  twice and picked with `__builtin_cpu_supports` (no `target_clones`:
+  musl has no IFUNC).
+- **The same samples in the same order.** The tile search reads the
+  frame window as three phase-split planes, so each offset's samples are
+  contiguous, and checks its running sum every fourth row rather than
+  every row; neither changes a result, since the sums are integers and a
+  candidate stopped early is one that could not have won.
+- **Held to the bytes.** `test/nativeKernels.test.js` runs every kernel
+  on synthetic dispatches, fixed and fuzzed, native against JS, buffer by
+  buffer; `test/nativePipeline.test.js` runs whole frames both ways.
+  Each was checked against deliberately broken builds (ties rounded away
+  from zero, a margin off by one, a strict threshold, a tie kept late,
+  FMA contraction on).
+
+A dispatch the addon cannot index - a missing buffer, one too short, a
+fractional radius - is refused before it claims a chunk and runs on the
+JS kernel instead: in the addon an out-of-bounds read is a crash of the
+whole Node-RED process, where in JS it is an `undefined`.
+
+With the checks that much quicker, the overlay's RGB canvas (9.4 MB of
+fresh pages a frame, built on the inspector thread while it waited) was
+still being built when they finished: overlay 5.9 to 8.9 ms on the rig.
+An encoded overlay's canvas is now a spare buffer from the frame's
+scratch, filled by the workers (`expandGrayParallel`). A raw one leaves
+with the message, so it is new every frame; a worker *beside* the pool
+(`lib/pool.js` `runOne`) builds it in an `ArrayBuffer` of its own and
+moves it to the inspector, which moves it on to the Node-RED thread as
+before. Two placements that looked equivalent were not: a new shared
+canvas filled by every worker was 9.4 MB more a frame for each of them
+to collect, ~3 ms on the next frame's alignment; and one of the pool's
+own workers held up every range dispatch sent while it was busy, since a
+dispatch settles when its slowest worker does.
+
+On the rig (1475x2125 golden, 12 workers, all 162 sample frames twice,
+interleaved, raw overlay), a good frame against the last commit before
+any of this:
+
+| | median | p95 | p99 |
+| --- | ---: | ---: | ---: |
+| before | 65.9 ms | 81.4 ms | 91.0 ms |
+| JS kernels, canvas beside the pool | 62.9 ms | 78.9 ms | 85.4 ms |
+| native kernels, canvas beside the pool | **46.5 ms** | **61.1 ms** | **66.3 ms** |
+
+Stage medians, before → native: alignment 41.6 → 30.1 ms (the inspector
+thread no longer faulting in the canvas's pages between frames' pool
+rounds), local alignment 11.0 → 6.1, thresholding with the tone
+comparison 9.7 → 4.3, diff 9.8 → 3.3, overlay 5.7 → 4.9. `msg.result`
+and every heat map were identical on all 648 frame-passes of each.
 
 ### Still on the table
 

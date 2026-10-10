@@ -158,6 +158,68 @@ penalty: the identical-results claim above is about `label-crop`, and
 `golden-compare`'s alignment is where the two engines can reach the same
 verdict by different routes.
 
+### Native kernels
+
+Five of `golden-compare`'s per-pixel pool kernels — the local alignment's
+tile search and resampling, the binarization with the tone comparison
+riding on it, the tone comparison alone, and the one-pass print and
+background diff — have native twins in `native/kernels.cc`: a small
+N-API addon with no dependencies (no OpenCV, no node-addon-api). They do
+the JS kernels' arithmetic in the JS kernels' order, so `msg.result` and
+`msg.heatmap` are the same to the bit whichever runs; they only make the
+frame faster. On the rig (1475x2125 golden, 12 workers, all 162 sample
+frames twice), a good frame:
+
+| | median | p95 | p99 |
+| --- | ---: | ---: | ---: |
+| before | 65.9 ms | 81.4 ms | 91.0 ms |
+| JS kernels | 62.9 ms | 78.9 ms | 85.4 ms |
+| native kernels | **46.5 ms** | **61.1 ms** | **66.3 ms** |
+
+("JS kernels" has the other change that came with them: the raw
+overlay's canvas is built off the inspector thread, which the native
+kernels had made the critical path.)
+
+The binaries ship **inside the package**, in `prebuilds/<platform>-<arch>/`,
+so there is nothing to compile and no install script: the palette
+manager and `npm install --ignore-scripts` get the same files.
+
+| platform | binary |
+| --- | --- |
+| Linux x64, glibc 2.17 or newer | `prebuilds/linux-x64/vision-kernels.glibc.node` |
+| Linux x64, musl (Alpine, the official Node-RED image) | `prebuilds/linux-x64/vision-kernels.musl.node` |
+| Linux arm64 (glibc, musl), Windows x64, macOS arm64/x64 | built by `.github/workflows/prebuild.yml`, not yet in a release |
+
+Any CPU of the architecture runs them (baseline x86-64 / armv8-a; the
+tile search picks an AVX2 build of its inner loop at run time on Linux
+x64 where the CPU has it).
+
+**Fallback.** Anything that stops the addon loading — no binary for the
+platform, a Node without N-API 8, a binary from another version of the
+kernels — leaves the JS kernels running, with one line in the Node-RED
+log at startup saying which kernels it runs and why
+(`golden-compare: JS pool kernels - no prebuilt binary for …`; a binary
+that is there and fails to load is a warning). Set
+`VISION_TOOLS_KERNELS=js` to run the JS kernels anyway, which is how to
+check the two against each other on one host. The JS kernels stay the
+reference: the tests hold every native kernel to them byte for byte.
+
+**Building from source**, for a platform without a prebuild — from the
+package directory (`node_modules/@graciousstar/node-red-contrib-vision-tools`):
+
+```bash
+cd native && npx node-gyp rebuild        # needs Python and a C++ toolchain
+# or, on Linux and macOS, with the compiler alone:
+mkdir -p native/build/Release
+sh native/build.sh native/build/Release/vision_kernels.node "$(dirname "$(dirname "$(which node)")")/include/node"
+```
+
+`native/build/Release/vision_kernels.node` is loaded in preference to the
+prebuilds. Whatever builds it must keep floating-point contraction off
+(`-ffp-contract=off`, no `-ffast-math`; MSVC `/fp:precise`), which both
+build files do: an FMA rounds once where the JS rounds twice, and the
+bytes would then depend on the CPU.
+
 ## How `golden-compare` works
 
 1. **Golden reference** (`goldenPath`, or `msg.golden`) is decoded,
@@ -429,6 +491,7 @@ largest first:
 | `debugStages` | **+690ms** when on. Pure diagnostics |
 | heat maps | **+~300ms** when on. Display output; the verdict does not use them |
 | trained transform | **halves** the alignment, and accuracy is the reason to pin, not speed |
+| native kernels | a good frame 65.9 → **46.5ms** median on the rig (1475x2125 golden, 12 workers), identical results. On by default where a prebuilt binary loads; see **Native kernels** above |
 | `workers` | the per-pixel stages and both summed-area tables run on the pool. 0 picks one per core up to **16**; on a 16-core host, 8 → 12 workers took align 798ms → 680ms |
 | `nativeFastAlign` | aggressive OpenCV prototype: 663ms → **243ms** on the clean PNG and 1065ms → **443ms** on the high-compression reject. See below |
 | `nativeAlignSeed` | conservative prototype, off by default: align 545ms → 338ms. See **Native alignment seed** below |
@@ -1764,6 +1827,15 @@ Several suites assert something other than a value:
   of a rotation convention drift silently — the box drawn stops being the
   box searched. `test/lineFinderEditor.test.js` drives the viewer itself
   over a small fake DOM.
+- `test/nativeKernels.test.js` holds each native kernel to its JS twin
+  byte for byte on synthetic dispatches, fixed and fuzzed
+  (`VISION_TOOLS_FUZZ_ROUNDS`, default 40 a kernel), and
+  `test/nativePipeline.test.js` runs whole frames with each set. Both
+  were checked against deliberately broken builds (ties rounded away from
+  zero, a margin off by one, a strict threshold, a late tie kept, FMA
+  contraction on) and fail on each; they skip where no binary loads.
+  `test/nativeKernelsLoader.test.js` covers what happens when it does not
+  load.
 - `test/lineFinderSampling.test.js` compares the two profile builders
   with `strictEqual` rather than a tolerance. The fast one exists only
   for speed, so the only acceptable difference is none.
