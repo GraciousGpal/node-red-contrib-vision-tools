@@ -13,10 +13,9 @@
  * while the detection is getting tuned.
  *
  * The heavy pixel work runs in OpenCV (decoded once, low-res Otsu,
- * ROI-only rotation, final crop in the engine): either the
- * @rosepetal/node-red-contrib-image-tools native addon or the
- * @techstark/opencv-js WASM build, whichever lib/engine.js finds. If
- * neither can be loaded, this is a **setup error** (done(err)), never a
+ * ROI-only rotation, final crop in the engine): this package's own
+ * OpenCV addon (prebuilt per platform) or the @techstark/opencv-js WASM
+ * build, whichever lib/engine.js finds. If neither can be loaded, this is a **setup error** (done(err)), never a
  * silent pass-through - otherwise a missing binary would look like "no
  * label found" on every frame.
  */
@@ -30,8 +29,7 @@ module.exports = (RED) => {
 	const { formatMs } = require("./lib/formatMs.js");
 
 	// Settle the engine choice and pay its start-up cost now rather than on
-	// the first frame: the WASM build takes ~200ms to instantiate, and the
-	// native addon's own load result is only knowable asynchronously.
+	// the first frame: the WASM build takes ~200ms to instantiate.
 	require("./lib/engine.js")
 		.warmup()
 		.catch(() => {
@@ -175,10 +173,10 @@ module.exports = (RED) => {
 			try {
 				if (!available()) {
 					throw new Error(
-						"label-crop: OpenCV engine unavailable - install either " +
-							"@rosepetal/node-red-contrib-image-tools (native, fastest, " +
-							"prebuilt for Linux x64/arm64, Alpine x64, macOS x64/arm64) " +
-							"or @techstark/opencv-js (WASM, runs anywhere)",
+						"label-crop: OpenCV engine unavailable - this platform has " +
+							"no prebuilt @graciousstar/opencv5 binary (Linux x64/arm64, Windows x64 " +
+							"and macOS x64/arm64 have one); install @techstark/opencv-js " +
+							"(WASM, runs anywhere)",
 					);
 				}
 				const options = { ...defaults };

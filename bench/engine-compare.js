@@ -1,8 +1,9 @@
 /**
- * Native OpenCV addon vs the opencv.js WASM build, same host, same frames.
+ * Our OpenCV addon (lib/opencv5.js) vs the opencv.js WASM build, same host,
+ * same frames.
  *
- * Runs whichever engines actually load, so on a machine with no native
- * build it still reports the WASM numbers - it just has nothing to compare
+ * Runs whichever engines actually load, so on a machine with no opencv5
+ * binary it still reports the WASM numbers - it just has nothing to compare
  * them against. Both stages that use an engine are measured:
  *
  *   label-crop  - the full deskew-and-crop pipeline (resize, Otsu, Sobel,
@@ -20,7 +21,6 @@ const { performance } = require("node:perf_hooks");
 
 const { labelCrop } = require("../lib/labelCrop.js");
 const { rawImage, labelOnTray } = require("../test/helpers/synthetic.js");
-const { NATIVE_PATH, probeNative } = require("../lib/engine.js");
 
 function arg(name, fallback) {
 	const i = process.argv.indexOf(`--${name}`);
@@ -65,13 +65,11 @@ function stats(values) {
 async function engines() {
 	const found = [];
 	try {
-		const native = require(NATIVE_PATH);
-		// not native.ready(): cpp-bridge 1.6.4 has no such method, and the
-		// point of the probe is to work on both - see lib/engine.js
-		await probeNative(native);
-		found.push({ name: "native", engine: native });
+		const own = require("../lib/opencv5.js");
+		await own.ready();
+		found.push({ name: "own", engine: own });
 	} catch (err) {
-		console.error(`native: unavailable (${err.message.split("\n")[0]})`);
+		console.error(`own: unavailable (${err.message.split("\n")[0]})`);
 	}
 	try {
 		const cvjs = require("../lib/cvjs.js");

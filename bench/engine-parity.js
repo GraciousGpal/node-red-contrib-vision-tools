@@ -3,7 +3,8 @@
  *
  * bench/engine-compare.js answers "how fast"; this answers "does it decide
  * the same thing", which is the question that decides whether the WASM
- * engine is a drop-in on a rig that was tuned against the native one.
+ * engine is a drop-in on a rig that was tuned against the native one
+ * (@graciousstar/opencv5, reported as "native" below).
  *
  * Reports label-crop's detection metadata side by side over a sweep of
  * angles and label sizes, and flags any frame where the two disagree by
@@ -17,7 +18,6 @@
 
 const { labelCrop } = require("../lib/labelCrop.js");
 const { labelOnTray } = require("../test/helpers/synthetic.js");
-const { NATIVE_PATH, probeNative } = require("../lib/engine.js");
 
 function arg(name, fallback) {
 	const i = process.argv.indexOf(`--${name}`);
@@ -36,12 +36,11 @@ const TOLERANCE = { angleDeg: 0.25, centerPx: 3, sizePx: 6 };
 async function main() {
 	let native = null;
 	try {
-		const bridge = require(NATIVE_PATH);
-		await probeNative(bridge);
-		native = bridge;
+		native = require("../lib/opencv5.js");
+		await native.ready();
 	} catch (err) {
-		console.error(`native: unavailable (${err.message.split("\n")[0]})`);
-		console.error("parity needs both engines; run this on a host with the addon.");
+		console.error(`own: unavailable (${err.message.split("\n")[0]})`);
+		console.error("parity needs both engines; run this on a host where @graciousstar/opencv5 loads.");
 		return;
 	}
 	const cvjs = require("../lib/cvjs.js");

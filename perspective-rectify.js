@@ -15,7 +15,7 @@
  *
  * The warp runs on the inspector's worker pool, split by rows like
  * golden-compare's own warp: ~20ms on a 1500x1850 RGB frame against
- * ~130ms serial. The native cpp-bridge has no warpPerspective and
+ * ~130ms serial. The opencv5 addon has no warpPerspective and
  * opencv.js's single WASM thread measured no faster than the serial loop.
  *
  * Input (msg.payload): an encoded image Buffer, a file path string, or a

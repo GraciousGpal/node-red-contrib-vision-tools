@@ -3,8 +3,8 @@
  * seam from lib/labelCrop.js and the pure JS analysis in `analyzeMask`.
  *
  * The engine is always a **fake** injected through the third argument or
- * the `_setBridge` test seam - the real cpp-bridge ships no
- * win32 binary, so the unit suite must stay hermetic. The fake records
+ * the `_setBridge` test seam, so the unit suite stays hermetic on a
+ * platform with no real engine. The fake records
  * every call (name, args, result) so the orchestration assertions can
  * prove the decode-once / low-res detection / ROI-only-rotation / native
  * final crop sequence the node is designed around.

@@ -205,9 +205,9 @@ module.exports = (RED) => {
 		// would re-run zxing on a 12 MP render whenever a flow left it set.
 		barcodeRegions: { value: false, fixed: true },
 		// PROTOTYPES, default off - see lib/nativeSeed.js. The seed replaces
-		// the staged sweeps with a native ORB+ECC alignment when the optional
-		// @rosepetal/node-red-contrib-image-tools engine is installed, and is
-		// inert without it; the fast path lets OpenCV own the affine solve and
+		// the staged sweeps with an OpenCV ORB+ECC alignment when an OpenCV
+		// engine loads (lib/engine.js), and is inert without one; the fast
+		// path lets OpenCV own the affine solve and
 		// global warp, and may produce different inspection results.
 		nativeAlignSeed: { value: false },
 		nativeFastAlign: { value: false },

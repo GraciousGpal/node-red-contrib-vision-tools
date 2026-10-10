@@ -32,9 +32,10 @@ const root = path.resolve(
 	process.env.VISION_BENCH_ROOT || path.join(__dirname, ".."),
 );
 const installed = "/usr/src/node-red/node_modules";
-const bridge = require(
-	`${installed}/@rosepetal/node-red-contrib-image-tools/node-red-contrib-image-tools/lib/cpp-bridge.js`,
-);
+// Decodes the fixtures (sharp) and halves them as the flow's resize nodes
+// do (OpenCV INTER_LINEAR): our own engine, from this checkout rather than
+// VISION_BENCH_ROOT, so an A/B against an older tree is fed the same frames.
+const bridge = require(path.join(__dirname, "..", "lib", "opencv5.js"));
 const inspector = require(path.join(root, "lib/inspector.js"));
 const iterations = Number(arg("iterations", 3));
 const limit = Number(arg("limit", 5)); // 0 = all, per class

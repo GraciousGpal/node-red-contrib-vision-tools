@@ -8,8 +8,8 @@
  * (no Otsu, no maxEdge copy, full-resolution measurement) and about the
  * miss policy, not about the blob analysis.
  *
- * As in labelCrop.test.js the engine is a fake, so the suite is hermetic:
- * the real cpp-bridge ships no win32 binary.
+ * As in labelCrop.test.js the engine is a fake, so the suite is hermetic
+ * on a platform with no real engine.
  */
 
 const test = require("node:test");

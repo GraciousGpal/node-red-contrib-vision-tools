@@ -5,9 +5,8 @@
  * contract the callers were written against - argument positions, raw
  * descriptor shape, and the geometry label-crop predicts independently
  * (rotate's canvas size, imageAlign's matrix convention). Second that
- * label-crop itself runs end to end on this engine, which is the whole
- * point of the prototype: the native addon has no win32 build, so on this
- * platform these are the only real-engine integration tests there are.
+ * label-crop itself runs end to end on this engine, the fallback wherever
+ * our own addon has no binary.
  *
  * Skipped when the optional module is not installed.
  */
