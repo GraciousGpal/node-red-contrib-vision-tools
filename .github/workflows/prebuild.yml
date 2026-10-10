@@ -128,7 +128,7 @@ jobs:
       - name: List the binaries in the manifest
         run: node native/manifest.js > /dev/null
 
-      # Not npm ci: see the README. sharp's platform binaries are optional
+      # npm install rather than npm ci: sharp's platform binaries are optional
       # dependencies, so nothing optional is left out either.
       - name: Test on the host (glibc)
         if: matrix.libc == 'glibc'

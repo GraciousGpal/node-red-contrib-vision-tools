@@ -24,10 +24,11 @@
   "homepage": "https://github.com/GraciousGpal/opencv5#readme",
   "main": "index.js",
   "engines": {
-    "node": ">=18"
+    "node": ">=20.9"
   },
   "scripts": {
-    "test": "node --test"
+    "test": "node --test",
+    "prepublishOnly": "node native/manifest.js --complete"
   },
   "dependencies": {
     "sharp": "^0.35.3"

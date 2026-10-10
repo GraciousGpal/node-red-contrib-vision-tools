@@ -172,11 +172,11 @@ module.exports = (RED) => {
 			const started = performance.now();
 			try {
 				if (!available()) {
+					const why = require("./lib/engine.js").candidate().error;
 					throw new Error(
-						"label-crop: OpenCV engine unavailable - this platform has " +
-							"no prebuilt @graciousstar/opencv5 binary (Linux x64/arm64, Windows x64 " +
-							"and macOS x64/arm64 have one); install @techstark/opencv-js " +
-							"(WASM, runs anywhere)",
+						"label-crop: OpenCV engine unavailable - no @graciousstar/opencv5 " +
+							"binary loads here and @techstark/opencv-js (WASM, runs " +
+							`anywhere) is not installed${why ? ` (${why.message})` : ""}`,
 					);
 				}
 				const options = { ...defaults };

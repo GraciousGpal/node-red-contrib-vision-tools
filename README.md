@@ -78,23 +78,23 @@ directory (`~/.node-red`):
 npm i @graciousstar/node-red-contrib-vision-tools
 ```
 
-Node 18 or newer. `sharp`, `zxing-wasm` and `@graciousstar/opencv5` are
-required and ship prebuilt binaries for the usual platforms.
+Node 18 or newer. `sharp` and `zxing-wasm` are required and ship prebuilt
+binaries for the usual platforms.
 
 ### The OpenCV engine
 
 `label-crop` and two optional `golden-compare` acceleration paths need
-OpenCV. Two engines provide it; the package installs and every other node
-works without either, and `label-crop` reports a clear setup error rather
-than failing a part:
+OpenCV. Two engines provide it; where neither loads, every other node
+still works and `label-crop` reports a clear setup error rather than
+failing a part:
 
 | | [`@graciousstar/opencv5`](opencv5/README.md) | `@techstark/opencv-js` |
 |---|---|---|
 | kind | our N-API addon over a static OpenCV 5 | opencv.js, WASM |
-| platforms | Linux x64/arm64 (glibc 2.17+, musl), Windows x64, macOS x64/arm64 | anywhere Node runs |
-| CPU | any of its arch (x86-64-v2, NEON baseline); the same bytes on every one | any |
+| platforms | one binary per platform: Linux x64 (glibc 2.17+, musl) and Windows x64 built and tested; Linux arm64, macOS x64/arm64 from its CI | anywhere Node runs |
+| CPU | any of its arch (x86-64-v2, NEON baseline); the same bytes on every one of an arch | any |
 | threading | libuv's pool | single-threaded, on the event loop |
-| dependency | yes | optional |
+| dependency | not yet (see below) | optional |
 
 Which one answers is `lib/engine.js`'s decision: opencv5 where its binary
 loads, opencv.js otherwise. `VISION_TOOLS_ENGINE=own` or `=opencv-js`
@@ -116,10 +116,13 @@ Measured in the rig's Alpine x64 container (Node 24), same frames
 | `label-crop`, 12MP frame | 47ms | 210ms |
 | `imageAlign`, 1024px | 12ms | 51ms |
 
-Until `@graciousstar/opencv5` is published it is a `file:opencv5`
-dependency on the directory it is developed in, and its binaries are
-built there (`opencv5/native/prebuild-linux.sh`, or its CI workflow)
-rather than committed here.
+Until `@graciousstar/opencv5` is published it is developed in this
+repository's `opencv5/` directory and is not yet in `dependencies`:
+`lib/opencv5.js` takes the installed package if there is one, else that
+directory, whose binaries are built there
+(`opencv5/native/prebuild-linux.sh`) rather than committed. An installed
+copy of this package therefore runs on opencv.js until the dependency is
+added.
 
 ### Native kernels
 

@@ -1,7 +1,7 @@
 /**
  * Bound the drift between two golden-compare runs over the same frames:
- * two `--dump` files from bench/golden-container-bench.js, one per engine
- * (VISION_TOOLS_ENGINE=native against =own, say).
+ * two `--dump` files from bench/golden-container-bench.js, say one from
+ * the previous release's tree (VISION_BENCH_ROOT) and one from this one.
  *
  *   node bench/golden-drift.js reference.jsonl candidate.jsonl
  *

@@ -4,9 +4,10 @@ Copyright 2026 GraciousStar
 Licensed under the Apache License, Version 2.0 (LICENSE).
 
 The prebuilt binaries under prebuilds/ statically link the following
-third-party software. Only what the linker keeps is listed: the binaries
-were checked symbol by symbol (no font data, MSER table, Annoy, DLPack or
-FlatBuffers code is linked, though OpenCV's source tree carries them).
+third-party software. Only what the linker keeps is listed: the Linux x64
+binary was checked symbol by symbol (no font data, MSER table, Annoy,
+DLPack or FlatBuffers code is linked, though OpenCV's source tree carries
+them), and every binary links the same OpenCV build configuration.
 
 ------------------------------------------------------------------------
 OpenCV 5.0.0 (modules core, imgproc, features, flann, geometry, video)

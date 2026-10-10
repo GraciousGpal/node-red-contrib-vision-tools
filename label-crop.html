@@ -424,10 +424,9 @@
     <code>msg.labelCrop</code> contains corners, angle, confidence, crop
     geometry, and timings. A normal detection miss passes the original payload
     through with <code>msg.labelCrop.detected</code> set to false. Having no
-    OpenCV engine at all is reported as an error, not as a miss. The package
-    ships its own OpenCV binary for Linux x64/arm64, Windows x64 and macOS
-    x64/arm64; anywhere else, install <code>@techstark/opencv-js</code>
-    (WASM, runs anywhere).
+    OpenCV engine at all is reported as an error, not as a miss: where no
+    <code>@graciousstar/opencv5</code> binary loads, install
+    <code>@techstark/opencv-js</code> (WASM, runs anywhere).
   </p>
   <p>
     Enable <i>Preview</i> to show labelled before/after images beside the node

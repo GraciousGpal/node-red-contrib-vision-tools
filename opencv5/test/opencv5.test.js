@@ -2,9 +2,10 @@
  * @graciousstar/opencv5.
  *
  * Each pixel op is held to the stock opencv.js build of the same OpenCV
- * (test/reference.js) byte for byte, which checks the op's arguments as
- * much as OpenCV; imageAlign to known shifts and to bytes pinned in
- * test/expected.json, which every platform's binary must reproduce; then
+ * (test/helpers/reference.js) byte for byte, which checks the op's
+ * arguments as much as OpenCV; imageAlign to known shifts; every op to
+ * bytes pinned per arch in test/expected.json, which each OS's binary of
+ * that arch must reproduce; then
  * the guards: a length the dimensions do not fit, a detached or resizable
  * buffer, is refused before native code runs.
  *
@@ -17,7 +18,7 @@ const assert = require("node:assert");
 const crypto = require("node:crypto");
 
 const own = require("..");
-const ref = require("./reference.js");
+const ref = require("./helpers/reference.js");
 const expected = require("./expected.json");
 
 const skip = own.available() ? false : "no opencv5 binary loads here (OPENCV5_ADDON)";
@@ -260,10 +261,12 @@ test("an op whose buffer is shorter than its dimensions is refused before it run
 	return assert.rejects(own.resize(rawImage(resizable, 10, 10, 3, "RGB"), "num", 5, "num", 5, "raw"), /resizable/);
 });
 
-// ---- the same bytes on every platform ----------------------------------
+// ---- the same bytes on every platform of an arch -----------------------
 
-/** What each case produces, as hashes: test/expected.json pins them, and
- * a binary for another platform or CPU must give the same. */
+/** What each case produces, as hashes: test/expected.json pins them per
+ * arch, and a binary for another OS or CPU of that arch must give the
+ * same. Per arch, not across them: arm64's NEON multiply-add rounds once
+ * where x64's SSE rounds twice, so the float paths may differ there. */
 async function fingerprints() {
 	const sha = (b) => crypto.createHash("sha256").update(b).digest("hex").slice(0, 32);
 	const golden = texture(labelFrame(600, 400, 0, 300, 180, 1));
@@ -283,7 +286,14 @@ async function fingerprints() {
 	return out;
 }
 
-test("every op gives the bytes test/expected.json pins, on every platform", { skip }, async () => {
+test("every op gives the bytes test/expected.json pins for this arch", { skip }, async (t) => {
 	const got = await fingerprints();
-	assert.deepStrictEqual(got, expected, `this binary's bytes: ${JSON.stringify(got)}`);
+	const want = expected[process.arch];
+	if (!want) {
+		// the first binary of a new arch: its bytes, to pin after review
+		t.diagnostic(`${process.arch}: ${JSON.stringify(got)}`);
+		t.skip(`no bytes pinned for ${process.arch} yet`);
+		return;
+	}
+	assert.deepStrictEqual(got, want, `this binary's bytes: ${JSON.stringify(got)}`);
 });

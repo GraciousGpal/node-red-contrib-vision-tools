@@ -30,7 +30,7 @@ flags="-O3 -std=c++17 -fPIC -shared $march -ffp-contract=off -fno-fast-math -fvi
 case "$(uname -s)" in
 Darwin)
 	# shellcheck disable=SC2086
-	$CXX $flags -mmacosx-version-min=11.0 -undefined dynamic_lookup -I"$inc" -I"$cvinc" \
+	$CXX $flags -mmacosx-version-min=11.0 -undefined dynamic_lookup -Wl,-dead_strip -I"$inc" -I"$cvinc" \
 		-o "$out" "$here/opencv5.cc" $libs $third
 	strip -x "$out"
 	;;

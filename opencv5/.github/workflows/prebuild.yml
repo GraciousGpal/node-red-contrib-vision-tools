@@ -14,11 +14,13 @@
 # The Linux binaries are built in images pinned by digest, so the same
 # source gives the same bytes: the x64 jobs fail when a rebuild differs
 # from the committed manifest. Every job also runs the test that pins each
-# op's output bytes (test/expected.json): every platform must give the
-# same.
+# op's output bytes per arch (test/expected.json): every OS's binary of an
+# arch must give the same; a new arch's first run prints its bytes to pin.
 #
-# Written from the documentation of the runners, actions and images; it
-# has not run yet, so expect the first run to need fixes.
+# It runs once this directory is its own repository (GitHub reads only a
+# repository's top-level .github/). Written from the documentation of the
+# runners, actions and images and not run yet: expect the first run to
+# need fixes.
 
 name: prebuild
 
@@ -154,14 +156,17 @@ jobs:
           path: C:/opencv5-cv
           key: opencv-win32-x64-${{ hashFiles('native/build-opencv.sh', 'native/prebuild-linux.sh') }}
 
+      # a POSIX path for the tarball: git-bash's tar reads "D:" in a
+      # Windows path as a remote host
       - name: Build OpenCV
         if: steps.opencv.outputs.cache-hit != 'true'
         run: |
+          tmp=$(cygpath -u "$RUNNER_TEMP")
           v=$(sed -n 's/^OPENCV_VERSION=//p' native/prebuild-linux.sh)
           sum=$(sed -n 's/^OPENCV_SHA256=//p' native/prebuild-linux.sh)
-          curl -fsSL -o "$RUNNER_TEMP/opencv.tar.gz" "https://github.com/opencv/opencv/archive/refs/tags/$v.tar.gz"
-          echo "$sum  $RUNNER_TEMP/opencv.tar.gz" | sha256sum -c -
-          sh native/build-opencv.sh "$RUNNER_TEMP/opencv.tar.gz" "$OPENCV_PREFIX"
+          curl -fsSL -o "$tmp/opencv.tar.gz" "https://github.com/opencv/opencv/archive/refs/tags/$v.tar.gz"
+          echo "$sum  $tmp/opencv.tar.gz" | sha256sum -c -
+          sh native/build-opencv.sh "$tmp/opencv.tar.gz" "$OPENCV_PREFIX"
 
       - name: Build the addon with node-gyp
         run: |
@@ -216,12 +221,12 @@ jobs:
         run: test "$(node -p 'process.platform + "-" + process.arch')" = "darwin-${{ matrix.arch }}"
 
       - name: Where the OpenCV build goes
-        run: echo "OPENCV_PREFIX=$RUNNER_TEMP/../opencv5-cv" >> "$GITHUB_ENV"
+        run: echo "OPENCV_PREFIX=$HOME/opencv5-cv" >> "$GITHUB_ENV"
 
       - uses: actions/cache@v4
         id: opencv
         with:
-          path: ${{ runner.temp }}/../opencv5-cv
+          path: ~/opencv5-cv
           key: opencv-darwin-${{ matrix.arch }}-${{ hashFiles('native/build-opencv.sh', 'native/prebuild-linux.sh') }}
 
       # cmake is on the hosted macOS images; macOS 11 is the deployment

@@ -74,12 +74,12 @@ test("auto falls back to the WASM engine where our addon does not load", { skip:
 	});
 });
 
-test("the retired value native is read as own", () => {
+test("the retired value native is read as auto, so it keeps the fallback", () => {
 	withMode("native", () => {
-		assert.strictEqual(engineModule.mode(), "own");
+		assert.strictEqual(engineModule.mode(), "auto");
 	});
 	withMode("NATIVE", () => {
-		assert.strictEqual(engineModule.mode(), "own");
+		assert.strictEqual(engineModule.mode(), "auto");
 	});
 });
 

@@ -11,13 +11,14 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - **The OpenCV engine is now our own, and the rosepetal addon is gone.**
   `label-crop` and `golden-compare`'s OpenCV alignment run on
   [`@graciousstar/opencv5`](opencv5/README.md): a small N-API addon over a
-  static OpenCV 5.0.0, prebuilt for Linux x64/arm64 (glibc 2.17+ and
-  musl), Windows x64 and macOS x64/arm64, with no install script.
+  static OpenCV 5.0.0 with a prebuilt binary per platform and no install
+  script (Linux x64 glibc 2.17+ and musl and Windows x64 built and tested;
+  Linux arm64 and macOS from its CI).
   `@rosepetal/node-red-contrib-image-tools` is no longer a dependency, is
   not installed, and nothing uses it. Where no opencv5 binary loads, the
   engine falls back to `@techstark/opencv-js` as before.
   `VISION_TOOLS_ENGINE` takes `auto`, `own` or `opencv-js`; the old value
-  `native` is read as `own`.
+  `native` is read as `auto`, so it keeps the fallback.
   - **Why:** the rosepetal binary needed an AVX2 CPU (an illegal
     instruction on older x64 machines), had no Windows build (Windows ran
     the WASM engine, ~300 ms an alignment), and found a golden's cached
@@ -25,7 +26,8 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
     baseline of each arch with nothing chosen at run time, so it runs on
     any CPU and gives the same bytes on every one - the Linux and Windows
     binaries give identical output, pinned by its tests - and it keys a
-    golden's features by the golden itself.
+    golden's features by the golden itself. (Per arch: arm64's NEON
+    multiply-add may round differently from x64's SSE.)
   - **Results move a little; verdicts do not.** On the 162-frame
     reference set (rig, 2 rounds × 2 passes, interleaved with 1.2's main):
     148 pass / 14 fail, unchanged, with no grade or route change. The
@@ -37,10 +39,11 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
     `bench/golden-drift.js` checks a rig's own set against these bounds.
   - **Faster:** a good frame 46.4 → 37.7 ms at the median, 61.0 → 47.4 ms
     at p95, 68.8 → 55.9 ms at p99; the OpenCV alignment 17.3 → 9.7 ms.
-  - Until `@graciousstar/opencv5` is published, it is a `file:opencv5`
-    dependency and its binaries are not in this repository: build them
-    with `opencv5/native/prebuild-linux.sh` (or its CI workflow), or the
-    engine falls back to opencv.js.
+  - Until `@graciousstar/opencv5` is published and added to
+    `dependencies`, it lives in `opencv5/` (bound for its own repository)
+    and its binaries are built there, not committed:
+    `opencv5/native/prebuild-linux.sh`. An installed copy of this package
+    meanwhile runs on opencv.js.
 
 ### Added
 

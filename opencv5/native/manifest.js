@@ -3,6 +3,8 @@
  * index.js checks before it loads one.
  *
  *   node native/manifest.js [DIR]          write DIR/manifest.json (DIR: prebuilds)
+ *   node native/manifest.js --complete     all seven shipped binaries there and in
+ *                                          the manifest (before npm publish)
  *   node native/manifest.js --check FILE…  each FILE (DIR/<platform>-<arch>/<name>)
  *                                          against the committed manifest; exit 1
  *                                          on any difference
@@ -24,7 +26,34 @@ const entry = (file) => {
 };
 const keyOf = (file) => file.split(path.sep).join("/").split("/").slice(-2).join("/");
 
-if (process.argv[2] === "--check") {
+// what a published package must carry (npm's prepublishOnly runs --complete)
+const SHIPPED = [
+	"linux-x64/opencv5.glibc.node",
+	"linux-x64/opencv5.musl.node",
+	"linux-arm64/opencv5.glibc.node",
+	"linux-arm64/opencv5.musl.node",
+	"win32-x64/opencv5.node",
+	"darwin-arm64/opencv5.node",
+	"darwin-x64/opencv5.node",
+];
+
+if (process.argv[2] === "--complete") {
+	const dir = path.join(__dirname, "..", "prebuilds");
+	const manifest = JSON.parse(fs.readFileSync(path.join(dir, "manifest.json"), "utf8"));
+	let bad = 0;
+	for (const key of SHIPPED) {
+		const file = path.join(dir, ...key.split("/"));
+		const want = manifest[key];
+		const got = fs.existsSync(file) ? entry(file) : null;
+		const ok = got && want && got.size === want.size && got.sha256 === want.sha256;
+		if (!ok) {
+			console.error(`${key}: ${!got ? "missing" : !want ? "not in the manifest" : "not the manifest's bytes"}`);
+			bad++;
+		}
+	}
+	if (bad) console.error(`${bad} of the ${SHIPPED.length} binaries are not ready to publish`);
+	process.exitCode = bad ? 1 : 0;
+} else if (process.argv[2] === "--check") {
 	const manifest = JSON.parse(fs.readFileSync(path.join(__dirname, "..", "prebuilds", "manifest.json"), "utf8"));
 	let bad = 0;
 	for (const file of process.argv.slice(3)) {

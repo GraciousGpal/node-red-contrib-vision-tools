@@ -6,15 +6,16 @@ ORB + ECC affine alignment. Not general OpenCV bindings - the ops
 [node-red-contrib-vision-tools](https://github.com/GraciousGpal/node-red-contrib-vision-tools)
 needs, done well:
 
-- **Prebuilt, no toolchain.** Linux x64/arm64 (glibc 2.17+ and musl),
-  Windows x64, macOS x64/arm64. No install script; each binary's size and
-  SHA-256 are checked against `prebuilds/manifest.json` before it is
-  opened.
+- **Prebuilt, no toolchain.** One binary per platform: Linux x64 (glibc
+  2.17+ and musl) and Windows x64 are built and tested; Linux arm64 and
+  macOS x64/arm64 come from the CI workflow, which has not run yet. No
+  install script; each binary's size and SHA-256 are checked against
+  `prebuilds/manifest.json` before it is opened.
 - **Any CPU of its arch, the same bytes on all.** Built for the baseline
   (x86-64-v2: SSE4.2 + POPCNT; arm64: NEON) with nothing chosen at run
   time, no fast-math and no FMA contraction. `test/expected.json` pins
-  every op's output bytes, and each platform's binary must reproduce them
-  (Linux glibc and musl and Windows do).
+  every op's output bytes per arch, and each OS's binary of that arch
+  must reproduce them (on x64, Linux glibc, Linux musl and Windows do).
 - **Async and bounds-checked.** Every op runs on libuv's pool and returns
   a promise; every buffer length is checked against its dimensions
   before native code touches it.
@@ -76,8 +77,10 @@ node native/manifest.js                            # rewrite prebuilds/manifest.
 `native/build-opencv.sh` builds the static OpenCV 5.0.0 from its release
 tarball (SHA-256 pinned in `prebuild-linux.sh`): 85 s in manylinux2014,
 150 s in musllinux, 90 s with MSVC on 16 threads. Two clean Linux builds
-give the same bytes; CI (`.github/workflows/prebuild.yml`) rebuilds the
-x64 ones and fails on any difference from the manifest.
+give the same bytes; CI (`.github/workflows/prebuild.yml`, once this is
+its own repository) rebuilds the x64 ones and fails on any difference from
+the manifest. `node native/manifest.js --complete` runs before `npm
+publish` and refuses a package without all seven binaries.
 
 ## Licence
 
