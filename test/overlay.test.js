@@ -148,7 +148,7 @@ const { HAS_SAB, takeShared, giveShared } = require("../lib/shared.js");
 const { poolSize } = require("../lib/pool.js");
 const NO_POOL = !HAS_SAB ? "no SharedArrayBuffer" : poolSize(4) < 2 ? "no worker pool on this host" : false;
 
-test("the pool fills a spare canvas with the grey as RGB, whatever the spare held", { skip: NO_POOL }, async () => {
+test("the pool fills the canvas with the grey as RGB, whatever a spare held", { skip: NO_POOL }, async () => {
 	const { expandGray } = require("../lib/compare.js");
 	const n = 1000 * 600 + 17;
 	const gray = new Uint8Array(n);
@@ -169,23 +169,34 @@ test("the pool fills a spare canvas with the grey as RGB, whatever the spare hel
 	assert.equal(got.buffer, spare.buffer, "the spare, not a new buffer");
 	assert.deepEqual(taken, [got], "taken from the frame's scratch, to be handed back with it");
 	assert.ok(want.equals(Buffer.from(got.buffer, got.byteOffset, got.byteLength)));
+	got.fill(9);
 	giveShared(got);
+	// a canvas that leaves with the message: a new Buffer on a store of
+	// its own, which the inspector can move on to the Node-RED thread
+	const fresh = await expandGray(gray, n, 4);
+	assert.ok(Buffer.isBuffer(fresh) && fresh.buffer instanceof ArrayBuffer, "a Buffer on an ArrayBuffer");
+	assert.equal(fresh.byteOffset, 0);
+	assert.equal(fresh.buffer.byteLength, n * 3);
+	assert.ok(want.equals(fresh));
 });
 
-test("the overlay drawn on the pool's spare canvas is the one drawn on a fresh canvas", { skip: NO_POOL }, async () => {
+test("the overlay drawn on the pool's canvases is the one drawn on this thread's", { skip: NO_POOL }, async () => {
 	const golden = await prepareGolden(await sharp(labelSvg()).png().toBuffer(), CFG);
 	const frames = [
 		labelSvg('<rect x="300" y="500" width="90" height="60" fill="#000"/>'),
 		labelSvg('<circle cx="600" cy="900" r="40" fill="#000"/><rect x="200" y="300" width="4" height="4" fill="#666"/>'),
 	];
 	// png on the spare canvas, which the next frame takes again dirty; raw
-	// on a fresh one built on this thread, since it leaves with the message
+	// on a new one, since it leaves with the message; both filled by the
+	// pool, against one worker's, built on this thread
 	for (const svg of [...frames, frames[0]]) {
 		const frame = await sharp(svg).png().toBuffer();
 		const png = await compareFrame(frame, golden, { ...CFG, heatmapFormat: "png", thumbnailWidth: 0 });
 		const raw = await compareFrame(frame, golden, { ...CFG, heatmapFormat: "raw", thumbnailWidth: 0 });
+		const ref = await compareFrame(frame, golden, { ...CFG, heatmapFormat: "raw", thumbnailWidth: 0, workers: 1 });
 		const decoded = await sharp(png.heatmap).raw().toBuffer();
-		assert.ok(Buffer.from(raw.heatmap.data).equals(decoded), "the two canvases' overlays differ");
+		assert.ok(Buffer.from(ref.heatmap.data).equals(decoded), "the spare canvas's overlay differs");
+		assert.ok(Buffer.from(ref.heatmap.data).equals(Buffer.from(raw.heatmap.data)), "the new canvas's overlay differs");
 		assert.ok(png.printBlemish.regions.length + png.backgroundBlemish.regions.length > 0, "something drawn");
 	}
 });
