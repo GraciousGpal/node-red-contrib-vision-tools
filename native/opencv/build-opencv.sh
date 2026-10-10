@@ -41,7 +41,8 @@ set -eu
 src=$1
 prefix=$2
 jobs=${3:-$(getconf _NPROCESSORS_ONLN 2>/dev/null || echo 4)}
-# a fixed path: __FILE__ in OpenCV's error messages puts it into the binary
+# a fixed path: __FILE__ in OpenCV's error messages puts it into the
+# binary. One build at a time per host outside a container.
 work=/tmp/opencv-build
 rm -rf "$work" && mkdir -p "$work"
 tar xzf "$src" -C "$work"
@@ -58,9 +59,13 @@ MINGW* | MSYS* | CYGWIN*)
 	# needed) and its default flags, static CRT as node-gyp links the
 	# addon; MSVC contracts no FMA at its default /fp:precise
 	set -- -G "Visual Studio 17 2022" -A x64 -DBUILD_WITH_STATIC_CRT=ON
-	# cmake.exe takes Windows paths, not /tmp
+	# cmake.exe takes Windows paths, not /tmp. /tmp is the builder's own
+	# Temp folder here, so a Windows build carries that path (user name
+	# included) in its __FILE__ strings and is not byte-reproducible
+	# across machines; the Linux builds are.
 	srcdir=$(cygpath -m "$srcdir")
 	build=$(cygpath -m "$build")
+	prefix=$(cygpath -m "$prefix")
 	;;
 *)
 	flags="-ffp-contract=off -fno-fast-math -ffunction-sections -fdata-sections -fvisibility=hidden"

@@ -374,6 +374,9 @@ struct Golden {
 	cv::Mat small, des, prepared;
 	std::vector<cv::KeyPoint> kp;
 	bool preparedOk = false;
+	// what V8 is told this holds outside its heap: the grey copy, its
+	// small copy and the float ECC copy of that (ORB's data is small)
+	int64_t bytes() const { return static_cast<int64_t>(gray.total() * (1 + 5 * scale * scale)); }
 
 	void init() {
 		std::call_once(once, [this] {
@@ -384,7 +387,12 @@ struct Golden {
 	}
 };
 
-void deleteGolden(napi_env, void* data, void*) { delete static_cast<Golden*>(data); }
+void deleteGolden(napi_env env, void* data, void*) {
+	auto* golden = static_cast<Golden*>(data);
+	int64_t now;
+	napi_adjust_external_memory(env, -golden->bytes(), &now);
+	delete golden;
+}
 
 // createGolden(gray, w, h, scale) -> handle
 napi_value CreateGolden(napi_env env, napi_callback_info info) {
@@ -400,7 +408,13 @@ napi_value CreateGolden(napi_env env, napi_callback_info info) {
 	golden->gray = cv::Mat(h, w, CV_8UC1, g.data).clone();
 	golden->scale = scale;
 	napi_value handle;
-	napi_create_external(env, golden, deleteGolden, nullptr, &handle);
+	if (napi_create_external(env, golden, deleteGolden, nullptr, &handle) != napi_ok) {
+		delete golden;
+		return fail(env, "createGolden: no handle");
+	}
+	// so the GC weighs a golden by what it holds, not by its handle
+	int64_t now;
+	napi_adjust_external_memory(env, golden->bytes(), &now);
 	return handle;
 }
 
@@ -575,6 +589,21 @@ napi_value BuildInfo(napi_env env, napi_callback_info) {
 	return r;
 }
 
+// A C++ exception reaching N-API would terminate the process (Node-RED
+// with it): an allocation that fails on the JS thread - a golden's copy,
+// a job - becomes a JS error instead.
+template <napi_callback F>
+napi_value guarded(napi_env env, napi_callback_info info) {
+	try {
+		return F(env, info);
+	} catch (const std::exception& e) {
+		napi_throw_error(env, "ERR_VT_CV", e.what());
+	} catch (...) {
+		napi_throw_error(env, "ERR_VT_CV", "unknown native error");
+	}
+	return nullptr;
+}
+
 }  // namespace
 
 NAPI_MODULE_INIT() {
@@ -582,8 +611,9 @@ NAPI_MODULE_INIT() {
 		const char* name;
 		napi_callback fn;
 	} fns[] = {
-	    {"cvtColor", CvtColor}, {"resize", Resize},       {"filter", Filter},       {"rotate", Rotate},
-	    {"createGolden", CreateGolden}, {"align", Align}, {"buildInfo", BuildInfo},
+	    {"cvtColor", guarded<CvtColor>},         {"resize", guarded<Resize>}, {"filter", guarded<Filter>},
+	    {"rotate", guarded<Rotate>},             {"createGolden", guarded<CreateGolden>},
+	    {"align", guarded<Align>},               {"buildInfo", guarded<BuildInfo>},
 	};
 	for (const auto& f : fns) {
 		napi_value v;

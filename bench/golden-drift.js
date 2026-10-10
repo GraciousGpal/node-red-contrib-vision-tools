@@ -79,10 +79,16 @@ function load(file) {
 	for (const line of fs.readFileSync(file, "utf8").split("\n")) {
 		if (!line) continue;
 		const r = JSON.parse(line);
-		out.set(`${r.w}|${r.named}|${r.file}|${r.iter}`, r);
+		const key = `${r.w}|${r.named}|${r.file}|${r.iter}`;
+		// the bench keys fixtures by basename: two with one name would
+		// compare against each other's results
+		if (out.has(key)) throw new Error(`${file}: ${key} twice`);
+		out.set(key, r);
 	}
 	return out;
 }
+
+const HEATMAPS = ["heatmap", "printHeatmap", "backgroundHeatmap", "toneHeatmap", "speckHeatmap"];
 
 function leaves(value, prefix, out) {
 	if (value && typeof value === "object") {
@@ -111,6 +117,7 @@ function main() {
 	const fields = new Map();
 	const breaches = [];
 	const regionMoves = new Set();
+	const heatmapMoves = new Map();
 	let compared = 0;
 	for (const [key, a] of ref) {
 		const b = cand.get(key);
@@ -119,6 +126,13 @@ function main() {
 			continue;
 		}
 		compared++;
+		// which debug stages and heat maps a frame produced is a property
+		// of its route and settings: the same, or something else changed
+		if (JSON.stringify(a.stages) !== JSON.stringify(b.stages)) breaches.push(`${key}: stages ${a.stages} -> ${b.stages}`);
+		for (const h of HEATMAPS) {
+			if ((a[h] == null) !== (b[h] == null)) breaches.push(`${key}: ${h} present in one run only`);
+			else if (a[h] !== b[h]) heatmapMoves.set(h, (heatmapMoves.get(h) || 0) + 1);
+		}
 		const la = leaves(a.result, "", new Map());
 		const lb = leaves(b.result, "", new Map());
 		for (const path of new Set([...la.keys(), ...lb.keys()])) {
@@ -133,7 +147,13 @@ function main() {
 			const d = numeric ? Math.abs(u - v) : Infinity;
 			s.max = Math.max(s.max, d);
 			fields.set(f, s);
-			if (/Blemish\.regions/.test(f)) {
+			const region = /^\.(\w+Blemish)\.regions/.exec(f);
+			if (region) {
+				// allowed only while that check's own verdict holds
+				const pass = `.${region[1]}.pass`;
+				if (la.get(pass) === undefined || la.get(pass) !== lb.get(pass)) {
+					breaches.push(`${key}: ${path} moved and ${pass} did not hold`);
+				}
 				regionMoves.add(key);
 				continue;
 			}
@@ -149,6 +169,9 @@ function main() {
 		const bound = BOUNDS[f];
 		console.log(`  ${String(s.frames).padStart(5)} moved  ${f.padEnd(40)} max ${s.max === Infinity ? "(changed)" : s.max.toPrecision(3)}${bound === undefined ? "" : `  bound ${bound}`}`);
 	}
+	// a heat map follows the alignment pixel for pixel, so any engine
+	// change moves it; counted, not failed
+	for (const [h, n] of heatmapMoves) console.log(`  ${String(n).padStart(5)} moved  ${h} (bytes)`);
 	if (regionMoves.size) {
 		console.log(`blemish regions moved on ${regionMoves.size} samples, every check's verdict held:`);
 		for (const key of regionMoves) console.log(`  ${key}`);

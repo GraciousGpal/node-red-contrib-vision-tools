@@ -9,8 +9,10 @@
 # seconds). The OpenCV install is kept in $VISION_CV_CACHE (default
 # .opencv-cache/ at the repo root, ignored by git) under a key of the
 # image digest, the OpenCV tarball's SHA-256 and build-opencv.sh's own
-# hash, so only a change to one of those rebuilds it; CI caches that
-# directory on the same key.
+# hash, so only a change to one of those rebuilds it (a CI job would cache
+# the directory on the same key; none does yet). VISION_CV_CACHE is a
+# path relative to the repo root, without spaces: the container sees it
+# under the repo's mount.
 #
 # The OpenCV source is the 5.0.0 release tarball from GitHub, checked
 # against the SHA-256 below before anything is built from it.
@@ -34,6 +36,9 @@ OPENCV_VERSION=5.0.0
 OPENCV_SHA256=b0528f5a1d379d59d4701cb28c36e22214cc51cf64594e5b56f2d3e6c0233095
 cd "$(dirname "$0")/../.."
 cache=${VISION_CV_CACHE:-.opencv-cache}
+case "$cache" in
+/* | *:* | *" "* | *..*) echo "prebuild-linux.sh: VISION_CV_CACHE must be a relative path inside the repo, without spaces" >&2; exit 2 ;;
+esac
 mkdir -p "$cache" "prebuilds/linux-$arch"
 tarball=$cache/opencv-$OPENCV_VERSION.tar.gz
 if [ ! -f "$tarball" ]; then

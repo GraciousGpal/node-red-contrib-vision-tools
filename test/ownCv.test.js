@@ -163,17 +163,50 @@ test("imageAlign recovers a shift on a 2048px golden at full scale", { skip }, a
 });
 
 test("imageAlign keeps one golden handle per golden buffer and scale", { skip }, async () => {
+	const cv = own.load();
+	const create = cv.createGolden;
+	let created = 0;
+	cv.createGolden = (...args) => {
+		created++;
+		return create(...args);
+	};
+	try {
+		const golden = texture(labelFrame(400, 300, 0, 200, 150, 1));
+		const target = shifted(golden, 400, 300, 1, 5, 3);
+		const a = await own.imageAlign(golden, target, 0.5, 30, 1e-3, ...ALIGN_TAIL, "auto", "orb");
+		const b = await own.imageAlign(golden, target, 0.5, 30, 1e-3, ...ALIGN_TAIL, "auto", "orb");
+		assert.deepStrictEqual(a.transformMatrix, b.transformMatrix);
+		assert.strictEqual(created, 1);
+		await own.imageAlign(golden, target, 1, 30, 1e-3, ...ALIGN_TAIL, "auto", "orb");
+		assert.strictEqual(created, 2, "another scale is another handle");
+		// a different golden with the same first, middle and last 256 bytes -
+		// rosepetal's cache key - gets its own features
+		const other = rawImage(Buffer.from(golden.data), 400, 300, 1, "GRAY");
+		for (let y = 10; y < 90; y++) other.data.fill(255, y * 400 + 100, y * 400 + 300);
+		for (const start of [0, other.data.length / 2, other.data.length - 256]) {
+			assert.ok(other.data.subarray(start, start + 256).equals(golden.data.subarray(start, start + 256)));
+		}
+		await own.imageAlign(other, target, 0.5, 30, 1e-3, ...ALIGN_TAIL, "auto", "orb");
+		assert.strictEqual(created, 3);
+	} finally {
+		cv.createGolden = create;
+	}
+});
+
+test("an imageAlign started while a reply is being read gets its own buffer", { skip }, async () => {
 	const golden = texture(labelFrame(400, 300, 0, 200, 150, 1));
-	const target = shifted(golden, 400, 300, 1, 5, 3);
-	const a = await own.imageAlign(golden, target, 0.5, 30, 1e-3, ...ALIGN_TAIL, "auto", "orb");
-	const b = await own.imageAlign(golden, target, 0.5, 30, 1e-3, ...ALIGN_TAIL, "auto", "orb");
-	assert.deepStrictEqual(a.transformMatrix, b.transformMatrix);
-	// a different golden with the same first, middle and last 256 bytes -
-	// rosepetal's cache key - gets its own features
-	const other = rawImage(Buffer.from(golden.data), 400, 300, 1, "GRAY");
-	for (let y = 100; y < 200; y++) other.data.fill(255, y * 400 + 100, y * 400 + 300);
-	const c = await own.imageAlign(other, target, 0.5, 30, 1e-3, ...ALIGN_TAIL, "auto", "orb");
-	assert.notDeepStrictEqual(c.transformMatrix, a.transformMatrix);
+	const t1 = shifted(golden, 400, 300, 1, 5, 3);
+	const t2 = shifted(golden, 400, 300, 1, -9, 7);
+	await own.imageAlign(golden, t1, 0.5, 30, 1e-3, ...ALIGN_TAIL, "auto", "orb");
+	await new Promise((r) => setImmediate(r)); // the reply buffer is free again
+	let second;
+	const first = await own.imageAlign(golden, t1, 0.5, 30, 1e-3, ...ALIGN_TAIL, "auto", "orb").then((r) => {
+		second = own.imageAlign(golden, t2, 0.5, 30, 1e-3, ...ALIGN_TAIL, "auto", "orb");
+		return r;
+	});
+	const before = Buffer.from(first.image.data);
+	await second;
+	assert.ok(Buffer.from(first.image.data).equals(before), "the first reply's image was overwritten");
 });
 
 test("imageAlign refuses what it does not implement", { skip }, async () => {
