@@ -189,10 +189,9 @@ struct CvtColorJob : Job {
 	cv::Mat src, dst;
 	int code;
 	void execute() override {
-		cv::Mat out;
+		cv::Mat out = dst;  // the right shape already, so written in place
 		cv::cvtColor(src, out, code);
-		if (out.size() != dst.size() || out.type() != dst.type()) throw std::runtime_error("cvtColor: unexpected output shape");
-		out.copyTo(dst);
+		if (out.data != dst.data) throw std::runtime_error("cvtColor: the conversion does not give the output asked for");
 	}
 };
 

@@ -112,6 +112,9 @@ authoritative list.
 | `lib/engine.js` | picks the OpenCV engine (native addon or opencv.js WASM), honours `VISION_TOOLS_ENGINE`, warms it up |
 | `lib/cvjs.js` | the cpp-bridge op surface on `@techstark/opencv-js`: colorConvert, resize, filter (otsu/edge), crop, rotate — raw in, raw out |
 | `lib/cvjsAlign.js` | `imageAlign` on opencv.js: ORB + RANSAC affine, ECC refinement, one warp into the reference frame |
+| `lib/ownCv.js` | prototype, `VISION_TOOLS_ENGINE=own` only: the same op surface on our own addon over a minimal static OpenCV 5 (`native/opencv/`); codecs through sharp |
+| `native/opencv/` | `vision-cv.cc` (plain N-API: cvtColor, resize, filter, rotate, and rosepetal's `imageAlign` with the golden's features kept per golden), `build-opencv.sh` (the six-module static OpenCV), `build.sh` / `binding.gyp` (the addon), `prebuild-linux.sh` (both in the pinned images) |
+| `bench/golden-drift.js` | bounds the drift between two `golden-container-bench --dump` runs: verdicts, grades, routes and check verdicts exact, every other number within a stated bound |
 | `lib/nativeSeed.js` | optional OpenCV-solved alignment: `seedTransform` gives the JS search a starting point, `alignFrame` returns the already-warped golden-sized frame; both return null on failure so the JS path stays the fallback |
 | `barcode-locate.js` | Node-RED wiring for the barcode-locate node: scans pre-defined regions, then the full image if nothing is found; one message per barcode, `msg.regions`/`msg.mode` overrides. Regions come from the list or from the golden's profile (resolved from `msg.result.profile.path`, `msg.profile` or `profilePath`, mapped by `lib/goldenRegions.js`, cached per profile and payload size), and each result carries `expectedText`/`textMatches` against the artwork |
 | `lib/locate.js` | barcode location and decode on zxing-wasm (zxing-cpp as WASM): decodes the union bounding box of the regions via sharp's extract-on-load, whole-frame fallback; plain functions over Buffers or raw pixels (`options.raw`). Loads the package's own `.wasm` at require time so it never fetches from the CDN; every result carries `symbol` (zxing's corner bbox, full-image px), and one code read through overlapping regions is kept once |
@@ -1247,6 +1250,25 @@ WASM implementation recovers the shift at every size tested.
 
 `bench/engine-compare.js` runs both, on the same frames, on whichever
 host has them.
+
+**A third engine, opt-in: our own OpenCV 5.** `VISION_TOOLS_ENGINE=own`
+selects `lib/ownCv.js` over `native/opencv/vision-cv.cc`, and nothing
+else does - "auto" never picks it. It exists because the rosepetal addon
+is built for AVX2 (an illegal instruction on an older x64 CPU), has no
+win32 build, and finds a golden's cached ORB features by hashing 768 of
+its bytes. Ours is a static OpenCV 5.0.0 of six modules (core, imgproc,
+features, flann, geometry, video - 5.x's names for 4.x's features2d and
+calib3d), built for each arch's baseline (x86-64-v2, NEON) with the AVX2
+and AVX-512 loops chosen at run time, without fast-math or FMA
+contraction, in the same pinned images as the kernels; MSVC builds it on
+Windows. `imageAlign` is rosepetal's algorithm for the arguments
+`lib/nativeSeed.js` passes, with the golden's small copy, features and
+ECC input made once per golden buffer (`createGolden`) and the frame's
+working copies kept between calls. Results move a little against
+rosepetal's OpenCV 4 build - the alignment by hundredths of a pixel, not
+one verdict on the rig's 162 frames; `bench/golden-drift.js` holds a
+re-baseline to that. No binary ships yet: `VISION_TOOLS_CV_ADDON` points
+at a local build.
 
 ### Confidence gates: a miss is safer than a wrong crop
 

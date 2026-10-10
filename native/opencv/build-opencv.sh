@@ -5,9 +5,16 @@
 #
 #   sh native/opencv/build-opencv.sh SRC.tar.gz PREFIX [JOBS]
 #
-# Runs inside the pinned image (native/opencv/prebuild-linux.sh), or on any
-# Linux or macOS host with cmake and a C++17 compiler. SRC is the
-# opencv-5.0.0 source tarball; PREFIX receives include/ and lib/.
+# Runs inside the pinned image (native/opencv/prebuild-linux.sh), on any
+# Linux or macOS host with cmake and a C++17 compiler, or on Windows from
+# git-bash with cmake and Visual Studio 2022 (MSVC, static CRT). SRC is
+# the opencv-5.0.0 source tarball; PREFIX receives the headers and the
+# static libraries (include/opencv5 and lib/ on Unix, include/ and
+# x64/vc17/staticlib/ on Windows).
+#
+# Measured on a 16-thread Ryzen 7840U: 105 s in manylinux2014 (GCC 10),
+# 175 s in musllinux_1_2 (GCC 14), 99 s with MSVC 19.44; 35 MB of static
+# libraries. Two clean builds in one image give the same addon bytes.
 #
 # Modules: core, imgproc, features (4.x features2d: ORB, BFMatcher),
 # flann, geometry (4.x calib3d's estimateAffine2D and USAC), video
@@ -39,17 +46,31 @@ work=/tmp/opencv-build
 rm -rf "$work" && mkdir -p "$work"
 tar xzf "$src" -C "$work"
 srcdir=$(ls -d "$work"/opencv-*)
+build=$work/build
 case "$(uname -m)" in
 x86_64 | amd64) cpu="-DCPU_BASELINE=SSE4_2;POPCNT -DCPU_DISPATCH=AVX;FP16;AVX2;AVX512_SKX" ;;
 aarch64 | arm64) cpu="-DCPU_BASELINE=NEON;FP16 -DCPU_DISPATCH=NEON_DOTPROD;NEON_FP16" ;;
 *) echo "build-opencv.sh: no CPU settings for $(uname -m)" >&2; exit 2 ;;
 esac
-flags="-ffp-contract=off -fno-fast-math -ffunction-sections -fdata-sections -fvisibility=hidden"
+case "$(uname -s)" in
+MINGW* | MSYS* | CYGWIN*)
+	# Windows, from git-bash: MSVC through its own generator (no vcvars
+	# needed) and its default flags, static CRT as node-gyp links the
+	# addon; MSVC contracts no FMA at its default /fp:precise
+	set -- -G "Visual Studio 17 2022" -A x64 -DBUILD_WITH_STATIC_CRT=ON
+	# cmake.exe takes Windows paths, not /tmp
+	srcdir=$(cygpath -m "$srcdir")
+	build=$(cygpath -m "$build")
+	;;
+*)
+	flags="-ffp-contract=off -fno-fast-math -ffunction-sections -fdata-sections -fvisibility=hidden"
+	set -- -DCMAKE_BUILD_TYPE=Release -DCMAKE_C_FLAGS="$flags" -DCMAKE_CXX_FLAGS="$flags"
+	;;
+esac
 start=$(date +%s)
 # shellcheck disable=SC2086 # $cpu is a list of arguments
-cmake -S "$srcdir" -B "$work/build" -DCMAKE_BUILD_TYPE=Release \
+cmake -S "$srcdir" -B "$build" "$@" \
 	-DCMAKE_INSTALL_PREFIX="$prefix" -DBUILD_SHARED_LIBS=OFF -DENABLE_PIC=ON \
-	-DCMAKE_C_FLAGS="$flags" -DCMAKE_CXX_FLAGS="$flags" \
 	-DBUILD_LIST=core,imgproc,features,flann,geometry,video \
 	$cpu -DENABLE_FAST_MATH=OFF \
 	-DWITH_IPP=OFF -DWITH_OPENCL=OFF -DWITH_TBB=OFF -DWITH_OPENMP=OFF -DWITH_PTHREADS_PF=ON \
@@ -64,8 +85,8 @@ cmake -S "$srcdir" -B "$work/build" -DCMAKE_BUILD_TYPE=Release \
 	-DOPENCV_GENERATE_PKGCONFIG=OFF -DBUILD_INFO_SKIP_TIMESTAMP=ON -DBUILD_INFO_SKIP_SYSTEM_VERSION=ON \
 	>"$work/cmake.log" 2>&1 || { tail -40 "$work/cmake.log"; exit 1; }
 grep -E "Baseline|Dispatched|requested|To be built|Parallel framework|ZLib" "$work/cmake.log" || true
-cmake --build "$work/build" --target install -j "$jobs" >"$work/build.log" 2>&1 || { tail -40 "$work/build.log"; exit 1; }
+cmake --build "$build" --config Release --target install -j "$jobs" >"$work/build.log" 2>&1 || { tail -40 "$work/build.log"; exit 1; }
 end=$(date +%s)
 echo "opencv built in $((end - start)) s"
-ls -l "$prefix"/lib/*.a "$prefix"/lib/opencv5/3rdparty/*.a 2>/dev/null || ls -lR "$prefix/lib"
+find "$prefix" -name '*.a' -o -name '*.lib' | xargs ls -l
 rm -rf "$work"

@@ -8,6 +8,24 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Added
 
+- **A prototype OpenCV engine of our own, opt-in (`VISION_TOOLS_ENGINE=own`).**
+  `lib/ownCv.js` over `native/opencv/vision-cv.cc`: plain N-API over a
+  static OpenCV 5.0.0 of six modules, no codecs (sharp decodes and
+  encodes), built for the x86-64-v2 / NEON baseline with the AVX2 and
+  AVX-512 loops chosen at run time, so unlike the rosepetal addon it needs
+  no AVX2 CPU, and it builds with MSVC for Windows. `imageAlign` keeps each
+  golden's ORB features per golden buffer instead of finding them again
+  through a hash of 768 of its bytes. "auto" never selects it and no
+  binary ships yet (`VISION_TOOLS_CV_ADDON` loads a local build), so
+  nothing changes by default. On the rig (12 workers, all 162 frames
+  twice, rosepetal and own interleaved ABBA): good frame 45.3 → 36.3 ms at
+  the median, 59 → 47 ms at p95, 66 → 52 ms at p99; the OpenCV alignment
+  16.4 → 8.5 ms. Verdicts unchanged (148 pass / 14 fail, 0 grade or route
+  changes); the alignment moves by at most 0.058 px, 0.0018° and 0.00007
+  in scale, the local alignment's worst tile by 2.07 px, and blemish
+  regions on 4 failing parts, which still fail. `bench/golden-drift.js`
+  bounds those differences for a re-baseline.
+
 - **Native kernels for `golden-compare`'s pool.** The local alignment's
   tile search and resampling, the binarization with the tone comparison,
   the tone comparison alone and the one-pass diff have native twins

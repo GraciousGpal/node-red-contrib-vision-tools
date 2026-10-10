@@ -19,7 +19,9 @@ case "$(uname -m)" in
 x86_64 | amd64) march="-msse4.2 -mpopcnt" ;; # x86-64-v2; GCC 10 has no -march name for it
 *) march="" ;;
 esac
+# include/opencv5 on Unix, include on Windows
 cvinc=$prefix/include/opencv5
+[ -d "$cvinc" ] || cvinc=$prefix/include
 # OpenCV's modules, then the 3rdparty libraries they use, in one group so
 # the link order does not matter
 libs=$(find "$prefix" -name 'libopencv_*.a' | sort)
@@ -33,11 +35,16 @@ Darwin)
 	strip -x "$out"
 	;;
 *)
+	# exports: N-API's two entry points and nothing else - not even the
+	# libstdc++ template instances the static runtime would otherwise leak
+	map=$(mktemp)
+	printf '{ global: napi_register_module_v1; node_api_module_get_api_version_v1; local: *; };\n' >"$map"
 	# shellcheck disable=SC2086
 	$CXX $flags -I"$inc" -I"$cvinc" -o "$out" "$here/vision-cv.cc" \
 		-Wl,--start-group $libs $third -Wl,--end-group \
-		-Wl,--gc-sections -Wl,--exclude-libs,ALL -Wl,--as-needed \
+		-Wl,--gc-sections -Wl,--exclude-libs,ALL -Wl,--as-needed -Wl,--version-script="$map" \
 		-static-libstdc++ -static-libgcc -lpthread -ldl
+	rm -f "$map"
 	strip --strip-unneeded "$out"
 	;;
 esac

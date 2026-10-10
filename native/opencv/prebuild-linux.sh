@@ -15,7 +15,11 @@
 # The OpenCV source is the 5.0.0 release tarball from GitHub, checked
 # against the SHA-256 below before anything is built from it.
 #
-# Writes prebuilds/linux-<arch>/vision-cv.<libc>.node.
+# Writes prebuilds/linux-<arch>/vision-cv.<libc>.node. Built and tested so
+# far: x64 glibc and musl. The arm64 images are the kernels' and untried
+# for this build. Until the binaries ship, one left under prebuilds/ is
+# not in prebuilds/manifest.json and fails test/nativeKernelsLoader.test.js:
+# move it out, or point VISION_TOOLS_CV_ADDON at it from elsewhere.
 set -eu
 arch=$1
 libc=$2
@@ -53,8 +57,8 @@ export MSYS_NO_PATHCONV=1
 host=$(command -v cygpath >/dev/null 2>&1 && cygpath -m "$PWD" || echo "$PWD")
 docker run --rm -v "$host:/w" "$image" sh -c "
 	set -e
-	if [ ! -d /w/$cache/$prefix/lib ]; then
-		sh /w/native/opencv/build-opencv.sh /w/$tarball /opt/opencv
+	if [ ! -f /w/$cache/$prefix/.complete ]; then
+		sh /w/native/opencv/build-opencv.sh /w/$tarball /opt/opencv && touch /opt/opencv/.complete
 		rm -rf /w/$cache/$prefix.part && cp -r /opt/opencv /w/$cache/$prefix.part
 		mv /w/$cache/$prefix.part /w/$cache/$prefix
 	else

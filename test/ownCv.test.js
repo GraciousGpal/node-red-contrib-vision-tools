@@ -151,6 +151,17 @@ test("imageAlign recovers a known shift and warps the frame onto the golden", { 
 	}
 });
 
+test("imageAlign recovers a shift on a 2048px golden at full scale", { skip }, async () => {
+	// the rosepetal bridge answers identity, success true, from ~1536px up
+	// (ARCHITECTURE.md, "A native imageAlign limit worth knowing")
+	const golden = texture(labelFrame(2048, 1536, 0, 1400, 1000, 1), 900);
+	const target = shifted(golden, 2048, 1536, 1, 11, -6);
+	const result = await own.imageAlign(golden, target, 1, 50, 1e-4, ...ALIGN_TAIL, "auto", "orb");
+	assert.strictEqual(result.success, true);
+	const m = result.transformMatrix.matrix2x3;
+	assert.ok(Math.abs(m[2] - 11) < 1 && Math.abs(m[5] + 6) < 1, `shift ${m}`);
+});
+
 test("imageAlign keeps one golden handle per golden buffer and scale", { skip }, async () => {
 	const golden = texture(labelFrame(400, 300, 0, 200, 150, 1));
 	const target = shifted(golden, 400, 300, 1, 5, 3);

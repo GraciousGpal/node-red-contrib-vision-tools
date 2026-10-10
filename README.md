@@ -128,6 +128,11 @@ Set `VISION_TOOLS_ENGINE=native` or `VISION_TOOLS_ENGINE=opencv-js` to pin
 one — a pinned engine that cannot load is an error, never a silent
 substitution.
 
+A third engine is in prototype: `VISION_TOOLS_ENGINE=own` runs our own
+addon over a minimal OpenCV 5 (`native/opencv/`, no AVX2 requirement,
+Windows included). It is never picked automatically and ships no binary
+yet; `VISION_TOOLS_CV_ADDON=/path/to/vision-cv.node` loads a local build.
+
 On a host with both installed, the two produce **identical** `label-crop`
 results — `node bench/engine-parity.js` sweeps angles and label shapes and
 every field matches exactly. The one deliberate difference is the
