@@ -103,9 +103,9 @@ failing a part:
 Which one answers is `lib/engine.js`'s decision: opencv5 where its binary
 loads, opencv.js otherwise. `VISION_TOOLS_ENGINE=own` or `=opencv-js`
 pins one - a pinned engine that cannot load is an error, never a silent
-substitution (`native`, the rosepetal addon's name up to 1.2, is read as
-`auto`, so an old setting keeps the fallback). `golden-compare` and
-`label-crop` log which engine they run on at startup, and **warn when it
+substitution (`native`, which named the previous engine up to 1.2, is
+read as `auto`, so an old setting keeps the fallback). `golden-compare`
+and `label-crop` log which engine they run on at startup, and **warn when it
 is opencv.js because opencv5 did not load**, with the loader's reason:
 opencv.js is slower, and its alignment is a different implementation, so
 verdicts near a threshold can differ from a rig tuned on opencv5.
@@ -116,9 +116,11 @@ bytes from `colorConvert`, `resize`, `filter` and `crop`
 (`test/opencv5Engine.test.js`). `golden-compare`'s alignment is where they
 differ: `lib/cvjsAlign.js` is its own implementation of the same idea.
 
-Moving from the rosepetal engine (up to 1.2) to opencv5 moves results a
-little: no verdict changed on the 162-frame rig reference set, but 7 of
-253 synthetic frames built to sit at a threshold flipped (CHANGELOG).
+Moving from the previous engine (a third-party OpenCV 4 addon, up to 1.2)
+to opencv5 moves results a little: no verdict changed on the 162-frame
+rig reference set, but of 253 synthetic frames built to sit at a
+threshold, 7 flipped under Sauvola thresholding (none at the other
+defaults; CHANGELOG).
 Re-baseline a rig before relying on it: dump its own set with
 `bench/golden-container-bench.js --dump` before and after, and check
 the two with `bench/golden-drift.js`.
@@ -130,6 +132,11 @@ Measured in the rig's Alpine x64 container (Node 24), same frames
 |---|---|---|
 | `label-crop`, 12MP frame | 47ms | 210ms |
 | `imageAlign`, 1024px | 12ms | 51ms |
+
+On opencv5 a good frame of the rig's 162-frame set takes 42.7-46.1 ms at
+the median in the container bench, and 51 ms median, 60 ms p95 and 64 ms
+p99 on the live flow, driven by its own injects with nothing else running
+on the host (`bench/golden-performance.md`).
 
 `@graciousstar/opencv5` is published on npm and developed in its own
 repository, [GraciousGpal/opencv5](https://github.com/GraciousGpal/opencv5),
@@ -1118,10 +1125,9 @@ homography (one saved before this node existed — re-run
 default) and writes the result to its output property. Each side is
 **× factor** (`round(side × factor)`), **pixels**, or **auto** (from the
 other side, keeping the aspect ratio: `round(otherOut × side / otherIn)`)
-- the rules of the `rp-resize` node from
-`@rosepetal/node-red-contrib-image-tools` it replaces, so a flow migrated
-from it gets the same sizes. Bilinear (`INTER_LINEAR`) on the OpenCV
-engine, so the pixels are the ones `golden-compare`'s own working copies
+- the rules of the `rp-resize` node from another package that earlier
+flows used, so a flow migrated from it gets the same sizes. Bilinear
+(`INTER_LINEAR`) on the OpenCV engine, so the pixels are the ones `golden-compare`'s own working copies
 and `bench/golden-container-bench.js` produce.
 
 The input can be a raw `{ data, width, height, channels, colorSpace }`
@@ -1132,9 +1138,15 @@ Buffer. An input that is not an image, or a size that cannot be made,
 stops the message with an error: a frame at the wrong scale would be
 graded against the wrong golden.
 
-`scripts/migrate-rp-nodes.js` rewrites a flows.json's `rp-resize` nodes
-into this node (same ids, positions and wires) and removes
-`rp-heat-diff` debug views.
+`scripts/migrate-rp-nodes.js` writes a copy of a flows.json with its
+`rp-resize` nodes turned into this node (same ids, positions and wires)
+and its `rp-heat-diff` debug views (from the same package) removed, and
+refuses - writing nothing - when a node cannot be carried over exactly.
+It is in the repository, not the npm package:
+
+```bash
+node scripts/migrate-rp-nodes.js flows.json flows.migrated.json
+```
 
 ## How `label-crop` works
 
@@ -1897,5 +1909,6 @@ the two are then not solving the same problem.
 
 Apache-2.0 — see [LICENSE](LICENSE).
 
-`sharp`, `zxing-wasm` and the optional OpenCV engines are separate
-packages under their own licences.
+`sharp`, `zxing-wasm` and the OpenCV engines (`@graciousstar/opencv5`
+and the optional `@techstark/opencv-js`) are separate packages under
+their own licences.

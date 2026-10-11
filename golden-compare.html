@@ -451,7 +451,7 @@
         >
         <span class="node-input-hint" style="margin-left:10px; color:#999;"
           >starts the pinned search from an ORB+ECC alignment measured by the
-          optional OpenCV engine instead of the staged sweeps. Only the angle and
+          OpenCV engine instead of the staged sweeps. Only the angle and
           placement come from the seed - the trained magnifications, the pixel
           polish and the score are unchanged, and a seed outside the physical
           bounds is discarded in favour of the sweeps. Inert without the engine
@@ -1063,8 +1063,8 @@
     are applied fresh per frame and don't need a re-decode.
   </p>
   <p>
-    <i>Native alignment seed</i> (off by default) lets the optional OpenCV
-    engine propose the angle and placement that start the pinned search; the
+    <i>Native alignment seed</i> (off by default) lets the OpenCV engine
+    propose the angle and placement that start the pinned search; the
     trained magnifications, the pixel polish and the score stay in JS, and
     without the engine or a trained transform the flag does nothing.
   </p>

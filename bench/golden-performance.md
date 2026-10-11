@@ -2,15 +2,28 @@
 
 ## Our own OpenCV 5 engine (October 2026)
 
+As shipped (opencv5 copies every input before it queues an op): in two
+locked, interleaved pairs against 1.2, a good frame is about the same at
+the median (1.2: 43.6-46.8 ms, opencv5: 42.7-46.1 ms) and faster in the
+tail (p95 57.7-62.5 → 52.8-57.0 ms, p99 67.6-68.8 → 62.7-64.4 ms); the
+OpenCV alignment stage 14.7-17.2 → 10.4-13.1 ms. The live flow, after
+its `rp-resize` nodes were migrated to `image-resize` and driven by its
+own good- and bad-frame injects with the host otherwise idle: good frames
+**51 ms median, 60 ms p95, 64 ms p99**; 148/148 pass, 14/14 fail.
+
+The copy costs about 1-2 ms a frame. The first measurement below is of
+an earlier build that shared the caller's buffers with the running op,
+which a caller could change or free under it.
+
 Good frames: **46.4 → 37.7 ms median, 61.0 → 47.4 ms p95, 68.8 → 55.9 ms
 p99**; the OpenCV alignment stage 17.3 → 9.7 ms. Main (2782f0e, the
-rosepetal engine) against the branch (`@graciousstar/opencv5`, loaded from
+previous engine) against the branch (`@graciousstar/opencv5`, loaded from
 its manifest-checked prebuild), interleaved ABBA ABBA: four runs of each,
 every run all 162 frames twice (never one frame twice in a row), one job
 on the host at a time. Per run, main: 46.1 / 47.0 / 46.2 / 46.3 ms median,
 60.1-61.8 p95, 66.1-71.1 p99; opencv5: 37.7 / 38.0 / 37.1 / 37.8 median,
 45.1-49.2 p95, 51.2-59.3 p99. The bench decoded and halved every fixture
-through opencv5 for both sides (it no longer needs the rosepetal bridge),
+through opencv5 for both sides (it no longer needs the previous engine),
 so both saw the same frames.
 
 Verdicts: 148 pass / 14 fail on every run, no grade or route change. Each
@@ -28,10 +41,10 @@ That is this rig's set. Sets built to sit at thresholds do flip: on
 `bench/synth/generate.js`'s default 253 frames, 7 verdicts under Sauvola
 thresholding (4 to pass, 3 to fail) and none at the other defaults; on a
 smaller 87-frame set, 5. The difference enters through the alignment's
-float arithmetic - an OpenCV 4.9 build with rosepetal's AVX2 baseline and
-fast-math reproduced it bit for bit, the same build without them already
-moved - so a rig is re-baselined with `bench/golden-drift.js` before it
-relies on the new engine.
+float arithmetic - an OpenCV 4.9 build with the previous engine's AVX2
+baseline and fast-math reproduced it bit for bit, the same build without
+them already moved - so a rig is re-baselined with `bench/golden-drift.js`
+before it relies on the new engine.
 
 An earlier build of the same addon that dispatched AVX2/AVX-512 at run
 time aligned in 8.5 ms instead of 9.6, but an SSE4.2-only run of it moved
@@ -213,7 +226,7 @@ Inputs reproduce the saved comparison tab:
 
 - `Demo_Good_60.pdf`, first page, 400 dpi, RAW, rotation 270, then the native 0.5x resize.
 - Resulting golden: **1475 × 2125 × 4**, SHA-256 `cfafbcb1a7d93658d83b8254084b9b84f71ef2c44c301e68c8b85dd3e9c35d3f`.
-- Camera files from `/data/Inspection/sample_images/{good,bad}`, decoded to raw RGB and resized 0.5x through the native bridge.
+- Camera files from `/data/Inspection/sample_images/{good,bad}`, decoded to raw RGB and resized 0.5x through the native OpenCV engine of the time.
 - **148 good-folder images and 14 bad-folder images**.
 - Sequential inputs, no overlapping comparisons; first comparison and an additional warmup excluded from timing. Full-set runs measured each image once; the initial 10-image sweeps measured each image three times.
 

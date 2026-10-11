@@ -8,19 +8,21 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Changed
 
-- **The OpenCV engine is now our own, and the rosepetal addon is gone.**
+- **The OpenCV engine is now our own, and the previous OpenCV addon is
+  gone.**
   `label-crop` and `golden-compare`'s OpenCV alignment run on
   [`@graciousstar/opencv5`](https://github.com/GraciousGpal/opencv5) 0.1, a
   new dependency: a small N-API addon over a static OpenCV 5.0.0 with a
   prebuilt binary for each of seven platforms (Linux x64 and arm64, glibc
   2.17+ and musl each; macOS x64 and arm64; Windows x64) and no install
   script.
-  `@rosepetal/node-red-contrib-image-tools` is no longer a dependency, is
-  not installed, and nothing uses it. Where no opencv5 binary loads, the
+  The previous engine - the OpenCV 4 addon of a third-party Node-RED
+  package - is no longer a dependency, is not installed, and nothing uses
+  it. Where no opencv5 binary loads, the
   engine falls back to `@techstark/opencv-js` as before.
   `VISION_TOOLS_ENGINE` takes `auto`, `own` or `opencv-js`; the old value
   `native` is read as `auto`, so it keeps the fallback.
-  - **Why:** the rosepetal binary needed an AVX2 CPU (an illegal
+  - **Why:** the previous addon's binary needed an AVX2 CPU (an illegal
     instruction on older x64 machines), had no Windows build (Windows ran
     the WASM engine, ~300 ms an alignment), and found a golden's cached
     ORB features by hashing 768 of its bytes. opencv5 is built for the
@@ -42,8 +44,8 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
     (4 to pass, 3 to fail; 0 of 253 at the other defaults), and 5 of 87
     on a smaller set - corrections and new escapes, accuracy about even.
     They enter through the alignment's arithmetic, not its algorithm: an
-    OpenCV 4.9 build with rosepetal's AVX2 baseline and fast-math
-    reproduced rosepetal bit for bit, and the same build without them
+    OpenCV 4.9 build with the previous addon's AVX2 baseline and
+    fast-math reproduced it bit for bit, and the same build without them
     already moved like this; the matrix moves by thousandths of a pixel,
     and the nearest-neighbour warp, the local alignment and the blemish
     regions after it pass that on at edges. Matching it would need the
@@ -82,7 +84,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   label-crop's *Optimise PNG* is honoured again (zlib level 9 with
   adaptive filtering, else level 1).
 - **label-crop no longer blurs a grey raw input.** The engine's Otsu
-  filter wrote its 3x3 blur back over its input, as the rosepetal bridge
+  filter wrote its 3x3 blur back over its input, as the previous engine
   did; for a grey raw frame no larger than the detection size that input
   was the frame itself, so the crop came out blurred and the caller's
   buffer was changed. The filter now hands the blur back and label-crop
@@ -103,13 +105,13 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - **A `resize` node (`image-resize`).** Scales a frame or a golden by a
   factor, to a size, or with one side auto from the aspect ratio, bilinear
   on the OpenCV engine; raw in and raw out (or png/jpg), input and output
-  at any msg property. It replaces the `rp-resize` node of the rosepetal
-  package with the same size rules, so the rig's "halve to inspection
-  scale" steps give the frames the inspection was measured on, byte for
-  byte. `scripts/migrate-rp-nodes.js` writes a copy of a flows.json with
-  its `rp-resize` nodes replaced (same ids, positions and wires) and
-  `rp-heat-diff` debug views, refusing - and changing nothing - when a node
-  cannot be carried over exactly.
+  at any msg property. It replaces the `rp-resize` node of the package
+  that held the previous engine, with the same size rules, so the rig's
+  "halve to inspection scale" steps give the frames the inspection was
+  measured on, byte for byte. `scripts/migrate-rp-nodes.js` writes a copy
+  of a flows.json with its `rp-resize` nodes replaced (same ids, positions
+  and wires) and its `rp-heat-diff` debug views removed, refusing - and
+  changing nothing - when a node cannot be carried over exactly.
 
 - **Native kernels for `golden-compare`'s pool.** The local alignment's
   tile search and resampling, the binarization with the tone comparison,
@@ -999,8 +1001,8 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 - **A second OpenCV engine: `@techstark/opencv-js`, the WASM build
   (prototype).** `label-crop` and `golden-compare`'s two opt-in
-  acceleration paths needed the native `@rosepetal/node-red-contrib-image-tools`
-  addon, which has no win32 binary. Because `label-crop` treats a missing
+  acceleration paths needed the native OpenCV addon of a third-party
+  Node-RED package, which has no win32 binary. Because `label-crop` treats a missing
   engine as a setup error rather than a fallback, that made the node
   unrunnable on Windows - and made every integration test of it
   unrunnable too, which is why the suite only ever exercised it against a
@@ -1011,11 +1013,11 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   `rotate` - on opencv.js, and `lib/cvjsAlign.js` adds `imageAlign` (ORB
   + RANSAC affine, ECC refinement, one warp into the reference frame).
   Argument positions, the raw descriptor shape and the return values
-  match the bridge, so it drops into the `engine` seam both callers
+  match the native addon's, so it drops into the `engine` seam both callers
   already had.
 
   Raw in, raw out: opencv.js ships without image codecs, and the rig
-  feeds raw frames anyway. The two points the bridge contract genuinely
+  feeds raw frames anyway. The two points the addon's contract genuinely
   needs a codec - an encoded Buffer at `colorConvert`, a non-raw
   `outputFormat` on the final crop - delegate to `sharp`, already a
   direct dependency.
@@ -1027,9 +1029,9 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   quietly measure the wrong engine. Detecting the native addon is
   asynchronous (its `require()` always succeeds and every op rejects
   later instead), so the module answers synchronously on a platform gate
-  and asynchronously on a probe. The probe is not `bridge.ready()`:
-  cpp-bridge 1.6.4, which our own `^1.6.4` range allows and which the
-  Node-RED test image actually has, does not expose it, so asking would
+  and asynchronously on a probe. The probe is not the addon's `ready()`:
+  its 1.6.4, which our own `^1.6.4` range allows and which the Node-RED
+  test image actually has, does not expose it, so asking would
   throw and demote a perfectly good native engine. It calls the cheapest
   real op instead.
 
@@ -1213,7 +1215,7 @@ weeks of that work. Everything below in this entry shipped in it.
   1.84px, height 5.17px, angle 0.14 degrees.
 
   ARCHITECTURE.md now records why this is JS rather than OpenCV, with the
-  measurements: the bridge has no reduce and no derivative, and its `resize`
+  measurements: the native engine has no reduce and no derivative, and its `resize`
   samples rather than area-averages - it missed a single bright row entirely
   when asked to reduce 2800 rows to 16 - so it cannot build the banded mean a
   caliper is made of. It also records the one finding that points the other

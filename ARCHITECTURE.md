@@ -1085,10 +1085,12 @@ holds tray and table around a label, not when the frame *is* the label.
 ### Shape: engine pixels, JS only on the small mask
 
 The pixel work is delegated to an OpenCV engine — the same one
-`lib/nativeSeed.js` uses — through the op surface of the promisified
-`cpp-bridge` of `@rosepetal/node-red-contrib-image-tools`, this package's
-first engine, which both engines now implement. `lib/labelCrop.js` composes five engine calls and does everything
-else in JS:
+`lib/nativeSeed.js` uses — through one promise-returning op surface
+(`colorConvert`, `resize`, `filter`, `crop`, `rotate`, `imageAlign` on
+raw images), which both engines implement; it is the surface of the OpenCV
+addon this package first ran on, kept so the callers did not change.
+`lib/labelCrop.js` composes five engine calls and does everything else in
+JS:
 
 1. **decode once** — an encoded Buffer becomes a full-res raw object via
    `colorConvert(buffer, RGB, raw)`; a raw object input skips this.
@@ -1178,10 +1180,11 @@ README's engine table has platforms and threading).
 `VISION_TOOLS_ENGINE` pins one, and a pinned engine that will not load is
 an error rather than a silent substitution.
 
-**opencv5.** Up to 1.2 the first engine was the rosepetal addon, which was
-built for AVX2 (an illegal instruction on an older x64 CPU), had no win32
-build, and found a golden's cached ORB features by hashing 768 of its
-bytes. `@graciousstar/opencv5` replaces it: a static OpenCV 5.0.0 of six modules (core,
+**opencv5.** Up to 1.2 the first engine was a third-party Node-RED
+package's OpenCV 4 addon, which was built for AVX2 (an illegal
+instruction on an older x64 CPU), had no win32 build, and found a
+golden's cached ORB features by hashing 768 of its bytes.
+`@graciousstar/opencv5` replaces it: a static OpenCV 5.0.0 of six modules (core,
 imgproc, features, flann, geometry, video - 5.x's names for 4.x's
 features2d and calib3d) under a plain N-API addon, built for each arch's
 baseline (x86-64-v2, NEON) with nothing chosen at run time, without
@@ -1191,15 +1194,17 @@ fast-math or FMA contraction, in pinned images (Linux) and with MSVC
 and Windows binaries give the same output (opencv5's tests pin it).
 Dispatching AVX2/AVX-512 was worth about 1 ms of a 9.6 ms alignment, and
 cost 0.34 px of local-alignment drift between an SSE4.2-only and an AVX2
-machine. `imageAlign` is rosepetal's algorithm for the arguments
-`lib/nativeSeed.js` passes, with the golden's small copy, features and ECC
-input made once per golden buffer and the frame's working copies kept
-between calls. Against rosepetal's OpenCV 4 build the results moved a
-little - the alignment by hundredths of a pixel, no verdict on the rig's
-162 frames, but 7 of 253 synthetic frames built to sit at Sauvola's
-threshold (CHANGELOG): the float arithmetic of ORB/USAC/ECC without
-rosepetal's AVX2 baseline and fast-math, carried to the edges by the
-nearest-neighbour warp. A rig is re-baselined with `bench/golden-drift.js`
+machine. `imageAlign` is the previous engine's algorithm for the
+arguments `lib/nativeSeed.js` passes (ORB features, a USAC MAGSAC affine
+fit, ECC refinement, one nearest-neighbour warp into the reference
+frame), with the golden's small
+copy, features and ECC input made once per golden and the frame's
+working copies kept between calls. Against the previous engine's OpenCV 4
+build the results moved a little - the alignment by hundredths of a
+pixel, no verdict on the rig's 162 frames, but 7 of 253 synthetic frames
+built to sit at Sauvola's threshold (CHANGELOG): the float arithmetic of
+ORB/USAC/ECC without that build's AVX2 baseline and fast-math, carried to
+the edges by the nearest-neighbour warp. A rig is re-baselined with `bench/golden-drift.js`
 before it relies on the new engine.
 
 **Why the WASM engine stays.** A platform with no opencv5 binary still runs
@@ -1214,13 +1219,13 @@ codec - an encoded Buffer arriving at `colorConvert`, and a non-raw
 `outputFormat` on the final crop - go to `sharp`. Nothing on the hot path
 touches them.
 
-**What both engines reproduce of the rosepetal contract.** Two things the
-bridge did that are not in its signature, and that label-crop depends on
-(both measured against it while it was the engine; `test/opencv5Engine.test.js`
+**What both engines reproduce of the first engine's behaviour.** Two
+things that engine did that are not in its signature, and that label-crop
+depends on (both measured against it while it was the engine; `test/opencv5Engine.test.js`
 now holds the two engines to each other's bytes):
 
 - **the resize filter.** `INTER_LINEAR`, identified by elimination: over a
-  random-texture downscale it reproduced the bridge on 100% of pixels,
+  random-texture downscale it reproduced that engine on 100% of pixels,
   where `INTER_AREA` differed by 34 mean absolute and `INTER_CUBIC` by 14.
   `INTER_AREA` is the textbook choice for a detection copy and was the
   first implementation; it is wrong here, because `refineRectBoundary`
@@ -1228,7 +1233,7 @@ now holds the two engines to each other's bytes):
   parallel to it, and a sub-pixel difference picks the loser. Measured: a
   1200x750 label at angle 0 cropped 169px short.
 
-- **filter("otsu")'s blur.** The bridge GaussianBlurred the image (kernel
+- **filter("otsu")'s blur.** That engine GaussianBlurred the image (kernel
   x kernel, sigma 0) and wrote that back over *the caller's buffer* before
   thresholding, and label-crop's edge filter and `refineRectBoundary` came
   to run on that blurred copy. The blur is load-bearing: it softens thin
@@ -1242,7 +1247,7 @@ now holds the two engines to each other's bytes):
 One difference is deliberate and remains:
 
 - **the alignment warp's border fill.** opencv5's `imageAlign` (as the
-  bridge's did) fills uncovered pixels with 0, the darkest possible ink,
+  first engine's did) fills uncovered pixels with 0, the darkest possible ink,
   and `nativeSeed.blankOutsideSource` rewrites the pixels that mapped
   outside the frame back to 255. `lib/cvjsAlign.js`'s bilinear warp
   cannot be fixed up that way - its covered pixels one step inside the
@@ -1251,7 +1256,7 @@ One difference is deliberate and remains:
   512x640 synthetic shifted 6px, over the 0.2% `failRatio`) - so it fills
   255 instead, the convention `lib/warp.js` already uses.
 
-**A limit the bridge had.** Its `imageAlign` returned the identity
+**A limit the first engine had.** Its `imageAlign` returned the identity
 transform with `success: true` for images from about 1536px up, which
 `compare.js`'s score guard caught and sent to the JS aligner. opencv5
 recovers the shift at 2048px (its tests check it), as the WASM
@@ -1355,8 +1360,8 @@ The obvious objection to a pure-JS image operation is that it leaves
 performance on the table. Measured on this rig (container, 3000x3700 frame,
 medians), it does not, for two separate reasons.
 
-**The engine cannot express a caliper.** The rosepetal bridge (the engine
-when this was measured) exported 16 operations, and its `filter` accepted
+**The engine cannot express a caliper.** The previous OpenCV addon (the
+engine when this was measured) exported 16 operations, and its `filter` accepted
 `otsu`, `blur`, `gaussian` and `edge`; opencv5 has fewer.
 There is no reduce, no derivative along an axis, no arbitrary warp, no
 sub-pixel peak. A caliper is a *banded mean profile* then its derivative, and
