@@ -1,5 +1,6 @@
 /**
- * Move a flow off @rosepetal/node-red-contrib-image-tools.
+ * Move a flow off the rp-resize and rp-heat-diff nodes of another package,
+ * which earlier flows used beside this one.
  *
  *   node scripts/migrate-rp-nodes.js flows.json [out.json]
  *

@@ -1,7 +1,7 @@
 /**
  * The opencv.js WASM engine (lib/cvjs.js + lib/cvjsAlign.js).
  *
- * Two things are under test. First that each op honours the cpp-bridge
+ * Two things are under test. First that each op honours the engine
  * contract the callers were written against - argument positions, raw
  * descriptor shape, and the geometry label-crop predicts independently
  * (rotate's canvas size, imageAlign's matrix convention). Second that

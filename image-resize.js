@@ -4,9 +4,9 @@
  * Scale a frame by a factor or to a size, on the OpenCV engine lib/engine.js
  * picks (@graciousstar/opencv5, else opencv.js): INTER_LINEAR, the filter
  * label-crop and golden-compare's own working copies use. It replaces the
- * rp-resize node of @rosepetal/node-red-contrib-image-tools, which flows
- * used to bring frames and goldens to the inspection scale; its width and
- * height rules are rp-resize's for the modes this node keeps:
+ * rp-resize node from another package, which earlier flows used to bring
+ * frames and goldens to the inspection scale; its width and height rules
+ * are rp-resize's for the modes this node keeps:
  *
  *   multiply  round(side x factor)
  *   set       that many pixels

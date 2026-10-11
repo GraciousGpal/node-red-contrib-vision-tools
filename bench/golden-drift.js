@@ -15,8 +15,8 @@
  * A blemish region that moves while its check's verdict holds is listed,
  * not failed: on a failing part the regions are the evidence, and a cell
  * on the threshold can join two of them. Measured for the own OpenCV 5
- * engine against rosepetal's 4.x on the rig: 0 verdicts, 0 grades, 0
- * routes; ox 0.058 px, angle 0.0018 deg, localAlign.maxPx 2.07 px;
+ * engine against the previous OpenCV 4 engine on the rig: 0 verdicts, 0
+ * grades, 0 routes; ox 0.058 px, angle 0.0018 deg, localAlign.maxPx 2.07 px;
  * regions moved on 4 of 162 frames, all failing parts that still fail.
  * A re-baseline that needs wider bounds is a change to review, not drift.
  */
