@@ -10,10 +10,11 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 - **The OpenCV engine is now our own, and the rosepetal addon is gone.**
   `label-crop` and `golden-compare`'s OpenCV alignment run on
-  [`@graciousstar/opencv5`](opencv5/README.md): a small N-API addon over a
-  static OpenCV 5.0.0 with a prebuilt binary per platform and no install
-  script (Linux x64 glibc 2.17+ and musl and Windows x64 built and tested;
-  Linux arm64 and macOS from its CI).
+  [`@graciousstar/opencv5`](https://github.com/GraciousGpal/opencv5) 0.1, a
+  new dependency: a small N-API addon over a static OpenCV 5.0.0 with a
+  prebuilt binary for each of seven platforms (Linux x64 and arm64, glibc
+  2.17+ and musl each; macOS x64 and arm64; Windows x64) and no install
+  script.
   `@rosepetal/node-red-contrib-image-tools` is no longer a dependency, is
   not installed, and nothing uses it. Where no opencv5 binary loads, the
   engine falls back to `@techstark/opencv-js` as before.
@@ -70,11 +71,9 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
     nothing a caller does to its buffer can reach a running op - about
     1-2 ms a frame, most of what an earlier, sharing build had gained
     (37.7 ms at the median).
-  - Until `@graciousstar/opencv5` is published and added to
-    `dependencies`, it lives in `opencv5/` (bound for its own repository)
-    and its binaries are built there, not committed:
-    `opencv5/native/prebuild-linux.sh`. An installed copy of this package
-    meanwhile runs on opencv.js.
+  - **Node 20.9 or newer is required** (`engines.node`), as
+    `@graciousstar/opencv5` and sharp 0.35 require; Node 18 is past its end
+    of life.
 
 ### Fixed
 

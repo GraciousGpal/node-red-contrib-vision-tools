@@ -54,9 +54,10 @@
     "deploy:vendor": "bash scripts/vendor-deploy.sh"
   },
   "engines": {
-    "node": ">=18"
+    "node": ">=20.9"
   },
   "dependencies": {
+    "@graciousstar/opencv5": "^0.1.0",
     "sharp": "^0.35.3",
     "zxing-wasm": "^3.1.3"
   },

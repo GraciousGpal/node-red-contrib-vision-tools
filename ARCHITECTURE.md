@@ -112,8 +112,8 @@ authoritative list.
 | `lib/engine.js` | picks the OpenCV engine (`@graciousstar/opencv5`, else opencv.js WASM), honours `VISION_TOOLS_ENGINE`, warms it up |
 | `lib/cvjs.js` | the engine op surface on `@techstark/opencv-js`, the fallback: colorConvert, resize, filter (otsu/edge), crop, rotate — raw in, raw out |
 | `lib/cvjsAlign.js` | `imageAlign` on opencv.js: ORB + RANSAC affine, ECC refinement, one warp into the reference frame |
-| `lib/opencv5.js` | requires `@graciousstar/opencv5`, the default engine (falls back to the `opencv5/` directory until the package is published) |
-| `opencv5/` | `@graciousstar/opencv5`, self-contained and bound for its own repository: `index.js` (the op surface, manifest-checked loader), `native/opencv5.cc` (plain N-API over a six-module static OpenCV 5), the build scripts, tests pinning every op's bytes, its CI workflow (`opencv5/README.md`) |
+| `lib/opencv5.js` | requires `@graciousstar/opencv5`, the default engine: a dependency, developed in its own repository ([GraciousGpal/opencv5](https://github.com/GraciousGpal/opencv5): the op surface, manifest-checked loader, plain N-API over a six-module static OpenCV 5, its build scripts, CI and byte-pinning tests) |
+| `lib/engineLimits.js` | what the opencv.js engine refuses, mirroring `@graciousstar/opencv5` with the same error types (`test/opencv5Engine.test.js` compares the two) |
 | `bench/golden-drift.js` | bounds the drift between two `golden-container-bench --dump` runs: verdicts, grades, routes and check verdicts exact, every other number within a stated bound |
 | `lib/nativeSeed.js` | optional OpenCV-solved alignment: `seedTransform` gives the JS search a starting point, `alignFrame` returns the already-warped golden-sized frame; both return null on failure so the JS path stays the fallback |
 | `barcode-locate.js` | Node-RED wiring for the barcode-locate node: scans pre-defined regions, then the full image if nothing is found; one message per barcode, `msg.regions`/`msg.mode` overrides. Regions come from the list or from the golden's profile (resolved from `msg.result.profile.path`, `msg.profile` or `profilePath`, mapped by `lib/goldenRegions.js`, cached per profile and payload size), and each result carries `expectedText`/`textMatches` against the artwork |
@@ -1181,7 +1181,7 @@ an error rather than a silent substitution.
 **opencv5.** Up to 1.2 the first engine was the rosepetal addon, which was
 built for AVX2 (an illegal instruction on an older x64 CPU), had no win32
 build, and found a golden's cached ORB features by hashing 768 of its
-bytes. `opencv5/` replaces it: a static OpenCV 5.0.0 of six modules (core,
+bytes. `@graciousstar/opencv5` replaces it: a static OpenCV 5.0.0 of six modules (core,
 imgproc, features, flann, geometry, video - 5.x's names for 4.x's
 features2d and calib3d) under a plain N-API addon, built for each arch's
 baseline (x86-64-v2, NEON) with nothing chosen at run time, without

@@ -26,7 +26,3 @@ transform.json
 Thumbs.db
 .vscode/
 .idea/
-
-# opencv5/ is @graciousstar/opencv5, to move to its own repo; its binaries
-# ship in that package, not in this one (its own .gitignore covers the rest)
-opencv5/prebuilds/*/*.node

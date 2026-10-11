@@ -1,7 +1,7 @@
 /**
  * @graciousstar/opencv5 as this package's engine (lib/opencv5.js).
  *
- * The package tests itself (opencv5/test); these hold it to what this
+ * The package tests itself (in its own repository); these hold it to what this
  * package's callers rely on: the same bytes as the opencv.js engine
  * (lib/cvjs.js) on every op label-crop and golden-compare use - the two
  * engines must be interchangeable - and label-crop end to end on it.
