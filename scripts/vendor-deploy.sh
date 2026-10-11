@@ -9,8 +9,8 @@
 # vision-tools-<version>-<sha>.tgz (a temporary state until the version is on
 # npm; its Dockerfile says so). Older vision-tools tarballs in vendor/ are
 # removed so the directory holds exactly one, and the Dockerfile comment above
-# its COPY vendor/ line is rewritten to name the commit and list what it carries
-# past the last tag (scripts/vendor-note.js). Override the sibling checkout with
+# its COPY vendor/ line is rewritten to name the commit and how far past the
+# last tag it is (scripts/vendor-note.js). Override the sibling checkout with
 # NODERED_TEST_DIR.
 set -euo pipefail
 cd "$(dirname "$0")/.."
