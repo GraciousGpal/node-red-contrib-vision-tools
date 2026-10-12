@@ -1696,7 +1696,10 @@ the labels never carry.
 `msg.payload` — a Buffer/Uint8Array/ArrayBuffer, a file path string, or an
 object with `data`/`buffer`/`path`; or bare pixels, as
 `{ data, width, height, channels }` or bytes plus `msg.rawInfo`, by the
-same rules as `golden-compare`. Optional per-message overrides:
+same rules as `golden-compare`. Raw pixels are read in place, not
+copied, so they must not be changed until this node has sent its
+messages; a Function node that reuses a frame buffer must hand this node
+a copy. Optional per-message overrides:
 `msg.regions`, `msg.mode`, `msg.profile` (a profile name).
 
 ### Output
@@ -1893,7 +1896,7 @@ nothing is found at all, one message with `msg.text = null`,
 
 ## Tests
 
-`npm test` (Node 20.9+, no test framework needed — `node --test`), 771
+`npm test` (Node 20.9+, no test framework needed — `node --test`), 773
 tests. Fixtures are generated with `sharp` rather than read from
 `data/sample_images`, so the suite runs anywhere; the real QC photos are
 gitignored. Coverage spans the lib pipeline (`compare`, `align`, `warp`,

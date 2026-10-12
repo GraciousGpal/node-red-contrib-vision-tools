@@ -98,7 +98,7 @@ authoritative list.
 | `lib/shared.js` | `SharedArrayBuffer`-backed allocators for the buffers the pool operates on; plain buffers and `HAS_SAB === false` when it is unavailable. `takeShared`/`giveShared` keep a finished frame's full-size scratch for the next frame (at most 16 a size and 128 MB in all, least recently used size dropped first), so the workers do not collect inside frames |
 | `lib/transformFile.js` | trained-transform persistence and its validity guards (golden identity, working size); `validateTransformRecord` holds the checks so a legacy file and a profile's `transform` section go through the same rules, `strictContentKey` compares the content key on every read; reuses `lib/scaleFile.js`'s path and number helpers |
 | `lib/profileStore.js` | per-golden profile files (`<dir>/<id>.json`): `profileIdFor` names one from `msg.profile`, the golden's source-file stem or its content hash; `readProfile` returns the stat that matches the content; `writeProfileSection` merges one section under a per-path lock, writes a temp file and renames it over |
-| `lib/goldenRegions.js` | pure mapping of a profile's barcode boxes (golden native px) into a payload through the trained transform and, optionally, the inverse rectification: `mapProfileRegions`, `nominalPlacement`, `goldenToFrameAffine`. No I/O; `barcode-locate.js` reads the profile and the calibration |
+| `lib/goldenRegions.js` | pure mapping of a profile's barcode boxes (golden native px) into a payload through a transform record (golden-compare's for the frame, or the profile's trained one) and, optionally, the inverse rectification: `mapProfileRegions`, `nominalPlacement`, `goldenToFrameAffine`. No I/O; `barcode-locate.js` reads the profile and the calibration |
 | `lib/scaleFile.js` | mm/px calibration file, shared with `checkerboard-calibrate` and `perspective-rectify`; validates the homography when one is stored; exports `pathExists`/`isFinitePositive` for `transformFile` |
 | `lib/checkerboard.js` | checkerboard detection for mm/px calibration, and the plane homography from the same centroids (`measurePerspective`) |
 | `checkerboard-calibrate.js` | Node-RED wiring: measures the checkerboard photo on the inspector, compares mm/px against the saved baseline, `msg.save` persists the new scale and homography |
@@ -116,8 +116,8 @@ authoritative list.
 | `lib/engineLimits.js` | what the opencv.js engine refuses, mirroring `@graciousstar/opencv5` with the same error types (`test/opencv5Engine.test.js` compares the two) |
 | `bench/golden-drift.js` | bounds the drift between two `golden-container-bench --dump` runs: verdicts, grades, routes and check verdicts exact, every other number within a stated bound |
 | `lib/nativeSeed.js` | optional OpenCV-solved alignment: `seedTransform` gives the JS search a starting point, `alignFrame` returns the already-warped golden-sized frame; both return null on failure so the JS path stays the fallback |
-| `barcode-locate.js` | Node-RED wiring for the barcode-locate node: scans pre-defined regions, then the full image if nothing is found; one message per barcode, `msg.regions`/`msg.mode` overrides. Regions come from the list or from the golden's profile (resolved from `msg.result.profile.path`, `msg.profile` or `profilePath`, mapped by `lib/goldenRegions.js`, cached per profile and payload size), and each result carries `expectedText`/`textMatches` against the artwork |
-| `lib/locate.js` | barcode location and decode on zxing-wasm (zxing-cpp as WASM): decodes the union bounding box of the regions via sharp's extract-on-load, whole-frame fallback; plain functions over Buffers or raw pixels (`options.raw`). Loads the package's own `.wasm` at require time so it never fetches from the CDN; every result carries `symbol` (zxing's corner bbox, full-image px), and one code read through overlapping regions is kept once |
+| `barcode-locate.js` | Node-RED wiring for the barcode-locate node: scans pre-defined regions, then the full image if nothing is found; one message per barcode, `msg.regions`/`msg.mode` overrides. Regions come from the list or from the golden's profile (resolved from `msg.result.profile.path`, `msg.profile` or `profilePath`, placed by `lib/goldenRegions.js` through golden-compare's transform for the frame when it registered against the same golden, else the profile's trained one; the profile and calibration cached per file and mtime, trained placements per payload size), and each result carries `expectedText`/`textMatches` against the artwork |
+| `lib/locate.js` | barcode location and decode on zxing-wasm (zxing-cpp as WASM): decodes an encoded image to the union bounding box of the regions via sharp's extract-on-load, takes raw pixels (`options.raw`) as they are, and crops each region out in plain JS; whole-frame fallback; plain functions over Buffers or raw pixels. Loads the package's own `.wasm` at require time so it never fetches from the CDN; every result carries `symbol` (zxing's corner bbox, full-image px), and one code read through overlapping regions is kept once |
 | `lib/nuisanceMap.js` | trained per-block baseline of what "clean" looks like, so a recurring registration artifact stops masking a real blemish; `validateNuisanceRecord` checks a parsed record (legacy file or profile section) with the same `strictContentKey` as the transform |
 | `synthetic-defects.js` | Node-RED wiring for the synthetic-defects node: emits a frame set one message at a time with its golden and ground truth attached, and previews each frame under the node with its ground-truth boxes mapped into frame space; a test bench for `golden-compare`, not a production node |
 | `lib/synth/` | the synthetic frame generator, shipped in the package so the node can use it: `prng.js` (one seeded stream), `label.js` (the drawn golden), `defects.js` (the defect library, ground truth measured by diffing), `capture.js` (the camera model), `cases.js` (the case plan and a lazy async generator over it). `bench/synth/generate.js` writes a set to disk over the same `cases.js`, so the CLI and the node emit identical frames |
@@ -542,17 +542,29 @@ records `frameWidth`/`frameHeight` (`compareFrame`'s `targetWorking`),
 before the working-size resize) and `placement { ox, oy, angleDeg }` (the
 run's last written training frame). The validators ignore unknown
 fields, so older records still load; they simply cannot be mapped.
+`golden-compare` puts the same sizes on every frame's
+`msg.result.transform`, whose `ox`/`oy`/`angleDeg` are that frame's own
+placement, so it maps the same way.
 
 ## Barcode regions from the artwork
 
 `barcode-locate` with `regionSource: "profile"` reads a profile's
-`barcodes` and `transform` sections and `lib/goldenRegions.js` carries
-each box into the payload. It is pure maths; the node does the I/O,
-caches the mapped regions per (profile path, mtimeMs, size, payload WxH,
-calibration path and its mtimeMs and size, pad, padMinPx), and turns the
-module's returned warnings into warn-once messages, keyed by profile
-path, problem and the profile's (and calibration's) mtime and size, so a
-profile fixed and then broken again is warned again. Nothing about a
+`barcodes` section and `lib/goldenRegions.js` carries each box into the
+payload through one of two transform records: `msg.result.transform`,
+the one `golden-compare` upstream solved for this frame, when that
+compare used the golden the barcodes came from and the frame registered
+(grade not `poor`, no `labelMissing`, no `mismatchSuspected`); else the
+profile's trained `transform` section (`frameTransformFor()` and
+`mappedProfileRegions()` in `barcode-locate.js`; `msg.regionPlacement`
+says which). It is pure maths; the node does the I/O, caches the read
+profile and calibration per (profile path, mtimeMs, size, calibration
+path and its mtimeMs and size), and inside that entry the regions placed
+through the trained transform per payload WxH; a placement through the
+frame's transform is computed per message. `pad` and `padMinPx` are node
+config, not part of the key. It turns the module's returned warnings
+into warn-once messages, keyed by profile path, problem and the
+profile's (and calibration's) mtime and size, so a profile fixed and
+then broken again is warned again. Nothing about a
 profile fails the message: even a path that cannot be stat'ed is one
 warning and no regions, and the full-image fallback still runs. The
 identity held against `msg.result.profile.contentKey` is the `barcodes`
@@ -589,11 +601,12 @@ box, starting in golden native px:
 6. Axis-aligned bbox of the four corners, edges rounded once, clamped to
    the payload; a box with no area is dropped.
 
-A transform without the frame fields cannot be mapped at all and throws
-(the node turns it into a "retrain the transform with this version"
-warning); everything else that leaves the mapping usable — nominal
-placement, a payload whose aspect differs from the compare's frame by more
-than 1% — comes back in `warnings`.
+A trained transform without the frame fields cannot be mapped at all and
+throws (the node turns it into a "retrain the transform with this version"
+warning); a `msg.result.transform` without them is simply not used, and
+the trained one is tried instead. Everything else that leaves the mapping
+usable — nominal placement, a payload whose aspect differs from the
+compare's frame by more than 1% — comes back in `warnings`.
 
 **Why decoding happens at native resolution.** The compare's frame is
 sized for inspecting print, not for reading a barcode. Measured on the demo rig (149 photos, 2026-10-08): on the
@@ -602,11 +615,13 @@ module, only 23/149 read both Code128s and one returned a confidently
 wrong string. The same mapped regions on the native 3000x3700 frame read
 the artwork's text in 149/149, 0 wrong reads, 152 ms median against 385
 ms for the whole frame. With the pinned transform the recovered offset
-moved about 1 px across all 149 frames, which is why regions fixed per
-golden and padded are enough, rather than a per-frame mapping from
-`msg.result.transform`. So the regions go to the native frame, and the
-node warns when the payload is no larger than the frame the compare
-received.
+moved about 1 px across all 149 frames, which is why the trained
+placement, fixed per golden and padded, is an adequate fallback for a
+fixed camera. The node still places through the frame's own
+`msg.result.transform` first: it needs no training, and it follows the
+part when the camera or the fixture moves. The regions go to the native
+frame, and the node warns when the payload is no larger than the frame
+the compare received.
 
 The profile also gives the decode something to check against: each
 region carries the text found on the artwork, and a symbol whose centre

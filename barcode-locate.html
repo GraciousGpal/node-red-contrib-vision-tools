@@ -224,6 +224,9 @@
     Bare pixels work as <code>golden-compare</code> takes them: an object
     <code>{ data, width, height, channels }</code>, or the bytes with
     <code>msg.rawInfo = { width, height, channels }</code>.
+    Raw pixels are read in place, not copied: they must not be changed
+    until this node has sent its messages, so a Function node that reuses
+    a frame buffer must hand this node a copy.
   </p>
   <p>
     Optional per-message overrides: <code>msg.regions</code> (array of

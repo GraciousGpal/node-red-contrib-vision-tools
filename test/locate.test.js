@@ -252,13 +252,14 @@ test("raw input decodes to the same results as the PNG", async () => {
 	}
 });
 
-test("a region naming its format is searched for that format alone", async () => {
+test("a region naming its format is searched for that format first, then every enabled one", async () => {
 	const { png, c128 } = await fixture();
 	const box = { x: c128.left - 60, y: c128.top - 60, width: c128.width + 120, height: c128.height + 120 };
 	const read = async (format) => (await locateBarcodes(png, { mode: "regionsOnly", regions: [{ ...box, label: "c", format }] })).results;
 
 	assert.deepStrictEqual((await read("Code128")).map((r) => r.text), [c128.text]);
-	assert.deepStrictEqual(await read("QRCode"), [], "a Code128 is not looked for in a QR code's region");
+	// a QR code's region holding a Code128 reads nothing for QR, then the Code128
+	assert.deepStrictEqual((await read("QRCode")).map((r) => [r.format, r.text]), [["Code128", c128.text]]);
 	// a format the caller did not enable leaves the region's search as it was
 	const notEnabled = await locateBarcodes(png, {
 		mode: "regionsOnly",
@@ -266,6 +267,31 @@ test("a region naming its format is searched for that format alone", async () =>
 		readerOptions: { formats: ["Code128"], tryHarder: true, tryRotate: true },
 	});
 	assert.deepStrictEqual(notEnabled.results.map((r) => r.text), [c128.text]);
+});
+
+test("a profile region holding a code of another format still reports it", async () => {
+	// A wrong label printed in another symbology: the profile recorded a
+	// Code128 in region B, the part carries a DataMatrix there. Region A
+	// reads, so regionsThenAuto never falls back to the full image - region
+	// B alone has to report the DataMatrix.
+	const { png, c128, dm } = await fixture();
+	const pad = (code) => ({ x: code.left - 60, y: code.top - 60, width: code.width + 120, height: code.height + 120 });
+	const { results, usedFullImage } = await locateBarcodes(png, {
+		mode: "regionsThenAuto",
+		regions: [
+			{ ...pad(c128), label: "A", format: "Code128" },
+			{ ...pad(dm), label: "B", format: "Code128" },
+		],
+		readerOptions: { formats: ["Code128", "DataMatrix"], tryHarder: true, tryRotate: true },
+	});
+	assert.strictEqual(usedFullImage, false);
+	assert.deepStrictEqual(
+		results.map((r) => [r.format, r.text, r.regionLabel]).sort(),
+		[
+			["Code128", c128.text, "A"],
+			["DataMatrix", dm.text, "B"],
+		],
+	);
 });
 
 test("barcode-locate reads a raw payload in place: not copied, not changed", async () => {

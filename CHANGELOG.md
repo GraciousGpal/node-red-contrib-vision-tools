@@ -12,10 +12,14 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   pixels.** Bare pixels are no longer run through sharp before slicing;
   preview crops are encoded only for regions that read a code, at zlib
   level 1; and a region that names its format, as profile regions do, is
-  searched for that format alone - a code of another format inside a
-  profile region's padding is no longer read with it. A raw payload is
-  read in place rather than copied first (~20-28 ms for a 3000x3700 RGB
-  frame).
+  searched for that format first, and for every enabled format only when
+  that reads nothing - so a code of another format inside a profile
+  region's padding is no longer read beside the expected one, while a
+  label printed in another symbology than the artwork's is still
+  reported and fails `textMatches`. A raw payload is read in place rather
+  than copied first (~20-28 ms for a 3000x3700 RGB frame), so it must
+  not be changed until the node has sent its messages: a flow that
+  reuses a frame buffer hands this node a copy.
   - **Why:** on 162 camera frames (3000x3700 JPEG, two Code128 regions)
     the region pass took ~157 ms: ~100 ms decoding the frame, and most of
     the rest encoding previews at the default zlib level and running
@@ -44,6 +48,10 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
     regions at all - on a fresh profile directory every frame fell back
     to the full-image scan until someone trained - and a trained
     placement is the last training frame's, not where this part sits.
+
+- **An end-to-end test places a profile's regions through
+  `golden-compare`'s transform** on a rotated, scaled frame and checks
+  the box against where the marker really is.
 
 - **The OpenCV engine is now our own, and the previous OpenCV addon is
   gone.**
