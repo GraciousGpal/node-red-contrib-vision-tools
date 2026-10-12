@@ -58,7 +58,7 @@ const derivations = new Map();
 
 /**
  * Which pool kernels this process runs, in one line at startup: the
- * native ones, or the JS ones and why (lib/nativeKernels.js). A binary
+ * kernels addon's C++ ones, or the JS ones and why (lib/nativeKernels.js). A binary
  * that is there and will not load is a warning; no binary for the
  * platform, or VISION_TOOLS_KERNELS=js, is how it was meant to be.
  */
@@ -66,8 +66,8 @@ function logKernels(log) {
 	const k = nativeKernels.status();
 	const level = k.failed ? "warn" : "info";
 	if (!log || typeof log[level] !== "function") return;
-	if (k.native) log.info(`golden-compare: native pool kernels (${k.file})`);
-	else if (k.failed) log.warn(`golden-compare: native pool kernels did not load, using the JS ones - ${k.reason}`);
+	if (k.native) log.info(`golden-compare: C++ pool kernels (${k.file})`);
+	else if (k.failed) log.warn(`golden-compare: C++ pool kernels did not load, using the JS ones - ${k.reason}`);
 	else log.info(`golden-compare: JS pool kernels - ${k.reason}`);
 }
 
@@ -211,7 +211,7 @@ module.exports = (RED) => {
 		// msg.deriveBarcodes is the explicit one-off and a per-message flag
 		// would re-run zxing on a 12 MP render whenever a flow left it set.
 		barcodeRegions: { value: false, fixed: true },
-		// PROTOTYPES, default off - see lib/nativeSeed.js. The seed replaces
+		// PROTOTYPES, default off - see lib/cvAlign.js. The seed replaces
 		// the staged sweeps with an OpenCV ORB+ECC alignment when an OpenCV
 		// engine loads (lib/engine.js), and is inert without one; the fast
 		// path lets OpenCV own the affine solve and

@@ -4,6 +4,12 @@ What this node is doing, in what order, and why each piece is shaped the
 way it is. `README.md` is the operator's guide — what the settings mean
 and how to use them. This is the map for changing the code.
 
+**Vocabulary.** *Engine*: the OpenCV engine, the opencv5 addon or the opencv.js WASM build, chosen by `lib/engine.js`.
+*Kernels*: the optional vision-kernels C++ addon for five pool kernels (`lib/nativeKernels.js`, `native/`, `prebuilds/`), chosen by `VISION_TOOLS_KERNELS`.
+*cvAlign*: golden-compare's OpenCV fast-alignment route (`lib/cvAlign.js`), switched on by `nativeFastAlign` / `nativeAlignSeed`.
+*Native*: a pixel size or resolution only (`nativeWidth`, `frameNativeWidth`, `mmPerPixelNative`).
+Older names keep `native` where they are external: those settings, `transform.native`, `nativeAlignMs`, `status().native`, `VISION_TOOLS_ENGINE=native`.
+
 ## The problem
 
 Compare **the PDF artwork for a label** against **a photograph of that
@@ -89,9 +95,9 @@ authoritative list.
 | `lib/components.js` | connected components for region extraction |
 | `lib/parallel.js` | parallel forms of the per-pixel stages (dilate, integral, warp, rectify, local-align field, threshold and histogram, the fused diff, the search's density sweeps and polish objective), each falling back to its serial twin when the pool is unavailable, the image is small, or one worker was asked for |
 | `lib/pool.js` | persistent worker-thread pool for the per-pixel stages: created once and never torn down, dispatches settled by id, `shouldParallelise` gate |
-| `lib/poolWorker.js` | worker side of the pool: the row/column-range kernels, asserted byte-identical to their serial reference implementations; runs the native twins of five of them where the addon loads |
-| `lib/nativeKernels.js` | loads the optional native kernels (`prebuilds/<platform>-<arch>/vision-kernels[.glibc\|.musl].node`, checked against `prebuilds/manifest.json` before it is opened; a from-source build only with `VISION_TOOLS_KERNELS=source`), refuses another kernel ABI, honours `VISION_TOOLS_KERNELS=js`, and hands a worker its kernels with the native ones in place; a dispatch the addon refuses runs on the JS kernel |
-| `native/kernels.cc` | the native twins of `localField`, `localApply`, `binarize` (with the tone comparison), `toneCompare` and `diff`: plain N-API, no dependencies, the JS arithmetic in the JS order; checks every index a dispatch will make before it claims a chunk |
+| `lib/poolWorker.js` | worker side of the pool: the row/column-range kernels, asserted byte-identical to their serial reference implementations; runs the kernels addon's C++ twins of five of them where it loads |
+| `lib/nativeKernels.js` | loads the optional kernels addon (`prebuilds/<platform>-<arch>/vision-kernels[.glibc\|.musl].node`, checked against `prebuilds/manifest.json` before it is opened; a from-source build only with `VISION_TOOLS_KERNELS=source`), refuses another kernel ABI, honours `VISION_TOOLS_KERNELS=js`, and hands a worker its kernels with the addon's in place; a dispatch the addon refuses runs on the JS kernel |
+| `native/kernels.cc` | the kernels addon: C++ twins of `localField`, `localApply`, `binarize` (with the tone comparison), `toneCompare` and `diff`: plain N-API, no dependencies, the JS arithmetic in the JS order; checks every index a dispatch will make before it claims a chunk |
 | `native/build.sh`, `native/binding.gyp` | the two builds of it with the same flags (`-ffp-contract=off`, no fast-math, baseline ISA): the compiler alone for the Linux prebuilds and any Linux/macOS host, node-gyp for Windows and from source |
 | `native/prebuild-linux.sh`, `native/manifest.js` | the Linux prebuilds' reproducible build (images pinned by digest, node-api-headers 1.9.0) and the manifest of every shipped binary's size and SHA-256, which `--check` holds a rebuild to |
 | `prebuilds/` | the shipped binaries, built by `.github/workflows/prebuild.yml` (linux x64/arm64 glibc and musl, win32-x64, darwin arm64/x64) or by hand with `native/build.sh` |
@@ -117,7 +123,7 @@ authoritative list.
 | `lib/opencv5.js` | requires `@graciousstar/opencv5`, the default engine: a dependency, developed in its own repository ([GraciousGpal/opencv5](https://github.com/GraciousGpal/opencv5): the op surface, manifest-checked loader, plain N-API over a six-module static OpenCV 5, its build scripts, CI and byte-pinning tests) |
 | `lib/engineLimits.js` | what the opencv.js engine refuses, mirroring `@graciousstar/opencv5` with the same error types (`test/opencv5Engine.test.js` compares the two) |
 | `bench/golden-drift.js` | bounds the drift between two `golden-container-bench --dump` runs: verdicts, grades, routes and check verdicts exact, every other number within a stated bound |
-| `lib/nativeSeed.js` | optional OpenCV-solved alignment: `seedTransform` gives the JS search a starting point, `alignFrame` returns the already-warped golden-sized frame; both return null on failure so the JS path stays the fallback |
+| `lib/cvAlign.js` | cvAlign, the optional OpenCV-solved alignment on the engine: `seedTransform` gives the JS search a starting point, `alignFrame` returns the already-warped golden-sized frame; both return null on failure so the JS path stays the fallback |
 | `barcode-locate.js` | Node-RED wiring for the barcode-locate node: scans pre-defined regions, then the full image if nothing is found; one message per barcode, `msg.regions`/`msg.mode` overrides. Regions come from the list or from the golden's profile (resolved from `msg.result.profile.path`, `msg.profile` or `profilePath`, placed by `lib/goldenRegions.js` through golden-compare's transform for the frame when it registered against the same golden, else the profile's trained one; the profile and calibration cached per file and mtime, trained placements per payload size), and each result carries `expectedText`/`textMatches` against the artwork |
 | `lib/locate.js` | barcode location and decode on zxing-wasm (zxing-cpp as WASM): decodes an encoded image to the union bounding box of the regions via sharp's extract-on-load, takes raw pixels (`options.raw`) as they are, and crops each region out in plain JS; whole-frame fallback; plain functions over Buffers or raw pixels. Loads the package's own `.wasm` at require time so it never fetches from the CDN; every result carries `symbol` (zxing's corner bbox, full-image px), and one code read through overlapping regions is kept once |
 | `lib/nuisanceMap.js` | trained per-block baseline of what "clean" looks like, so a recurring registration artifact stops masking a real blemish; `validateNuisanceRecord` checks a parsed record (legacy file or profile section) with the same `strictContentKey` as the transform |
@@ -852,10 +858,10 @@ What does not parallelise: the polish is a sequential descent, each step
 depending on the last; and PNG inflate inside `sharp` is serial, so decode
 stays ~135ms whatever the core count.
 
-### Native kernels
+### Kernels addon
 
-Five pool kernels have native twins (`native/kernels.cc`, loaded by
-`lib/nativeKernels.js`): the local alignment's tile search and
+Five pool kernels have C++ twins in the kernels addon (`native/kernels.cc`,
+loaded by `lib/nativeKernels.js`): the local alignment's tile search and
 resampling, the binarization with the tone comparison riding on it, the
 tone comparison alone, and the one-pass diff. They are a port, not a
 reimplementation - the JS arithmetic in the JS order, doubles where the
@@ -876,7 +882,7 @@ result cannot depend on whether a binary loaded. Three things hold that:
   every row; neither changes a result, since the sums are integers and a
   candidate stopped early is one that could not have won.
 - **Held to the bytes.** `test/nativeKernels.test.js` runs every kernel
-  on synthetic dispatches, fixed and fuzzed, native against JS, buffer by
+  on synthetic dispatches, fixed and fuzzed, C++ against JS, buffer by
   buffer; `test/nativePipeline.test.js` runs whole frames both ways.
   Each was checked against deliberately broken builds (ties rounded away
   from zero, a margin off by one, a strict threshold, a tie kept late,
@@ -914,9 +920,9 @@ any of this:
 | --- | ---: | ---: | ---: |
 | before | 65.9 ms | 81.4 ms | 91.0 ms |
 | JS kernels, canvas beside the pool | 62.9 ms | 78.9 ms | 85.4 ms |
-| native kernels, canvas beside the pool | **46.5 ms** | **61.1 ms** | **66.3 ms** |
+| kernels addon, canvas beside the pool | **46.5 ms** | **61.1 ms** | **66.3 ms** |
 
-Stage medians, before → native: alignment 41.6 → 30.1 ms (the inspector
+Stage medians, before → kernels addon: alignment 41.6 → 30.1 ms (the inspector
 thread no longer faulting in the canvas's pages between frames' pool
 rounds), local alignment 11.0 → 6.1, thresholding with the tone
 comparison 9.7 → 4.3, diff 9.8 → 3.3, overlay 5.7 → 4.9. `msg.result`
@@ -929,11 +935,11 @@ and every heat map were identical on all 648 frame-passes of each.
 - **coarse-to-fine inspection** — diff at low resolution, then re-inspect
   only flagged neighbourhoods at full resolution. The largest remaining
   win, since the whole reason for 3072 is a handful of pixels;
-- **native or WASM inner loops** for the warp (the diff already has an
-  optional native twin, with the JS kernel as the fallback where no binary
+- **C++ or WASM inner loops** for the warp (the diff already has an
+  optional C++ twin in the kernels addon, with the JS kernel as the fallback where no binary
   loads: see the stage medians above).
 
-The `nativeFastAlign` branch is the intentionally non-equivalent version of
+The cvAlign branch (`nativeFastAlign`) is the intentionally non-equivalent version of
 that experiment: OpenCV owns decode, an unrestricted affine solve and the
 global warp, so both summed-area tables, the JS search and polish, and the
 JS global warp disappear; local refinement and the blemish policy remain.
@@ -1103,7 +1109,7 @@ holds tray and table around a label, not when the frame *is* the label.
 ### Shape: engine pixels, JS only on the small mask
 
 The pixel work is delegated to an OpenCV engine — the same one
-`lib/nativeSeed.js` uses — through one promise-returning op surface
+`lib/cvAlign.js` uses — through one promise-returning op surface
 (`colorConvert`, `resize`, `filter`, `crop`, `rotate`, `imageAlign` on
 raw images), which both engines implement; it is the surface of the OpenCV
 addon this package first ran on, kept so the callers did not change.
@@ -1139,7 +1145,7 @@ JS:
      inside the label also has an inner step, but the strip outside it
      holds the label's white margin, as bright as the interior — refused.
      A lighting ramp is ~0.6 levels per bin: not a step.
-   - **edges** (fallback) — native Sobel (`filter(gray, "edge", 3, 1)`);
+   - **edges** (fallback) — the engine's Sobel (`filter(gray, "edge", 3, 1)`);
      a full-length boundary line becomes one tall bin, accepted under the
      same outside-strip rule, for a seam on an equally-toned surface.
 
@@ -1179,7 +1185,7 @@ JS:
    `w × h` label rect. Rotating the whole
    frame instead would pay the full canvas for a small label. Sub-
    `minRotateAngleDeg` angles skip the rotate and crop directly.
-6. **native final crop + encode** — the last `crop` call takes the
+6. **engine final crop + encode** — the last `crop` call takes the
    output format, so encoded outputs never round-trip through JS.
 
 The engine is a **setup dependency, not a fallback**: `getBridge()`
@@ -1213,7 +1219,7 @@ and Windows binaries give the same output (opencv5's tests pin it).
 Dispatching AVX2/AVX-512 was worth about 1 ms of a 9.6 ms alignment, and
 cost 0.34 px of local-alignment drift between an SSE4.2-only and an AVX2
 machine. `imageAlign` is the previous engine's algorithm for the
-arguments `lib/nativeSeed.js` passes (ORB features, a USAC MAGSAC affine
+arguments `lib/cvAlign.js` passes (ORB features, a USAC MAGSAC affine
 fit, ECC refinement, one nearest-neighbour warp into the reference
 frame), with the golden's small
 copy, features and ECC input made once per golden and the frame's
@@ -1228,7 +1234,7 @@ before it relies on the new engine.
 **Why the WASM engine stays.** A platform with no opencv5 binary still runs
 `label-crop` and the fast alignment, ~4× slower and single-threaded;
 `test/cvjs.test.js` exercises the real deskew-and-crop pipeline and
-golden-compare's `nativeFastAlign` path on it.
+golden-compare's cvAlign path (`nativeFastAlign`) on it.
 
 **Raw only.** Neither engine carries image codecs, and the rig feeds raw
 frames anyway, so every op takes and returns `{ data, width, height,
@@ -1266,7 +1272,7 @@ One difference is deliberate and remains:
 
 - **the alignment warp's border fill.** opencv5's `imageAlign` (as the
   first engine's did) fills uncovered pixels with 0, the darkest possible ink,
-  and `nativeSeed.blankOutsideSource` rewrites the pixels that mapped
+  and `cvAlign.blankOutsideSource` rewrites the pixels that mapped
   outside the frame back to 255. `lib/cvjsAlign.js`'s bilinear warp
   cannot be fixed up that way - its covered pixels one step inside the
   boundary are already mixed with the fill, a one-pixel dark rim the
@@ -1313,12 +1319,12 @@ rather than a clean-rectangle 0.9.
 
 The per-frame stages in golden-compare run on the JS worker pool because
 they are JS kernels over shared memory. label-crop has no such kernels:
-its per-pixel work is already native (the engine's own threading), and
+its per-pixel work is already in the engine (its own threading), and
 its JS is a few hundred kilobytes of mask at most — a pool would only
 add dispatch and copies. sharp stays the decoder/encoder for
 golden-compare's own pipeline; label-crop deliberately routes its pixels
 through the same engine that does the rest of the work, so there is one
-codec stack for the native path.
+codec stack for the engine path.
 
 ## line-finder: calipers over an operator-drawn region
 
@@ -1394,13 +1400,13 @@ resize 2800 rows -> 16, with one row at 200 on a ground of 100:
 It sampled and missed the row entirely. That averaging is not an
 implementation detail, it is the sensitivity: the top edge on this rig is a
 four-grey-level step, invisible in any single row and unambiguous across the
-175 rows a band covers. So a native caliper means new C++ in the engine,
+175 rows a band covers. So an engine caliper means new C++ in the engine,
 not a call we are declining to make.
 
 **The round trips are not the problem either, and neither is the search.**
 For one 90x2800 region: `crop` 1.0ms, `resize` 0.44ms, `blur` 1.3ms, `edge`
 3.2ms, `rotate` 10.3ms. Cheap enough - but the whole JS search for that region
-is 3.8ms, so a three-call native pipeline would start in the hole before any
+is 3.8ms, so a three-call engine pipeline would start in the hole before any
 JS ran. And in a raw-in flow, where the decode is paid once upstream, the four
 edges cost 12.8ms against a label-crop total of 230ms.
 

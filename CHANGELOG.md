@@ -4,6 +4,28 @@ All notable changes to this project are documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [Unreleased]
+
+### Added
+
+- **`bench/compare-parity.js`** proves `lib/` gives byte-identical
+  `compareFrame` output between a git ref and the working tree: a
+  synthetic matrix run on each side in its own process, every buffer
+  hashed. Exit 0 identical, 1 different, 2 when it cannot compare.
+  `--quick` runs about 35 cases.
+
+### Changed
+
+- **One word per meaning in the code and docs.** *Engine* is the OpenCV
+  engine (`lib/engine.js`), *kernels* the vision-kernels C++ addon
+  (`lib/nativeKernels.js`), *cvAlign* golden-compare's OpenCV fast
+  alignment (`lib/nativeSeed.js` is now `lib/cvAlign.js`), and *native*
+  only a pixel size. Internal names, comments and the kernels' startup
+  log line ("C++ pool kernels") changed, and `lib/nativeKernels.js`
+  exports `withKernels` in place of `withNative`; no setting, message override,
+  result field, timing, environment value or editor id did, and output
+  is byte-identical.
+
 ## [1.3.0] - 2026-10-12
 
 ### Changed

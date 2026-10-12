@@ -1,5 +1,5 @@
 /**
- * The native seed is optional and must be invisible when it is absent.
+ * The cvAlign seed is optional and must be invisible when it is absent.
  *
  * The engine it needs ships prebuilt binaries for a handful of platforms
  * and is not a dependency, so on most installs - including CI - these
@@ -14,7 +14,7 @@ const test = require("node:test");
 const assert = require("node:assert");
 const sharp = require("sharp");
 const { prepareGolden, compareFrame } = require("../lib/compare.js");
-const nativeSeed = require("../lib/nativeSeed.js");
+const cvAlign = require("../lib/cvAlign.js");
 
 const CFG = {
 	workingSize: 512,
@@ -65,21 +65,21 @@ const svg = (w, h) =>
 	);
 
 test("available() answers without throwing when the engine is absent", () => {
-	assert.strictEqual(typeof nativeSeed.available(), "boolean");
+	assert.strictEqual(typeof cvAlign.available(), "boolean");
 });
 
 test("seedTransform returns null rather than throwing without the engine", async (t) => {
-	if (nativeSeed.available()) return t.skip("engine installed - fallback not exercised");
+	if (cvAlign.available()) return t.skip("engine installed - fallback not exercised");
 	const gray = new Uint8Array(64 * 64);
 	assert.strictEqual(
-		await nativeSeed.seedTransform(gray, 64, 64, gray, 64, 64),
+		await cvAlign.seedTransform(gray, 64, 64, gray, 64, 64),
 		null,
 	);
 });
 
 test("alignFrame returns OpenCV's aligned canvas and target-space transform", async () => {
 	let call;
-	nativeSeed._setEngine({
+	cvAlign._setEngine({
 		async imageAlign(...args) {
 			call = args;
 			const reference = args[0];
@@ -99,24 +99,24 @@ test("alignFrame returns OpenCV's aligned canvas and target-space transform", as
 	try {
 		const golden = new Uint8Array(10 * 20);
 		const target = new Uint8Array(20 * 40);
-		const out = await nativeSeed.alignFrame(golden, 10, 20, target, 20, 40);
+		const out = await cvAlign.alignFrame(golden, 10, 20, target, 20, 40);
 		assert.ok(out);
 		assert.strictEqual(out.gray.length, golden.length);
 		assert.strictEqual(out.transform.mx, 2);
 		assert.strictEqual(out.transform.my, 2);
 		assert.strictEqual(out.transform.ox, 6);
 		assert.strictEqual(out.transform.oy, 8);
-		assert.strictEqual(call[2], nativeSeed.FAST_ALIGN_SCALE);
+		assert.strictEqual(call[2], cvAlign.FAST_ALIGN_SCALE);
 		assert.strictEqual(call[10], "affine");
 	} finally {
-		nativeSeed._resetEngine();
+		cvAlign._resetEngine();
 	}
 });
 
-test("native alignment rejects geometry outside the configured search", () => {
+test("cvAlign rejects geometry outside the configured search", () => {
 	const pin = { mx: 2, my: 2.02 };
 	assert.strictEqual(
-		nativeSeed.validateAlignment(
+		cvAlign.validateAlignment(
 			{ mx: 1.96, my: 2.06, theta: 0.01 },
 			pin,
 			2,
@@ -124,7 +124,7 @@ test("native alignment rejects geometry outside the configured search", () => {
 		null,
 	);
 	assert.match(
-		nativeSeed.validateAlignment(
+		cvAlign.validateAlignment(
 			{ mx: 1.85, my: 2.06, theta: 0.01 },
 			pin,
 			2,
@@ -132,7 +132,7 @@ test("native alignment rejects geometry outside the configured search", () => {
 		/scale drift/,
 	);
 	assert.match(
-		nativeSeed.validateAlignment(
+		cvAlign.validateAlignment(
 			{ mx: 2, my: 2.02, theta: (3 * Math.PI) / 180 },
 			pin,
 			2,
@@ -141,8 +141,8 @@ test("native alignment rejects geometry outside the configured search", () => {
 	);
 });
 
-test("the fast native path bypasses JS search and warp", async () => {
-	nativeSeed._setEngine({
+test("the cvAlign fast path bypasses JS search and warp", async () => {
+	cvAlign._setEngine({
 		async imageAlign(reference) {
 			return {
 				success: true,
@@ -169,12 +169,12 @@ test("the fast native path bypasses JS search and warp", async () => {
 		assert.strictEqual(result.timings.warpMs, 0);
 		assert.strictEqual(result.transform.score, 0);
 	} finally {
-		nativeSeed._resetEngine();
+		cvAlign._resetEngine();
 	}
 });
 
-test("without a pin, a poor native score falls back to the JS alignment", async () => {
-	nativeSeed._setEngine({
+test("without a pin, a poor cvAlign score falls back to the JS alignment", async () => {
+	cvAlign._setEngine({
 		async imageAlign(reference) {
 			const inverted = Buffer.alloc(reference.data.length);
 			for (let i = 0; i < inverted.length; i++) {
@@ -203,16 +203,16 @@ test("without a pin, a poor native score falls back to the JS alignment", async 
 		assert.match(result.transform.nativeFallback, /OpenCV score/);
 		assert.strictEqual(result.transform.score, 0);
 	} finally {
-		nativeSeed._resetEngine();
+		cvAlign._resetEngine();
 	}
 });
 
-test("under a pin, a validated native alignment is kept however poor its score", async () => {
+test("under a pin, a validated cvAlign alignment is kept however poor its score", async () => {
 	// The same inverted canvas: every pixel disagrees, so the score is as
 	// bad as it gets. But the transform matches the pin exactly, which is
 	// the misalignment check - so the disagreement is reported as the
 	// defect it would be, not spent on a second alignment.
-	nativeSeed._setEngine({
+	cvAlign._setEngine({
 		async imageAlign(reference) {
 			const inverted = Buffer.alloc(reference.data.length);
 			for (let i = 0; i < inverted.length; i++) {
@@ -244,7 +244,7 @@ test("under a pin, a validated native alignment is kept however poor its score",
 		assert.strictEqual(result.pass, false);
 		assert.strictEqual(result.timings.tableMs, 0, "the JS search did not run");
 	} finally {
-		nativeSeed._resetEngine();
+		cvAlign._resetEngine();
 	}
 });
 
@@ -253,7 +253,7 @@ test("after the fast path fails on a frame, the seed is not tried on it", async 
 	// iterations: on a frame OpenCV has just failed, it can only fail
 	// slower, and on the rig that was seconds per defective frame
 	let calls = 0;
-	nativeSeed._setEngine({
+	cvAlign._setEngine({
 		async imageAlign() {
 			calls++;
 			return { success: false };
@@ -268,19 +268,19 @@ test("after the fast path fails on a frame, the seed is not tried on it", async 
 			nativeFastAlign: true,
 			nativeAlignSeed: true,
 		});
-		assert.strictEqual(calls, 1, "one native attempt, not a second one as the seed");
+		assert.strictEqual(calls, 1, "one cvAlign attempt, not a second one as the seed");
 		assert.strictEqual(result.transform.native, false);
 		assert.ok(!result.transform.seeded, "the sweeps found the start");
 		assert.match(result.transform.nativeFallback, /no alignment/);
 		assert.strictEqual(result.timings.seedMs, 0);
 		assert.strictEqual(result.transform.score, 0);
 	} finally {
-		nativeSeed._resetEngine();
+		cvAlign._resetEngine();
 	}
 });
 
-test("under a pin, a native transform off the trained scale still falls back", async () => {
-	nativeSeed._setEngine({
+test("under a pin, a cvAlign transform off the trained scale still falls back", async () => {
+	cvAlign._setEngine({
 		async imageAlign(reference) {
 			return {
 				success: true,
@@ -307,12 +307,12 @@ test("under a pin, a native transform off the trained scale still falls back", a
 		assert.match(result.transform.nativeFallback, /scale drift/);
 		assert.strictEqual(result.transform.score, 0);
 	} finally {
-		nativeSeed._resetEngine();
+		cvAlign._resetEngine();
 	}
 });
 
 test("the flag changes nothing when the engine is unavailable", async (t) => {
-	if (nativeSeed.available()) return t.skip("engine installed - fallback not exercised");
+	if (cvAlign.available()) return t.skip("engine installed - fallback not exercised");
 	const goldenBuf = await sharp(svg(400, 560)).png().toBuffer();
 	const frameBuf = await sharp(svg(400, 560)).resize(520, 728).png().toBuffer();
 	const golden = await prepareGolden(goldenBuf, CFG);
@@ -341,11 +341,11 @@ test("the flag changes nothing when the engine is unavailable", async (t) => {
  * the same region with 255 on the JS path for exactly that reason, and the two
  * alignment paths have to agree about what an uncovered pixel means.
  */
-test("the native path blanks pixels that fall outside the frame", async () => {
+test("the cvAlign path blanks pixels that fall outside the frame", async () => {
 	// imageAlign normalises the target to the reference dimensions, so this
 	// matrix decodes to mx=0.8, my=1, ox=2.4, oy=-2: the golden's top two rows
 	// map above the frame and its last two columns run off the right of it.
-	nativeSeed._setEngine({
+	cvAlign._setEngine({
 		async imageAlign(reference) {
 			return {
 				success: true,
@@ -364,7 +364,7 @@ test("the native path blanks pixels that fall outside the frame", async () => {
 		const gH = 8;
 		const tW = 8;
 		const tH = 8;
-		const out = await nativeSeed.alignFrame(
+		const out = await cvAlign.alignFrame(
 			new Uint8Array(gW * gH),
 			gW,
 			gH,
@@ -385,7 +385,7 @@ test("the native path blanks pixels that fall outside the frame", async () => {
 		assert.strictEqual(at(0, 2), 0, "covered pixel keeps its value");
 		assert.strictEqual(at(6, 7), 0, "covered pixel keeps its value");
 	} finally {
-		nativeSeed._resetEngine();
+		cvAlign._resetEngine();
 	}
 });
 
@@ -454,7 +454,7 @@ test("blankOutsideSource blanks exactly the pixels the per-pixel test does", () 
 	}
 	for (const c of cases) {
 		const expected = blankPerPixel(gray, gW, gH, c, c.tW, c.tH);
-		const actual = nativeSeed.blankOutsideSource(gray, gW, gH, c, c.tW, c.tH);
+		const actual = cvAlign.blankOutsideSource(gray, gW, gH, c, c.tW, c.tH);
 		assert.deepStrictEqual(Buffer.from(actual), Buffer.from(expected), JSON.stringify(c));
 	}
 });

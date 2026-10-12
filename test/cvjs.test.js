@@ -111,7 +111,7 @@ test("resize accepts a percentage mode", { skip }, async () => {
 	assert.strictEqual(image.height, 50);
 });
 
-test("resize with a zero height keeps the aspect ratio, as the native engine does", { skip }, async () => {
+test("resize with a zero height keeps the aspect ratio, as the opencv5 engine does", { skip }, async () => {
 	const frame = labelFrame(800, 600, 0, 360, 220, 3);
 	const { image } = await cvjs.resize(frame, "num", 220, "num", 0, "raw");
 	assert.strictEqual(image.width, 220);
@@ -427,7 +427,7 @@ test("imageAlign refuses ECC past 500 iterations, so a huge count cannot hold th
 
 test("what opencv.js throws reaches a caller as an Error, never a bare number", { skip }, async () => {
 	// opencv.js throws a pointer for an OpenCV error; label-crop and
-	// nativeSeed read err.message
+	// cvAlign read err.message
 	const cv = await cvjs.ready();
 	const { asError } = cvjs._internals;
 	let thrown;
@@ -537,7 +537,7 @@ test("label-crop reports a miss on a frame with no label", { skip }, async () =>
 
 test("golden-compare's nativeFastAlign path runs on the opencv.js engine", { skip }, async () => {
 	const sharp = require("sharp");
-	const nativeSeed = require("../lib/nativeSeed.js");
+	const cvAlign = require("../lib/cvAlign.js");
 	const { prepareGolden, compareFrame } = require("../lib/compare.js");
 
 	const width = 512;
@@ -597,7 +597,7 @@ test("golden-compare's nativeFastAlign path runs on the opencv.js engine", { ski
 		mmPerPixelNative: null,
 	};
 
-	nativeSeed._setEngine(engine);
+	cvAlign._setEngine(engine);
 	try {
 		const golden = await prepareGolden(png, cfg);
 		const result = await compareFrame(png, golden, { ...cfg, nativeFastAlign: true });
@@ -622,7 +622,7 @@ test("golden-compare's nativeFastAlign path runs on the opencv.js engine", { ski
 		);
 		assert.strictEqual(moved.pass, true, JSON.stringify(moved.transform));
 	} finally {
-		nativeSeed._resetEngine();
+		cvAlign._resetEngine();
 	}
 });
 

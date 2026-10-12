@@ -20,7 +20,7 @@ const { HAS_SAB } = require("../lib/shared.js");
 const nativeKernels = require("../lib/nativeKernels.js");
 
 const status = nativeKernels.status();
-// the native kernels as this process loads them: the prebuild, or a
+// the kernels addon as this process loads it: the prebuild, or a
 // build from source under VISION_TOOLS_KERNELS=source
 const NATIVE = nativeKernels.mode() === "source" ? "source" : undefined;
 const setKernels = (v) => {
@@ -33,7 +33,7 @@ const SKIP = !HAS_SAB
 		? "no worker pool on this host"
 		: status.native
 			? false
-			: `no native kernels here: ${status.reason}`;
+			: `no kernels addon here: ${status.reason}`;
 
 const W = 900;
 const H = 1200;
@@ -151,7 +151,7 @@ for (const [label, cfg] of [
 	["", CFG],
 	[", with the stages", { ...CFG, debugStages: true, heatmapFormat: "raw" }],
 ]) {
-	test(`whole frames come out the same with the native kernels as with the JS ones${label}`, { skip: SKIP }, async () => {
+	test(`whole frames come out the same with the kernels addon as with the JS ones${label}`, { skip: SKIP }, async () => {
 		const golden = await prepareGolden(await sharp(labelSvg()).png().toBuffer(), cfg);
 		const js = await run("js", golden, cfg);
 		const native = await run("native", golden, cfg);

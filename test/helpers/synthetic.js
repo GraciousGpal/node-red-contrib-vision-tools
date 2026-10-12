@@ -49,7 +49,7 @@ function unionMasks(a, b) {
 }
 
 /**
- * A raw image object in the shape the native engine returns and the
+ * A raw image object in the shape the OpenCV engine returns and the
  * label-crop op accepts: { data, width, height, channels, colorSpace,
  * dtype }.
  */

@@ -1,5 +1,5 @@
 /**
- * The native kernels are optional: whatever stops them loading must leave
+ * The kernels addon is optional: whatever stops it loading must leave
  * the JS kernels running, with one line saying why, and nothing else. Each
  * case runs in its own process, since the loader decides once per thread.
  */
@@ -23,13 +23,13 @@ const LOADER = path.join(__dirname, "..", "lib", "nativeKernels.js");
 const FAKE_DLOPEN = (abi) =>
 	`globalThis.dlopened = 0; require.extensions[".node"] = (m) => { globalThis.dlopened++; m.exports = { abi: ${abi}, diff() {} }; };`;
 
-/** status(), whether withNative kept the JS table, and how many .node
+/** status(), whether withKernels kept the JS table, and how many .node
  * files were opened (with FAKE_DLOPEN), in a fresh process. */
 function probe(loader, { env = {}, before = "" } = {}) {
 	const script = `${before}
 		const k = require(${JSON.stringify(loader)});
 		const js = { diff() {} };
-		process.stdout.write(JSON.stringify({ status: k.status(), jsKept: k.withNative(js) === js, dlopened: globalThis.dlopened }));`;
+		process.stdout.write(JSON.stringify({ status: k.status(), jsKept: k.withKernels(js) === js, dlopened: globalThis.dlopened }));`;
 	const out = execFileSync(process.execPath, ["-e", script], {
 		env: { ...process.env, VISION_TOOLS_KERNELS: "", ...env },
 		encoding: "utf8",
@@ -161,7 +161,7 @@ test("the shipped manifest lists every shipped binary at its size and hash", () 
 	}
 });
 
-test("withNative runs the addon, falls back on a refused dispatch only, and rethrows anything else", () => {
+test("withKernels runs the addon, falls back on a refused dispatch only, and rethrows anything else", () => {
 	const calls = [];
 	const js = {};
 	for (const name of nativeKernels.NAMES) js[name] = () => calls.push(`js ${name}`);
@@ -178,7 +178,7 @@ test("withNative runs the addon, falls back on a refused dispatch only, and reth
 		toneCompare: () => calls.push("native toneCompare"),
 		diff: (ctx, lo, hi, index) => calls.push(`native diff ${index}`),
 	};
-	const run = nativeKernels.withNative(js, addon);
+	const run = nativeKernels.withKernels(js, addon);
 	const ctx = { width: 3, gray: new SharedArrayBuffer(4), fx: new SharedArrayBuffer(8) };
 	run.localField(ctx, 0, 1, 0);
 	run.localApply(ctx, 0, 1, 0);

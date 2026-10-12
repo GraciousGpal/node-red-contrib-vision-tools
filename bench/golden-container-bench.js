@@ -240,7 +240,7 @@ async function main() {
 			sha256: goldenKey,
 		},
 		source: Object.fromEntries(
-			["golden-compare.js", "lib/compare.js", "lib/nativeSeed.js"].map((f) => [
+			["golden-compare.js", "lib/compare.js", "lib/cvAlign.js"].map((f) => [
 				f,
 				hash(fs.readFileSync(path.join(root, f))),
 			]),
@@ -289,7 +289,7 @@ async function main() {
 			const cases = [];
 			let coldMs;
 			// Each iteration is a pass over the whole set, never the same frame
-			// twice in a row: the native addon caches its last frame, so a
+			// twice in a row: the previous OpenCV addon cached its last frame, so a
 			// back-to-back repeat aligns in ~4 ms instead of ~18 and flatters
 			// every number that includes it.
 			for (let pass = 0; pass < iterations; pass++)

@@ -13,7 +13,7 @@ const test = require("node:test");
 const assert = require("node:assert/strict");
 const sharp = require("sharp");
 const { prepareGolden, compareFrame } = require("../lib/compare.js");
-const nativeSeed = require("../lib/nativeSeed.js");
+const cvAlign = require("../lib/cvAlign.js");
 const { HAS_SAB, takeShared, giveShared, sharedAllocated, sparedBytes, SPARE_MAX_BYTES } = require("../lib/shared.js");
 const { shutdown, poolSize } = require("../lib/pool.js");
 
@@ -160,7 +160,7 @@ test("a frame hands its scratch back, and a dirty spare changes nothing", { skip
 test("a frame that falls back from OpenCV hands back the attempt's scratch too", { skip: NO_POOL }, async () => {
 	// an engine whose canvas disagrees with the golden everywhere, so an
 	// unpinned frame always falls back to the JS search
-	nativeSeed._setEngine({
+	cvAlign._setEngine({
 		async imageAlign(reference) {
 			const data = Buffer.alloc(reference.data.length);
 			for (let i = 0; i < data.length; i++) data[i] = 255 - reference.data[i];
@@ -192,7 +192,7 @@ test("a frame that falls back from OpenCV hands back the attempt's scratch too",
 			`a fallback frame allocated ${fallback - plain} bytes more than a JS one over three frames`,
 		);
 	} finally {
-		nativeSeed._resetEngine();
+		cvAlign._resetEngine();
 	}
 });
 

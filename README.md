@@ -48,7 +48,7 @@ in [CHANGELOG.md](CHANGELOG.md).
 - **`line-finder`** — finds one straight edge inside a region you draw. A
   row of calipers scans across it, each reports where the brightness
   steps, and a line is fitted through those points with outliers dropped.
-  Pure JS, no native engine, and only the pixels inside the region are
+  Pure JS, no OpenCV engine, and only the pixels inside the region are
   touched.
 - **`barcode-locate`** — finds and decodes 1D and 2D barcodes, optionally
   restricted to pre-defined pixel regions with a whole-image fallback.
@@ -144,13 +144,14 @@ repository, [GraciousGpal/opencv5](https://github.com/GraciousGpal/opencv5),
 which builds and tests its binaries; this package depends on it
 (`^0.1.0`) and builds nothing of it.
 
-### Native kernels
+### Kernels addon
 
 Five of `golden-compare`'s per-pixel pool kernels — the local alignment's
 tile search and resampling, the binarization with the tone comparison
 riding on it, the tone comparison alone, and the one-pass print and
-background diff — have native twins in `native/kernels.cc`: a small
-N-API addon with no dependencies (no OpenCV, no node-addon-api). They do
+background diff — have C++ twins in `native/kernels.cc`, the kernels
+addon: a small N-API addon with no dependencies (no OpenCV, no
+node-addon-api), selected by `VISION_TOOLS_KERNELS`. They do
 the JS kernels' arithmetic in the JS kernels' order, so `msg.result` and
 `msg.heatmap` are the same to the bit whichever runs; they only make the
 frame faster. On the rig (1475x2125 golden, 12 workers, all 162 sample
@@ -160,11 +161,11 @@ frames twice), a good frame:
 | --- | ---: | ---: | ---: |
 | before | 65.9 ms | 81.4 ms | 91.0 ms |
 | JS kernels | 62.9 ms | 78.9 ms | 85.4 ms |
-| native kernels | **46.5 ms** | **61.1 ms** | **66.3 ms** |
+| kernels addon | **46.5 ms** | **61.1 ms** | **66.3 ms** |
 
 ("JS kernels" has the other change that came with them: the raw
-overlay's canvas is built off the inspector thread, which the native
-kernels had made the critical path.)
+overlay's canvas is built off the inspector thread, which the kernels
+addon had made the critical path.)
 
 The binaries ship **inside the package**, in `prebuilds/<platform>-<arch>/`,
 so there is nothing to compile and no install script: the palette
@@ -180,7 +181,7 @@ manager and `npm install --ignore-scripts` get the same files.
 
 The Linux x64 binaries are built by hand or by CI in pinned images (below);
 the other five come from the CI run `.github/workflows/prebuild.yml` makes,
-which builds each on its own runner and runs the native parity and fuzz
+which builds each on its own runner and runs the kernels' parity and fuzz
 tests against the JS kernels there before it uploads it.
 
 Any CPU of the architecture runs them (baseline x86-64 / armv8-a; the
@@ -215,7 +216,7 @@ log at startup saying which kernels it runs and why
 that is there and fails to load is a warning). Set
 `VISION_TOOLS_KERNELS=js` to run the JS kernels anyway, which is how to
 check the two against each other on one host. The JS kernels stay the
-reference: the tests hold every native kernel to them byte for byte. A
+reference: the tests hold every C++ kernel to them byte for byte. A
 dispatch the addon refuses — a buffer too short, a grid that is not its
 image's, a library caller's `localAlignMax` past 64 (the node clamps it
 to 16) — runs on its JS kernel too.
@@ -374,7 +375,10 @@ bytes would then depend on the CPU.
 Decode/resize uses [`sharp`](https://sharp.pixelplumbing.com) (native,
 libvips) — the images here run 20+ MP, and a pure-JS decoder was too slow.
 Everything after decode (threshold, dilation, alignment search, diff,
-block-sum) is plain typed-array math with no further native dependencies.
+block-sum) is plain typed-array math; the kernels addon runs five of
+those per-pixel kernels (local alignment, threshold, tone, diff) in C++
+where it loads, to the same bytes, and cvAlign, when switched on, hands
+the alignment to the OpenCV engine.
 
 ### Input
 
@@ -452,7 +456,7 @@ inspection.
 
 Raw descriptors are validated before `sharp` sees them: the buffer must
 actually be `width × height × channels` bytes (a mismatch is a clear
-error naming the real numbers, not a native crash), declared sizes are
+error naming the real numbers, not a crash inside sharp's C++), declared sizes are
 capped, and any image input over 512 MB is refused before it is copied
 or hashed.
 
@@ -510,7 +514,7 @@ largest first:
 | `debugStages` | **+690ms** when on. Pure diagnostics |
 | heat maps | **+~300ms** when on. Display output; the verdict does not use them |
 | trained transform | **halves** the alignment, and accuracy is the reason to pin, not speed |
-| native kernels | a good frame 65.9 → **46.5ms** median on the rig (1475x2125 golden, 12 workers), identical results. On by default where a prebuilt binary loads; see **Native kernels** above |
+| kernels addon | a good frame 65.9 → **46.5ms** median on the rig (1475x2125 golden, 12 workers), identical results. On by default where a prebuilt binary loads; see **Kernels addon** above |
 | `workers` | the per-pixel stages and both summed-area tables run on the pool. 0 picks one per core up to **16**; on a 16-core host, 8 → 12 workers took align 798ms → 680ms |
 | `nativeFastAlign` | aggressive OpenCV prototype: 663ms → **243ms** on the clean PNG and 1065ms → **443ms** on the high-compression reject. See below |
 | `nativeAlignSeed` | conservative prototype, off by default: align 545ms → 338ms. See **Native alignment seed** below |
@@ -624,9 +628,11 @@ Tick **Experimental OpenCV fast alignment** or send
 warp into OpenCV. This path also decodes through OpenCV. It bypasses both JS
 summed-area tables, the density sweeps, pixel polish, and the final global
 warp; local tile refinement and the blemish policy still run afterward.
-`result.transform.native` reports which path produced the frame.
+`result.transform.native` reports which path produced the frame (`true`:
+the OpenCV fast align). In the code both this fast align and the
+alignment seed below are cvAlign (`lib/cvAlign.js`).
 
-The native result is accepted only when it stays inside `maxAngleDeg` and,
+The cvAlign result is accepted only when it stays inside `maxAngleDeg` and,
 under a trained transform, within 3% of each trained magnification; a
 result that fails either falls back to the JS alignment and
 `result.transform.nativeFallback` explains why, so OpenCV cannot explain
@@ -636,7 +642,7 @@ full-resolution disagreement score above 0.15 falls back instead. Under a
 pin that score is deliberately *not* a gate: disagreement cannot tell a
 misaligned frame from a defective one, and gating on it sent every heavily
 defective print through the full JS search (seconds on the rig, against
-~70ms) to reach the same verdict. A validated native alignment is kept and
+~70ms) to reach the same verdict. A validated cvAlign alignment is kept and
 the disagreement is reported as the defect it is.
 
 When the fast path does fall back, the `nativeAlignSeed` seed is **not**
@@ -674,7 +680,7 @@ from 545ms to 338ms, and the search itself from 325ms to 125ms.
 
 The engine is **not a dependency**. Without it the flag is inert and the
 node behaves exactly as it does today, bit for bit —
-`test/nativeSeed.test.js` asserts that.
+`test/cvAlign.test.js` asserts that.
 
 A seed replaces the sweeps' **guess**, never their verdict. The trained
 magnifications stay the trained ones — a seed is not allowed to reopen the
@@ -862,7 +868,7 @@ is on.
   `goldenHeight`, `frameWidth`, `frameHeight`, `frameNativeWidth`,
   `frameNativeHeight`, as a trained record has; `barcode-locate` places
   profile regions with them): `pinned` reports whether a
-  trained transform was used, `seeded` whether it started from a native
+  trained transform was used, `seeded` whether it started from an OpenCV
   ORB+ECC seed rather than the staged sweeps, and `pinRefused` is present
   with the reason when there was a trained record the node declined to
   use — it also warns, but a warning is easy to miss and the fallback to
@@ -910,10 +916,14 @@ is on.
   images; mask stages are PNG or raw, never JPEG.
 - `msg.timings` — `{ decodeMs, alignMs, diffMs, heatmapMs, stagesMs, totalMs }`
   plus the align bucket's own split, `nativeAlignMs`, `seedMs`, `tableMs`,
-  `searchMs`, `warpMs`, `localAlignMs`, `thresholdMs` and, after a native
-  fallback, the `nativeFallbackMs` the discarded attempt cost. The node's
-  log line prints the same split and which way the frame was aligned
-  (`native`, `js`, `js+seed`) with the fallback reason when there was one.
+  `searchMs`, `warpMs`, `localAlignMs`, `thresholdMs` and, after an unpinned
+  OpenCV fast align failed its score gate, the `nativeFallbackMs` the
+  discarded attempt cost.
+  The node's log line prints the same split (`nativeAlignMs` as `native`,
+  `nativeFallbackMs` as `discarded`) and which way the frame was aligned:
+  `opencv5` or `opencv.js` when the OpenCV fast align took it, else `js`
+  or `js+seed`, with `after native fallback:` and the reason when there
+  was one.
 - `msg.stages` — only if `debugStages` is on: `Buffer`s for each
   pipeline step (`goldenGray`, `goldenFg`, `goldenFgDilatedBackground`,
   `targetGray`, `targetFg`, `targetGrayAligned`, `targetFgAligned`,
@@ -1204,7 +1214,7 @@ label just past it. A bright halo on the table qualifies (its inner edge
 is a step, and the halo is darker than the label); the inner edge of a
 printed barcode band does not (the label's own white margin sits in its
 outside strip); a smooth lighting ramp across the label is not a step at
-all. The native Sobel **edge** accumulator is the fallback for a seam on
+all. The OpenCV engine's Sobel **edge** accumulator is the fallback for a seam on
 an equally-toned surface, under the same outside-strip rule. Clipped
 sides stay put. `refinedSides` lists which sides moved. A boundary
 fainter than 12 levels (this rig's label liner, 4 levels off the label)
@@ -1931,7 +1941,7 @@ Several suites assert something other than a value:
   of a rotation convention drift silently — the box drawn stops being the
   box searched. `test/lineFinderEditor.test.js` drives the viewer itself
   over a small fake DOM.
-- `test/nativeKernels.test.js` holds each native kernel to its JS twin
+- `test/nativeKernels.test.js` holds each C++ kernel to its JS twin
   byte for byte on synthetic dispatches, fixed and fuzzed
   (`VISION_TOOLS_FUZZ_ROUNDS`, default 40 a kernel), and
   `test/nativePipeline.test.js` runs whole frames with each set. Both
@@ -1954,7 +1964,8 @@ identical `compareFrame` output on a synthetic matrix; it cannot speak for
 inputs outside it. It extracts `lib/` and `prebuilds/` at the ref, runs
 each tree in its own process with this checkout's `node_modules`, and
 compares the result JSON with timings stripped plus the sha256 of every
-buffer. The matrix covers JS search; native alignment accepted, rejected
+buffer. The matrix covers JS search; cvAlign (the OpenCV fast align and
+alignment seed) accepted, rejected
 on angle, scale drift and score, pinned, seeded and missing; Otsu,
 Sauvola and fixed thresholds; edge margins; local alignment on and off;
 1 and 4 workers; raw and PNG heatmaps; stages and thumbnails on and off.
@@ -1967,7 +1978,7 @@ prebuilt binary for the current platform exits 2 with KERNELS DIFFER
 `node bench/compare-parity.js [--ref HEAD] [--quick]` exits 0 when
 identical, 1 naming the first differing keys, and 2 when a run fails or
 times out, the two sides load different kernels, or a side never takes
-the native alignment path; `--quick` is about 35 cases, the default the
+the OpenCV fast-align path; `--quick` is about 35 cases, the default the
 full matrix. Run it in both kernel modes - as is and with
 `VISION_TOOLS_KERNELS=js` - before merging any change to
 `lib/compare.js`, `lib/parallel.js`, `lib/poolWorker.js`,

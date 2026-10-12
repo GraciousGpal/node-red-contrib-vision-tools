@@ -1,5 +1,5 @@
 /**
- * The native kernels (native/kernels.cc) against the JS ones they stand in
+ * The kernels addon (native/kernels.cc) against the JS ones they stand in
  * for, to the byte: every buffer a dispatch writes - masks, counts, the
  * displacement field, the histograms - on synthetic dispatches built as
  * the pool builds them (test/helpers/kernelCases.js).
@@ -23,7 +23,7 @@ const { kernelCase, copyCtx, snapshot, KERNELS } = require("./helpers/kernelCase
 
 const status = nativeKernels.status();
 const addon = status.native ? nativeKernels.load().addon : null;
-const SKIP = status.native ? false : `no native kernels here: ${status.reason}`;
+const SKIP = status.native ? false : `no kernels addon here: ${status.reason}`;
 const ROUNDS = Number(process.env.VISION_TOOLS_FUZZ_ROUNDS) || 40;
 
 /** Run one dispatch through both, from the same bytes; what differs. */
@@ -32,7 +32,7 @@ function compare(name, ctx, index) {
 	const nat = copyCtx(ctx);
 	const before = snapshot(js);
 	kernels[name](js, 0, ctx.total, index);
-	// the addon itself, not withNative: a refused dispatch must fail here,
+	// the addon itself, not withKernels: a refused dispatch must fail here,
 	// not quietly run the JS kernel
 	addon[name](nativeKernels.views(nat), 0, ctx.total, index);
 	const want = snapshot(js);
@@ -107,7 +107,7 @@ function withLevel(ctx, level) {
 }
 
 test("a refused dispatch runs on the JS kernel instead, with the JS kernel's bytes", { skip: SKIP }, () => {
-	const run = nativeKernels.withNative(kernels, addon);
+	const run = nativeKernels.withKernels(kernels, addon);
 	const ctx = { ...kernelCase("diff", 5), radius: 2.5 };
 	const js = copyCtx(ctx);
 	const viaNative = copyCtx(ctx);

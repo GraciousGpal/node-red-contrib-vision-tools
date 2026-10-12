@@ -6,7 +6,7 @@
  * (node_modules from the repo), and diffs result JSON (timings stripped) plus
  * the sha256 of every buffer. Exit 0 when identical, 1 with the first 20
  * differing keys, 2 on a git archive failure, a child crash or timeout, kernels
- * that differ between sides, or a side that never took the native path.
+ * that differ between sides, or a side that never took the OpenCV fast-align path.
  * --out must not sit inside another Node project: its node_modules would win.
  *
  * Usage:
@@ -165,7 +165,6 @@ function digest(result) {
 async function child(libDir, outFile, quick) {
 	const sharp = require("sharp");
 	const { prepareGolden, compareFrame } = require(path.join(libDir, "compare.js"));
-	const nativeSeed = require(path.join(libDir, "nativeSeed.js"));
 	const kernels = require(path.join(libDir, "nativeKernels.js"));
 	const pairs = await buildPairs(sharp);
 	const cases = {};
@@ -188,13 +187,21 @@ async function child(libDir, outFile, quick) {
 	fake.imageAlign = async () => {
 		throw new Error("forced");
 	};
-	nativeSeed._setEngine(fake);
+	// the cvAlign module, whatever this ref calls its file: the one compare.js
+	// loaded from libDir that exposes the engine seam
+	const libReal = fs.realpathSync(libDir) + path.sep;
+	const seam = Object.values(require.cache).find(
+		(m) => m.filename.startsWith(libReal) && typeof m.exports._setEngine === "function",
+	);
+	if (!seam) throw new Error(`no module under ${libDir} exports _setEngine`);
+	const cvAlign = seam.exports;
+	cvAlign._setEngine(fake);
 	for (const pn of quick ? ["shift"] : ["shift", "tone"]) {
 		for (const workers of quick ? [4] : [1, 4]) {
 			await run(`${pn}|noAlign|w${workers}|raw`, pairs[pn], { ...BASE, nativeFastAlign: true, heatmapFormat: "raw", workers });
 		}
 	}
-	nativeSeed._resetEngine();
+	cvAlign._resetEngine();
 	const st = kernels.status();
 	fs.writeFileSync(outFile, JSON.stringify({ kernels: { mode: kernels.mode(), root: path.dirname(libDir), ...st }, cases }));
 	require(path.join(libDir, "pool.js")).shutdown();
@@ -211,7 +218,7 @@ function extractRef(ref, dir) {
 }
 
 const kernelLine = (side, k) =>
-	`kernels ${side}: VISION_TOOLS_KERNELS=${k.mode}, ran ${k.native ? `native addon ${path.join(k.root, k.file)}` : `JS kernels (${k.reason})`}`;
+	`kernels ${side}: VISION_TOOLS_KERNELS=${k.mode}, ran ${k.native ? `kernels addon ${path.join(k.root, k.file)}` : `JS kernels (${k.reason})`}`;
 
 function diffTree(a, b, at, out) {
 	if (out.length >= 20) return;
@@ -272,7 +279,7 @@ function main() {
 	const wantsNative = Object.values(MODES).some((m) => m.nativeFastAlign || m.nativeAlignSeed);
 	const hollow = Object.entries(paths).filter(([, c]) => wantsNative && !c.native).map(([side]) => side);
 	if (hollow.length) {
-		console.error(`NO NATIVE ALIGNMENT on ${hollow.join(" and ")}: no OpenCV engine took a case; the native paths were not compared.`);
+		console.error(`NO NATIVE ALIGNMENT on ${hollow.join(" and ")}: no OpenCV engine took a case; the OpenCV fast-align paths were not compared.`);
 		process.exitCode = 2;
 		return;
 	}
