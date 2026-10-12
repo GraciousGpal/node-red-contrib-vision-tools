@@ -1649,6 +1649,20 @@ module.exports = (RED) => {
 					);
 				}
 
+				// This frame's own transform, with the sizes that make it a map
+				// from golden working px to the frame as it arrived - the same
+				// fields a trained record carries, so barcode-locate downstream
+				// can place the profile's barcode boxes where the part sits on
+				// this frame, without a trained transform.
+				const frameTransform = {
+					...result.transform,
+					goldenWidth: goldenMeta.width,
+					goldenHeight: goldenMeta.height,
+					frameWidth: result.targetWorking.width,
+					frameHeight: result.targetWorking.height,
+					frameNativeWidth: result.targetNative ? result.targetNative.width : null,
+					frameNativeHeight: result.targetNative ? result.targetNative.height : null,
+				};
 				msg.payload = result.pass;
 				msg.result = {
 					pass: result.pass,
@@ -1657,8 +1671,8 @@ module.exports = (RED) => {
 					// pin is otherwise invisible from the message: same shape,
 					// silently slower, transform.pinned quietly false
 					transform: pinRefused
-						? { ...result.transform, pinRefused }
-						: result.transform,
+						? { ...frameTransform, pinRefused }
+						: frameTransform,
 					// registration grade, and whether this looks like the wrong
 					// golden rather than a bad part - see gradeMatch
 					match: result.match,

@@ -17,14 +17,16 @@
  *
  * Regions come from one of three places, first match wins: msg.regions;
  * with regionSource "profile", the golden's profile file (the barcodes
- * golden-compare found on the artwork, mapped into this payload through
- * the trained transform by lib/goldenRegions.js); else the configured
- * list. The profile file is msg.result.profile.path (golden-compare
- * upstream resolved it), else msg.profile as a name under profileDir,
- * else the configured profilePath. Mapped regions are cached per
- * (profile path, its mtimeMs and size, payload size, calibration and its
- * mtimeMs, pad), so a message costs one fs.stat of the profile (plus one
- * of the calibration when set) and a header read for the payload's size.
+ * golden-compare found on the artwork, mapped into this payload by
+ * lib/goldenRegions.js through golden-compare's transform for this frame,
+ * msg.result.transform, else the profile's trained transform); else the
+ * configured list. The profile file is msg.result.profile.path
+ * (golden-compare upstream resolved it), else msg.profile as a name under
+ * profileDir, else the configured profilePath. The profile and
+ * calibration are cached per (profile path, its mtimeMs and size,
+ * calibration and its mtimeMs), and trained placements per payload size,
+ * so a message costs one fs.stat of the profile (plus one of the
+ * calibration when set) and a header read for the payload's size.
  * Every problem with a profile is warned once per profile path and leaves
  * the message with no profile regions - the full-image fallback still
  * runs - rather than failing it.
@@ -38,7 +40,8 @@
  *
  * Output: one message per barcode found, in the order regions were scanned
  * (then, if used, the full-image fallback) - msg.text, msg.format,
- * msg.roi, msg.symbol, msg.regionLabel, msg.regionSource, msg.source
+ * msg.roi, msg.symbol, msg.regionLabel, msg.regionSource,
+ * msg.regionPlacement ("frame"|"trained"|null), msg.source
  * ("region"|"fullImage"), msg.expectedText/msg.textMatches (profile
  * regions; null otherwise), msg.decodeMs, msg.timings, msg.payload (a
  * preview crop of that barcode's region). If nothing is found at all,
@@ -154,11 +157,15 @@ module.exports = (RED) => {
 			return null;
 		}
 
-		// Read, check and map one profile for one payload size. Returns
-		// { regions, warnings: [[key, text]], contentKey, transform, calibration }
-		// - every problem is a warning with no regions, never a throw.
-		async function buildEntry(file, frame) {
-			const none = (key, text, extra = {}) => ({ regions: [], warnings: [[key, text]], contentKey: null, ...extra });
+		// Read and check one profile, and the calibration with it. Returns
+		// { barcodes, goldenNative, trained, trainedProblem, calibration,
+		// contentKey, warnings: [[key, text]], placed } or, when there is
+		// nothing to place, { barcodes: null, warnings, contentKey } - every
+		// problem is a warning, never a throw. `trained` is the profile's
+		// trained transform, null with `trainedProblem` saying why when it
+		// cannot be used; `placed` caches its mapping per payload size.
+		async function buildEntry(file) {
+			const none = (key, text, extra = {}) => ({ barcodes: null, warnings: [[key, text]], contentKey: null, ...extra });
 			const read = await profileStore.readProfile(file);
 			if (!read) return none("missing", `profile ${file} does not exist (yet) - no regions from it`);
 			if (read.error) return none("unreadable", `${read.error} - no regions from it`);
@@ -170,7 +177,6 @@ module.exports = (RED) => {
 			// transform) are still A's - and A's boxes would be mapped onto
 			// B's frames.
 			const contentKey = profile.barcodes && profile.barcodes.goldenContentKey ? profile.barcodes.goldenContentKey : null;
-			const transform = profile.transform;
 			const barcodes = profile.barcodes;
 			if (!barcodes || !Array.isArray(barcodes.regions)) {
 				return none(
@@ -180,15 +186,22 @@ module.exports = (RED) => {
 					{ contentKey },
 				);
 			}
-			if (!transform) {
-				return none("no-transform", `profile ${file} has barcodes but no trained transform to place them with - train the transform`, { contentKey });
-			}
-			if (barcodes.goldenContentKey !== transform.goldenContentKey) {
-				return none(
+			// Not fatal here: golden-compare upstream places the boxes with the
+			// frame's own transform, and the trained one is only the fallback.
+			let trained = profile.transform || null;
+			let trainedProblem = null;
+			if (!trained) {
+				trainedProblem = [
+					"no-transform",
+					`profile ${file} has barcodes but nothing to place them with - put golden-compare (with this ` +
+						"profile directory) upstream, or train the transform",
+				];
+			} else if (barcodes.goldenContentKey !== trained.goldenContentKey) {
+				trainedProblem = [
 					"section-keys",
 					`profile ${file} holds barcodes of one golden and a transform of another; retrain or re-derive`,
-					{ contentKey },
-				);
+				];
+				trained = null;
 			}
 
 			let calibration = null;
@@ -212,6 +225,14 @@ module.exports = (RED) => {
 				width: barcodes.nativeWidth || (profile.golden && profile.golden.nativeWidth),
 				height: barcodes.nativeHeight || (profile.golden && profile.golden.nativeHeight),
 			};
+			return { barcodes, goldenNative, trained, trainedProblem, calibration, contentKey, warnings: [], placed: new Map() };
+		}
+
+		// The boxes of one profile entry placed in one payload through one
+		// transform. Returns { regions, warnings: [[key, text]] }; a transform
+		// that cannot be mapped is a warning with no regions.
+		function placeRegions(file, entry, transform, frame) {
+			const { barcodes, goldenNative, calibration } = entry;
 			let mapped;
 			try {
 				mapped = mapProfileRegions({ transform, barcodes, goldenNative }, frame, calibration, {
@@ -219,7 +240,7 @@ module.exports = (RED) => {
 					padMinPx: node.regionPadMinPx,
 				});
 			} catch (err) {
-				return none("mapping", `profile ${file}: ${err.message.replace(/^goldenRegions: /, "")}`, { contentKey });
+				return { regions: [], warnings: [["mapping", `profile ${file}: ${err.message.replace(/^goldenRegions: /, "")}`]] };
 			}
 			const warnings = mapped.warnings.map((w) => [`map:${w}`, `profile ${file}: ${w}`]);
 
@@ -238,7 +259,26 @@ module.exports = (RED) => {
 						"decode the native frame - barcodes decode reliably only at the camera's resolution, see Help",
 				]);
 			}
-			return { regions: mapped.regions, warnings, contentKey };
+			return { regions: mapped.regions, warnings };
+		}
+
+		// The transform golden-compare upstream solved for this very frame,
+		// as a record mapProfileRegions takes, or null when there is none to
+		// trust: no upstream result, one from a golden-compare too old to
+		// carry the frame's sizes, another golden than the profile's
+		// barcodes, or a frame that did not register (its placement is
+		// nobody's - the same frames training refuses).
+		function frameTransformFor(msg, contentKey) {
+			const r = msg.result;
+			const t = r && r.transform;
+			if (!t || !r.profile || !contentKey || r.profile.contentKey !== contentKey) return null;
+			const m = r.match;
+			if (!m || m.grade === "poor" || m.labelMissing || m.mismatchSuspected) return null;
+			for (const k of ["scaleX", "scaleY", "goldenWidth", "goldenHeight", "frameWidth", "frameHeight", "frameNativeWidth", "frameNativeHeight"]) {
+				if (!(typeof t[k] === "number" && Number.isFinite(t[k]) && t[k] > 0)) return null;
+			}
+			if (!Number.isFinite(t.ox) || !Number.isFinite(t.oy)) return null;
+			return { ...t, placement: { ox: t.ox, oy: t.oy, angleDeg: Number(t.angleDeg) || 0 } };
 		}
 
 		// A profile that cannot be used is the profile's problem, not the
@@ -247,7 +287,7 @@ module.exports = (RED) => {
 		// no profile regions, exactly as for a missing file.
 		async function profileRegions(msg, buffer, raw) {
 			const file = profileFileFor(msg);
-			if (!file) return { regions: [], file: null };
+			if (!file) return { regions: [], file: null, placement: null };
 			// outside the try: an unreadable payload is the frame's error and
 			// still fails the message, as it would in the decode
 			let frame = raw ? { width: raw.width, height: raw.height } : null;
@@ -260,7 +300,7 @@ module.exports = (RED) => {
 			} catch (err) {
 				const code = (err && err.code) || (err && err.message) || String(err);
 				warnOnce(`${file}|error:${code}`, `profile ${JSON.stringify(file)} cannot be used: ${err && err.message ? err.message : err} - no regions from it`);
-				return { regions: [], file };
+				return { regions: [], file, placement: null };
 			}
 		}
 
@@ -269,18 +309,10 @@ module.exports = (RED) => {
 				statOrNull(file),
 				node.scaleFilePath ? statOrNull(node.scaleFilePath) : null,
 			]);
-			const key = [
-				file,
-				statKey(profileStat),
-				`${frame.width}x${frame.height}`,
-				node.scaleFilePath,
-				statKey(scaleStat),
-				node.regionPad,
-				node.regionPadMinPx,
-			].join("|");
+			const key = [file, statKey(profileStat), node.scaleFilePath, statKey(scaleStat)].join("|");
 			let entry = node.regionCache.get(key);
 			if (!entry) {
-				entry = await buildEntry(file, frame);
+				entry = await buildEntry(file);
 				if (node.regionCache.size >= REGION_CACHE_MAX) {
 					node.regionCache.delete(node.regionCache.keys().next().value);
 				}
@@ -312,9 +344,39 @@ module.exports = (RED) => {
 					`${file}|${version}|upstream-key|${upstream.contentKey}`,
 					`profile ${file} is for another golden than the one golden-compare just inspected against - no regions from it`,
 				);
-				return { regions: [], file };
+				return { regions: [], file, placement: null };
 			}
-			return { regions: entry.regions, file };
+			if (!entry.barcodes) return { regions: [], file, placement: null };
+
+			// This frame's own placement first: it is where this part sits,
+			// needs no training, and is solved by the compare anyway. The
+			// trained transform (the run's last training frame) is the
+			// fallback for a frame that did not register, or a payload with
+			// no golden-compare ahead of it.
+			const live = frameTransformFor(msg, entry.contentKey);
+			let placed;
+			let placement;
+			if (live) {
+				placed = placeRegions(file, entry, live, frame);
+				placement = "frame";
+			} else if (entry.trained) {
+				const size = `${frame.width}x${frame.height}`;
+				placed = entry.placed.get(size);
+				if (!placed) {
+					placed = placeRegions(file, entry, entry.trained, frame);
+					if (entry.placed.size >= REGION_CACHE_MAX) entry.placed.delete(entry.placed.keys().next().value);
+					entry.placed.set(size, placed);
+				}
+				placement = "trained";
+			} else {
+				// a frame that did not register says so through golden-compare
+				// already; the profile's own gap is only news without one
+				const m = msg.result && msg.result.match;
+				if (!(m && (m.grade === "poor" || m.labelMissing || m.mismatchSuspected))) warnOnce(`${file}|${version}|${entry.trainedProblem[0]}`, entry.trainedProblem[1]);
+				return { regions: [], file, placement: null };
+			}
+			for (const [k, text] of placed.warnings) warnOnce(`${file}|${version}|${placement}|${k}`, text);
+			return { regions: placed.regions, file, placement: placed.regions.length ? placement : null };
 		}
 
 		// The profile region a result was read in, among those whose box
@@ -353,6 +415,7 @@ module.exports = (RED) => {
 				let regionSource;
 				let profileFile = null;
 				let fromProfile = [];
+				let regionPlacement = null;
 				if (msg.regions !== undefined) {
 					regions = normalizeRegions(msg.regions);
 					regionSource = "msg";
@@ -364,6 +427,7 @@ module.exports = (RED) => {
 						const got = await profileRegions(msg, buffer, raw);
 						fromProfile = got.regions;
 						profileFile = got.file;
+						regionPlacement = got.placement;
 					}
 					regions = fromProfile;
 				} else {
@@ -394,6 +458,7 @@ module.exports = (RED) => {
 						symbol: null,
 						regionLabel: null,
 						regionSource,
+						regionPlacement,
 						expectedText: null,
 						textMatches: null,
 						source: usedFullImage ? "fullImage" : "region",
@@ -431,6 +496,7 @@ module.exports = (RED) => {
 						symbol: r.symbol,
 						regionLabel: r.regionLabel,
 						regionSource,
+						regionPlacement,
 						expectedText,
 						textMatches,
 						source: r.source,

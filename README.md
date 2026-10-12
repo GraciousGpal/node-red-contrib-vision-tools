@@ -54,7 +54,8 @@ in [CHANGELOG.md](CHANGELOG.md).
   restricted to pre-defined pixel regions with a whole-image fallback.
   The regions can come from the artwork itself: the barcodes
   `golden-compare` found on the golden, mapped onto the camera frame
-  through its trained transform. Works offline.
+  through the transform `golden-compare` solved for that frame. Works
+  offline.
 - **`synthetic-defects`** — a test bench, not a production node: takes a
   golden and emits camera-like frames of it with known defects painted in,
   one message at a time, each carrying the golden it was made from and the
@@ -855,10 +856,14 @@ is on.
 
 - `msg.payload` — `true`/`false` overall pass
 - `msg.result` —
-  `{ pass, position: { dxPx, dyPx, dxMm, dyMm, angleDeg, anglePass, scale, scaleX, scaleY, stretchPercent, pass }, transform: { pinned, native, nativeFallback?, seeded, pinRefused?, scaleX, scaleY, scale, stretchPercent, angleDeg, ox, oy, score }, match: { score, grade, coverage, labelMissing, mismatchSuspected, reason }, thresholds: { golden, target }, localAlign: { tiles, localised, meanPx, medianPx, maxPx }, register?: { frames, tiles, localised, spurious, beyond, searchPx, medianPx, p98Px, maxPx, slackPx, slack: { tile, gridW, gridH, slackPx[] } }, printBlemish: { pass, defectRatio, regions: [{x,y,w,h,density,avgDensity,missing,cells}], worstMissing }, backgroundBlemish: { pass, defectRatio, regions, worstExcess, noveltyPass }, toneBlemish: { enabled, pass, defectRatio, regions, paperLevel, inkLevel, marginPx, marginTrained, marginMinPx, marginMaxPx }, speckBlemish: { enabled, pass, count, area, largest, regions: [{x,y,w,h,area}] } }`
+  `{ pass, position: { dxPx, dyPx, dxMm, dyMm, angleDeg, anglePass, scale, scaleX, scaleY, stretchPercent, pass }, transform: { pinned, native, nativeFallback?, seeded, pinRefused?, scaleX, scaleY, scale, stretchPercent, angleDeg, ox, oy, score, goldenWidth, goldenHeight, frameWidth, frameHeight, frameNativeWidth, frameNativeHeight }, match: { score, grade, coverage, labelMissing, mismatchSuspected, reason }, thresholds: { golden, target }, localAlign: { tiles, localised, meanPx, medianPx, maxPx }, register?: { frames, tiles, localised, spurious, beyond, searchPx, medianPx, p98Px, maxPx, slackPx, slack: { tile, gridW, gridH, slackPx[] } }, printBlemish: { pass, defectRatio, regions: [{x,y,w,h,density,avgDensity,missing,cells}], worstMissing }, backgroundBlemish: { pass, defectRatio, regions, worstExcess, noveltyPass }, toneBlemish: { enabled, pass, defectRatio, regions, paperLevel, inkLevel, marginPx, marginTrained, marginMinPx, marginMaxPx }, speckBlemish: { enabled, pass, count, area, largest, regions: [{x,y,w,h,area}] } }`
   (region coordinates in the working-resolution image, same size as the
   heat maps — not the original camera resolution). `transform` is the raw
-  recovered placement in frame-canvas pixels: `pinned` reports whether a
+  recovered placement in frame-canvas pixels, with the sizes that make it
+  a map from the golden to the frame as received (`goldenWidth`,
+  `goldenHeight`, `frameWidth`, `frameHeight`, `frameNativeWidth`,
+  `frameNativeHeight`, as a trained record has; `barcode-locate` places
+  profile regions with them): `pinned` reports whether a
   trained transform was used, `seeded` whether it started from a native
   ORB+ECC seed rather than the staged sweeps, and `pinRefused` is present
   with the reason when there was a trained record the node declined to
@@ -1542,12 +1547,27 @@ region — without paying for it on every normal run. `"Regions only"` and
 Hand-measured regions have to be measured for every product and again
 whenever the camera moves. With **Regions from** = *the golden's profile*
 (`regionSource: "profile"`) nobody measures them. `golden-compare`, with
-**Profiles** and **Barcode regions** set, keeps two things in each
-golden's profile: the trained transform (where the artwork sits in the
-frame it inspects) and the barcodes it found on the artwork. This node
-reads both and maps each barcode's box from the artwork into the image
-it is given. A new product needs no new regions; a moved camera needs
-only the transform retrained.
+**Profiles** and **Barcode regions** set, keeps the barcodes it found on
+the artwork in each golden's profile. This node maps each barcode's box
+from the artwork into the image it is given, through a transform that
+says where the artwork sits in the frame:
+
+1. **The frame's own** (`msg.regionPlacement: "frame"`) — the transform
+   `golden-compare` upstream solved for this very frame, on
+   `msg.result.transform`. Used when that frame registered (grade not
+   `poor`, no label missing, no mismatch suspected) against the golden the
+   profile's barcodes came from. Needs no training, and the boxes follow
+   where this part sits rather than where a training frame's did.
+2. **The trained one** (`"trained"`) — the profile's `transform` section,
+   placed where the run's last training frame had the part. The fallback
+   for a frame that did not register, wiring B below, or a
+   `golden-compare` older than this version.
+
+A new product needs no new regions and no training. A moved camera needs
+nothing new for the regions themselves, since each frame places its own;
+it still needs `checkerboard-calibrate` re-run, for the compare's mm
+tolerances and the rectification, and the transform retrained if the
+trained fallback matters to you.
 
 **Which profile**, first match wins:
 
@@ -1611,21 +1631,28 @@ rectified-twice warning below is once per profile path — and none fails
 the message; "no regions" still leaves the full-image fallback in the
 default mode:
 
-- the profile is missing or unreadable, or has no `barcodes` or no
-  `transform` section — no regions. A path that cannot even be stat'ed
+- the profile is missing or unreadable, or has no `barcodes` section —
+  no regions;
+- neither the frame's transform nor a trained one can place the boxes —
+  no regions. Warned only when the frame did not come from a
+  `golden-compare` that failed to register it: that frame's failure is
+  already reported upstream. A path that cannot even be stat'ed
   (EACCES, EPERM, a bad path a flow built) is the same: one warning, no
   regions, never an error;
-- the `barcodes` section and the `transform` were made from different
-  golden content ("holds barcodes of one golden and a transform of
-  another; retrain or re-derive") — no regions;
+- the `barcodes` section and the trained `transform` were made from
+  different golden content ("holds barcodes of one golden and a transform
+  of another; retrain or re-derive") — the trained transform is not used,
+  so no regions unless the frame's own places them;
 - `msg.result.profile.contentKey` is present and differs from the content
   key of the profile's `barcodes` section — no regions. The section's own
   key, not the file's `golden.contentKey`: every section write updates the
   golden record, so after nuisance training for a revised artwork the file
   names the new artwork while its barcodes are still the old one's;
-- the transform has no `frameWidth`/`frameHeight`/`frameNativeWidth`/
-  `frameNativeHeight`, i.e. it was trained before this version — no
-  regions, "retrain the transform with this version";
+- the trained transform has no `frameWidth`/`frameHeight`/
+  `frameNativeWidth`/`frameNativeHeight`, i.e. it was trained before
+  frame sizes were recorded — no regions from it, "retrain the transform
+  with this version". An upstream `msg.result.transform` without them
+  is simply not used;
 - the transform has no `placement` — regions placed as if the part sat
   centred, with a warning; a wide margin with an off-centre part puts them
   off by up to that margin;
@@ -1633,11 +1660,13 @@ default mode:
   than 1% (a crop, or another camera) — warning, mapping proceeds;
 - the native-resolution and rectified-twice warnings above.
 
-**What it costs.** Mapped regions are cached per profile path and its
-mtime and size, payload size, calibration and its mtime and size, and
-pad. A message costs one `fs.stat` of the profile (plus one of the
-calibration when set) and a header read of the payload for its size, 1–3
-ms, none for raw pixels. In **Full image only** the profile is not read.
+**What it costs.** The profile and calibration are read once and cached
+per profile path and its mtime and size, and calibration and its mtime
+and size; regions placed through the trained transform are cached per
+payload size as well. A message costs one `fs.stat` of the profile (plus
+one of the calibration when set) and a header read of the payload for
+its size, 1–3 ms, none for raw pixels; placing through the frame's own
+transform adds a few corners' arithmetic per box. In **Full image only** the profile is not read.
 
 ### Input
 
@@ -1663,6 +1692,10 @@ nothing is found at all, one message with `msg.text = null`,
   code's own box, from zxing's corner points, in full-image px.
 - `msg.regionSource` — where the regions came from: `"list"`,
   `"profile"` or `"msg"`.
+- `msg.regionPlacement` — with profile regions, which transform placed
+  them: `"frame"` (`golden-compare`'s for this frame) or `"trained"`;
+  `null` when no profile regions were placed, or the regions are not the
+  profile's.
 - `msg.expectedText` — with profile regions, the artwork's text for the
   code at that place, else `null`. The candidates are the profile regions
   that contain the symbol's centre (a full-image find counts too); none →
@@ -1837,7 +1870,7 @@ nothing is found at all, one message with `msg.text = null`,
 
 ## Tests
 
-`npm test` (Node 20.9+, no test framework needed — `node --test`), 758
+`npm test` (Node 20.9+, no test framework needed — `node --test`), 765
 tests. Fixtures are generated with `sharp` rather than read from
 `data/sample_images`, so the suite runs anywhere; the real QC photos are
 gitignored. Coverage spans the lib pipeline (`compare`, `align`, `warp`,

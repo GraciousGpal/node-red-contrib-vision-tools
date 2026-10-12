@@ -151,6 +151,34 @@ locate.locateBarcodes = (...args) => {
 
 // ---- the trained transform, in the profile -----------------------------
 
+test("an untrained frame's msg.result.transform carries the sizes a trained record would, for barcode-locate to place regions with", async () => {
+	const dir = await tmpDir();
+	const profileDir = path.join(dir, "profiles");
+	const goldenPath = path.join(dir, "Demo_Good_60.png");
+	const goldenBuf = await png(labelSvg(W, H));
+	await fsp.writeFile(goldenPath, goldenBuf);
+	const frame = await offsetFrame(goldenBuf);
+	const cfg = { ...NODE_CFG, goldenPath, profileDir };
+
+	const plain = makeNode({ ...cfg, trainTransform: false });
+	await plain.run({ payload: frame });
+	assert.deepStrictEqual(plain.doneErrors, []);
+	const t = plain.sent[0].result.transform;
+	assert.strictEqual(t.pinned, false, "nothing was trained, so nothing pinned");
+	assert.strictEqual(t.frameNativeWidth, 1200);
+	assert.strictEqual(t.frameNativeHeight, 1600);
+
+	// the same fields, and the same values, a training run records
+	const train = makeNode({ ...cfg, trainTransform: true });
+	await train.run({ payload: frame });
+	const record = train.sent[0].trainedTransform;
+	for (const k of ["goldenWidth", "goldenHeight", "frameWidth", "frameHeight", "frameNativeWidth", "frameNativeHeight"]) {
+		assert.ok(Number.isInteger(t[k]) && t[k] > 0, `${k} ${t[k]}`);
+		assert.strictEqual(t[k], record[k], k);
+	}
+});
+
+
 test("training writes the transform into the golden's profile with frame size and a real placement, and the next frame pins from it", async () => {
 	const dir = await tmpDir();
 	const profileDir = path.join(dir, "profiles");

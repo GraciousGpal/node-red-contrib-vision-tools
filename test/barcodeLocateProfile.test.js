@@ -399,3 +399,83 @@ test("a text mismatch is warned once per (expected, read) pair", { skip }, async
 	assert.strictEqual(warns.length, 2, warns.join("\n"));
 	assert.match(warns[1], /"VT-EXPECTED-TWO-LONGER"/);
 });
+
+// ---- placed by golden-compare's own transform for the frame --------------
+
+// What golden-compare upstream puts on msg.result for a frame it registered
+// at `placement`: this frame's transform with the sizes a trained record has.
+function upstreamResult(file, { placement = TRANSFORM.placement, grade = "good", contentKey = KEY } = {}) {
+	const { placement: _trained, goldenContentKey: _key, ...sizes } = TRANSFORM;
+	return {
+		profile: { path: file, contentKey },
+		match: { grade, labelMissing: false, mismatchSuspected: false },
+		transform: { ...sizes, pinned: false, ox: placement.ox, oy: placement.oy, angleDeg: placement.angleDeg },
+	};
+}
+// a placement 150 working px off the true one: 150 x 4/3 x 2 = 400 payload
+// px, well past the 128 px pad, so a region placed by it misses the code
+const WRONG = { ox: TRANSFORM.placement.ox + 150, oy: TRANSFORM.placement.oy + 150, angleDeg: 0 };
+
+test("no trained transform: golden-compare's transform for the frame places the regions", { skip }, async () => {
+	const { barcodes, mapped, frame } = await fixture();
+	const file = writeProfile("untrained", { transform: null, barcodes });
+	const { run, warns } = makeNode({});
+	const out = await run({ payload: frame, result: upstreamResult(file) });
+	assertProfileRead(out, mapped);
+	assert.strictEqual(out[0].regionPlacement, "frame");
+	assert.deepStrictEqual(warns, []);
+});
+
+test("the frame's own placement wins over the trained one", { skip }, async () => {
+	const { barcodes, mapped, frame } = await fixture();
+	// trained where the part sat on some other frame
+	const file = writeProfile("stale-placement", { transform: { ...TRANSFORM, placement: WRONG }, barcodes });
+	const { run, warns } = makeNode({ mode: "regionsOnly" });
+	const out = await run({ payload: frame, result: upstreamResult(file) });
+	assertProfileRead(out, mapped);
+	assert.strictEqual(out[0].regionPlacement, "frame");
+	assert.deepStrictEqual(warns, []);
+});
+
+test("a frame that did not register falls back to the trained transform", { skip }, async () => {
+	const { barcodes, mapped, frame } = await fixture();
+	const file = writeProfile("unregistered", { barcodes });
+	const { run, warns } = makeNode({ mode: "regionsOnly" });
+	const out = await run({ payload: frame, result: upstreamResult(file, { placement: WRONG, grade: "poor" }) });
+	assertProfileRead(out, mapped);
+	assert.strictEqual(out[0].regionPlacement, "trained");
+	assert.deepStrictEqual(warns, []);
+});
+
+test("no trained transform and a frame that did not register: full image, no profile warning", { skip }, async () => {
+	const { barcodes, frame } = await fixture();
+	const file = writeProfile("nothing-to-place", { transform: null, barcodes });
+	const { run, warns } = makeNode({});
+	const [m] = await run({ payload: frame, result: upstreamResult(file, { grade: "poor" }) });
+	assert.strictEqual(m.source, "fullImage");
+	assert.strictEqual(m.regionPlacement, null);
+	assert.deepStrictEqual(warns, [], "golden-compare already reported the registration");
+});
+
+test("no trained transform and no golden-compare upstream: warned once, full image", { skip }, async () => {
+	const { barcodes, frame } = await fixture();
+	const file = writeProfile("no-upstream", { transform: null, barcodes });
+	const { run, warns } = makeNode({ profilePath: file });
+	for (let i = 0; i < 2; i++) {
+		const [m] = await run({ payload: frame });
+		assert.strictEqual(m.source, "fullImage");
+	}
+	assert.strictEqual(warns.length, 1, warns.join("\n"));
+	assert.match(warns[0], /nothing to place them with/);
+});
+
+test("an upstream transform without the frame's sizes (an older golden-compare) is not used", { skip }, async () => {
+	const { barcodes, mapped, frame } = await fixture();
+	const file = writeProfile("old-upstream", { barcodes });
+	const result = upstreamResult(file, { placement: WRONG });
+	delete result.transform.frameNativeWidth;
+	const { run } = makeNode({ mode: "regionsOnly" });
+	const out = await run({ payload: frame, result });
+	assertProfileRead(out, mapped);
+	assert.strictEqual(out[0].regionPlacement, "trained");
+});

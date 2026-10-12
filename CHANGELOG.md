@@ -8,6 +8,20 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Changed
 
+- **`barcode-locate` places profile regions with the frame's own
+  transform; training is no longer needed for them.** `golden-compare`
+  now puts the golden's and the frame's sizes on `msg.result.transform`
+  (`goldenWidth`, `goldenHeight`, `frameWidth`, `frameHeight`,
+  `frameNativeWidth`, `frameNativeHeight`), so its transform for that
+  frame maps the golden onto the frame as received. `barcode-locate`
+  uses it when the frame registered against the profile's golden, and
+  falls back to the profile's trained transform otherwise; the new
+  `msg.regionPlacement` says which (`"frame"`, `"trained"` or `null`).
+  - **Why:** a profile with barcodes but no trained transform gave no
+    regions at all - on a fresh profile directory every frame fell back
+    to the full-image scan until someone trained - and a trained
+    placement is the last training frame's, not where this part sits.
+
 - **The OpenCV engine is now our own, and the previous OpenCV addon is
   gone.**
   `label-crop` and `golden-compare`'s OpenCV alignment run on

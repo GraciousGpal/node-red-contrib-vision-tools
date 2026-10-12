@@ -142,12 +142,15 @@
   <p>
     With <i>Regions from</i> set to <i>the golden's profile</i>, nobody
     measures regions. <code>golden-compare</code> keeps one
-    <b>profile</b> file per golden (its <i>Profile directory</i>): the
-    trained transform - where the artwork sits in the frame it inspects -
-    and, with its <i>Barcode regions</i> option on, the barcodes it found
-    on the artwork itself. This node reads both and maps each barcode's
-    box from the artwork into the image it is given. A new product needs
-    no new regions, and a moved camera needs only the transform retrained.
+    <b>profile</b> file per golden (its <i>Profile directory</i>), and
+    with its <i>Barcode regions</i> option on, the barcodes it found on
+    the artwork itself go in it. This node maps each barcode's box from
+    the artwork into the image it is given, placed where
+    <code>golden-compare</code> upstream found the artwork in this very
+    frame (<code>msg.result.transform</code>) - no training needed. When
+    that frame did not register, or no compare ran upstream, the
+    profile's trained transform places them instead (where the last
+    training frame had the part). A new product needs no new regions.
   </p>
   <p>The profile file is, first match wins:</p>
   <ol>
@@ -203,10 +206,12 @@
   </p>
   <p>
     Profile problems never fail the message: a missing file, a profile with
-    no barcodes yet, barcodes and transform from two different goldens, a
-    profile for another golden than the one the compare just used, a
-    transform trained before the frame size was recorded - each is warned
-    once per profile file and leaves the message with no profile regions,
+    no barcodes yet, nothing to place them with (no registered frame
+    upstream and no trained transform), barcodes and trained transform
+    from two different goldens, a profile for another golden than the one
+    the compare just used, a transform trained before the frame size was
+    recorded - each is warned once per profile file and leaves the message
+    with no profile regions,
     so in the default mode the full-image scan still runs. A transform with
     no recorded placement is used as if the part sat centred, with a
     warning. Mapped regions are cached; a message costs one file stat.
@@ -237,6 +242,7 @@
     <li><code>msg.symbol</code> - <code>{ x, y, width, height }</code> of the code itself (full-image coordinates)</li>
     <li><code>msg.regionLabel</code> - the region's configured label, or <code>null</code> for a full-image find</li>
     <li><code>msg.regionSource</code> - where the regions came from: <code>"list"</code>, <code>"profile"</code> or <code>"msg"</code></li>
+    <li><code>msg.regionPlacement</code> - which transform placed the profile's regions: <code>"frame"</code> (the compare's for this frame) or <code>"trained"</code>; <code>null</code> when none were placed</li>
     <li>
       <code>msg.expectedText</code> - with profile regions, the text the
       golden's artwork has for the code in that place (<code>null</code>
