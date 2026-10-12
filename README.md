@@ -1949,6 +1949,30 @@ up by `node --test`. Pass `--pin mx,my` when comparing two versions:
 without it each version pins to the magnification it recovered itself, and
 the two are then not solving the same problem.
 
+`bench/compare-parity.js` checks that a git ref and the working tree give
+identical `compareFrame` output on a synthetic matrix; it cannot speak for
+inputs outside it. It extracts `lib/` and `prebuilds/` at the ref, runs
+each tree in its own process with this checkout's `node_modules`, and
+compares the result JSON with timings stripped plus the sha256 of every
+buffer. The matrix covers JS search; native alignment accepted, rejected
+on angle, scale drift and score, pinned, seeded and missing; Otsu,
+Sauvola and fixed thresholds; edge margins; local alignment on and off;
+1 and 4 workers; raw and PNG heatmaps; stages and thumbnails on and off.
+`native/` is not extracted, so `VISION_TOOLS_KERNELS=source` is not
+supported on the ref side, and a change to `native/kernels.cc` shows only
+once its rebuilt prebuilds are in the tree. Refs before c67598c exit 2
+in every mode (no `lib/nativeKernels.js`), and a ref that lacks the
+prebuilt binary for the current platform exits 2 with KERNELS DIFFER
+(the win32, darwin and linux-arm64 binaries arrived in 2782f0e).
+`node bench/compare-parity.js [--ref HEAD] [--quick]` exits 0 when
+identical, 1 naming the first differing keys, and 2 when a run fails or
+times out, the two sides load different kernels, or a side never takes
+the native alignment path; `--quick` is about 35 cases, the default the
+full matrix. Run it in both kernel modes - as is and with
+`VISION_TOOLS_KERNELS=js` - before merging any change to
+`lib/compare.js`, `lib/parallel.js`, `lib/poolWorker.js`,
+`lib/localAlign.js`, `lib/align.js` or `native/kernels.cc`.
+
 ## Development scripts
 
 `scripts/` is not published (`package.json` `files` is a whitelist).
