@@ -4,7 +4,7 @@ All notable changes to this project are documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
-## [Unreleased]
+## [1.3.0] - 2026-10-12
 
 ### Changed
 
@@ -122,6 +122,287 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
     `@graciousstar/opencv5` and sharp 0.35 require; Node 18 is past its end
     of life.
 
+- **The overlay's canvas is built off the inspector thread.** With the
+  native kernels the checks finished before the inspector thread had
+  built the 9.4 MB RGB canvas on fresh pages (overlay 5.9 → 8.9 ms on the
+  rig). An encoded overlay's canvas is now a spare buffer the pool fills;
+  a raw one, which leaves with the message, is built by a worker beside
+  the pool in memory of its own and moved back. The same pixels; with the
+  JS kernels too, a good frame went from 65.9 to 62.9 ms at the median.
+
+- **`golden-compare` runs a good frame in about half the time.** On the
+  rig's 1475x2125 golden at 12 workers the median good frame went from
+  193 to 94 ms and its p95 from 226 to 119 ms (whole handler, two passes
+  over all 162 sample frames, old and new interleaved on an idle host;
+  the live flow logs 95 ms median), with `msg.result` and `msg.heatmap`
+  unchanged to the bit. A frame's full-size masks are reused from
+  the frame before instead of allocated anew: the pool workers collect
+  by the volume of shared memory they have not seen, and new masks every
+  frame had one of them collecting inside nearly every frame (the spares
+  kept for reuse are capped at 128 MB across golden sizes), and each
+  worker starts its collection interval at its own point of it: every
+  worker is shown the same new buffers (the rectified frame, mostly), so
+  all twelve collected inside the same frame, one frame in eight, which
+  took ~160 ms; now about one collects in a frame, for ~80 MB more
+  held. The
+  thresholding counts (Otsu's histogram, the golden's ink and its
+  coverage, the native path's disagreement) are taken by the pool as it
+  binarizes; the print and background checks run as one pass over the
+  pool that also counts each mask per block for the heat-map grids,
+  where they were five passes, two of them strided, and three serial
+  grids; the native warp's uncovered pixels are blanked by runs; the
+  local alignment works out its per-column terms once. With the preview
+  on, the thumbnail is drawn small in the inspector from the aligned
+  frame and its region boxes, so the node no longer decodes, resizes and
+  encodes the full-size picture on its own thread, and that picture is
+  no longer drawn at all when `outputHeatmap` is off and no viewer is
+  open (the thumbnail now shows the boxes, not each region's pixels).
+  The heat-map format and quality no longer re-prepare the golden when
+  its debug stages are not baked in.
+
+- **The tone check costs about half as much.** On the same rig and set
+  its stage went from 17.6 to 10.3 ms median on a good frame at 12
+  workers (p95 45 to 26 ms) and from 43 to 37 ms on one, results again
+  identical to the bit. The pool's workers claim the check's cells and
+  rows a small chunk at a time instead of a fixed twelfth each, which a
+  worker the host had paused held the frame up for; a speck threshold
+  equal to the tone one, the default, shares its tables instead of being
+  tested again per pixel; the speck seeds are gathered from the rows the
+  comparison counted one in instead of a scan of the whole mask; the
+  golden's grey-to-level fractions are worked out once per golden; and
+  the defect and speck masks come from the frame's reused scratch.
+
+- **The local alignment, the threshold, the diff and the tone check
+  cost less, results identical to the bit.** On the same rig and set,
+  together with the two overlay changes below, the median good frame went
+  from 91 to 67 ms, p95 from 115 to 86 ms and p99 from 134 to 98 ms
+  (local align 14.6 to 11.3 ms, diff 13.8 to 10.2, the tone stage 11.3
+  to 0.5 with its comparison now in the threshold stage, which stays at
+  ~10, overlay 13.1 to 6.1; two rounds of two passes over the 162 sample
+  frames, old and new interleaved). On the pool, the local alignment's resampling
+  counts the grey it writes for Otsu's level and for the tone check's
+  per-cell histograms, so neither runs a pass of its own; the tone comparison,
+  the check's one pass left, runs in the binarization's dispatch over
+  the same rows, and counts its defect pixels per heat-map block as it
+  sets them, so the tone grid no longer walks the mask again (unless an
+  edge margin cleared some). The binarization's workers, the local
+  alignment's and the fused print and background diff's claim rows,
+  tiles, squares and block rows a small chunk at a time
+  instead of a fixed share each (the slowest fixed share took 40-100%
+  longer than the average). The resampling works out each column's
+  horizontal interpolation once per band of rows sharing a pair of field
+  rows rather than once per pixel; the tile search reads each tile's
+  golden samples from one gathered array, the frame's outer tiles stop a
+  losing offset early as the inner ones do, and which tiles have the
+  contrast to search is measured once per golden. The diff's dilation
+  walks each row in runs that need no edge test, and moves its column
+  window by the entering and leaving rows in one pass. The tone levels and
+  tables are worked out outside the async check, where their loops ran
+  unoptimised in runs of frames; the workers clear the tone and speck
+  masks as they compare; and the check's per-frame tables and counts
+  come from the frame's reused scratch, so the workers no longer meet
+  new shared memory for them every frame.
+
+- **The preview's thumbnail encodes while the overlay is composed.** The
+  inspector asks sharp for the thumbnail's JPEG before it composes the
+  full-size overlay, not after, so the encode runs on sharp's threads
+  during the compose instead of waiting behind it. The bytes are
+  unchanged.
+
+- **The overlay's canvas is built while the checks run.** The full-size
+  overlay starts from the aligned grey as RGB, a new 9.4 MB buffer every
+  frame (it leaves with the message) whose fresh pages were most of the
+  overlay stage. It is now built on the inspector thread a slice at a
+  time from the moment the grey is final, while that thread would
+  otherwise wait on the pool's threshold, diff and tone passes, and the
+  overlay stage only draws the regions on it; `msg.heatmap` is unchanged
+  to the bit. The timing is in the entry above.
+
+- **The JS alignment - the frames OpenCV cannot align - is faster, with
+  identical results.** The density sweeps run on the worker pool, every
+  rung or hypothesis of a stage in one batch; stage 2 sweeps angle only
+  for the hypotheses stage 3 refines (5 of 21 at the defaults - the angle
+  sweep never re-ranked them); the polish objective splits each batch by
+  rows across every worker instead of one candidate per worker, and scores
+  its start with its first neighbourhood; the area-average warp reads its
+  table inline; the final warp splits across the pool when it is not
+  magnifying; and the frame mask the search reads is cut on the pool
+  without the ambiguity band nothing read. On the container rig, 12
+  workers: the eight pinned JS-route frames went from 486 to 328ms median
+  wall (search 174 → 141ms); with no trained transform,
+  search went from 2.3s to 0.57s median. `msg.result` is byte-identical on
+  all 162 bench frames, pinned and unpinned.
+
+- **The `golden-compare` edit dialog is grouped into six collapsible
+  sections** — Golden and profile, Ink, Alignment, Position, Blemish
+  checks, Output and preview — with the two legacy file paths under
+  *Legacy files* and the search sweeps, candidates, worker threads and
+  OpenCV prototypes under *Advanced*, both folded by default. 63 fields in
+  one flat list had become hard to scan once profiles arrived. No setting
+  is added, renamed or re-defaulted; the open/closed state is remembered
+  per browser, and a section holding an invalid field opens itself when
+  the dialog is reopened. The angle tolerance now sits under Position,
+  apart from the angle sweep it used to share a row with.
+
+- **The trained transform record records the frame it was measured on.**
+  `frameWidth`/`frameHeight` (the frame at working size),
+  `frameNativeWidth`/`frameNativeHeight` (the frame as `golden-compare`
+  received it) and `placement { ox, oy, angleDeg }` (where the golden sat
+  in the run's last written training frame), in a profile and in a legacy
+  `transformFilePath` file alike. The scales alone map golden px to frame
+  px only up to an offset; these are what let `barcode-locate` carry a box
+  from the artwork onto the camera frame. Older records still pin as
+  before; `barcode-locate` asks for them to be retrained.
+
+- **`barcode-locate`: every result carries `msg.symbol`, and one code is
+  reported once — in list mode too.** `msg.symbol` is the code's own box
+  from zxing's corner points, in full-image px, next to `msg.roi` (the
+  region searched). A code read through overlapping regions (same text,
+  same format, symbol boxes that touch at all) is kept once, under the
+  first region's label; "touch" rather than an overlap ratio because
+  zxing's box for a linear code covers only the rows that decoded. This
+  applies to hand-drawn regions as well, so a flow whose regions overlap
+  now gets one result per symbol and can see `msg.barcodeCount` drop. The
+  none-found message carries `symbol`, `expectedText` and `textMatches` as
+  `null`.
+
+- **`compareFrame`'s result gains `targetNative: { width, height }`**, the
+  frame's size before the working-size resize.
+
+- **The record validators are split out of the file readers.**
+  `validateTransformRecord` (lib/transformFile.js) and
+  `validateNuisanceRecord` (lib/nuisanceMap.js) check an already-parsed
+  record, so a legacy file and a profile section go through the same
+  rules; `readTransformFile` / `readNuisanceMap` are the file read in
+  front of them. Both take `strictContentKey`, which compares the golden's
+  content key on every read rather than only when the cheap keys
+  disagree: under a named golden a new render keeps the name, and a record
+  measured on the old bytes was accepted unchecked. Off by default, so a
+  read without it behaves as before; profiles turn it on. A record that is
+  not a JSON object (`null`, an array) is refused with a reason instead
+  of throwing.
+
+- **`golden-compare`'s content-key memo holds 16 goldens and includes the
+  golden's byte length.** It was one slot, so a rig alternating two
+  goldens re-hashed on every switch. The fingerprint of a path golden now
+  reports its byte length too, so a named path golden's cache key gains
+  `len:<size>`: one re-prepare after upgrade, and a new render under the
+  same name is no longer served from cache when its size changed.
+
+- **With profiles, nuisance training keeps one accumulator per profile
+  and golden version** (4 at most) instead of one per node, so a training
+  run that interleaves two goldens no longer folds both into one map, and
+  a revised artwork under the same name starts a new one. Without
+  profiles it keeps the single accumulator it always had.
+
+- The training errors now read "training needs a profile directory or a
+  Trained transform path to write to" (and the same for the nuisance map).
+
+- **Tests for the barcode code fail rather than skip without zxing-wasm's
+  writer.** `test/locate.test.js` and `test/goldenCompareProfile.test.js`
+  write their barcodes with `zxing-wasm/writer`; zxing-wasm is a hard
+  dependency, so a writer that cannot load fails those tests with the load
+  error instead of skipping them.
+
+- **A frame costs what it did before the tone and speck checks.** The
+  inspector worker moves a frame's raw images to the main thread instead
+  of copying them, and the golden's stages sit in shared memory once.
+  Heat maps decide each block once, masks write only their set pixels,
+  and the tone check's two passes run over the worker pool. The local
+  alignment stops scoring an offset once it cannot win, and the preview
+  renders its stages only while a viewer is open. Every verdict, region
+  and image is byte-identical. On the rig (12 pool workers, working size
+  2125) a frame is 199 ms mean with the preview on and no viewer and 182
+  ms with it off, against 327 ms for the always-rendering preview and
+  455-570 ms before this work.
+
+- **`golden-compare` searches scale on a 4% ladder, not 8%.**
+  `scaleSearchSteps` defaults to 37 over 0.6-2.5 instead of 19. The
+  joint refine did not always bridge an 8% rung: on the synthetic
+  benchmark's clean frames the recovered scale was 0.31% off on average
+  and the angle 0.04 degrees, enough over a 2100px label to leave a
+  residual on every stroke and fail a clean part on both blemish
+  channels. At 37 rungs the errors are 0.08% and 0.02 degrees, clean
+  false fails went from 15 to 10 of 34, and the frame is no slower - a
+  search that starts nearer finishes sooner. Recall on the set fell from
+  48% to 39%, and that is honest: 11 of the 15 detections lost were on
+  frames carrying 350-630 residue regions, one of which happened to
+  cover the defect. A trained transform pins the scale and does not use
+  the ladder; training does, and pins better for it.
+- **`golden-compare` fails as fast as it passes.** With the OpenCV fast
+  path and seed on and a trained transform, a heavily defective print
+  took 0.5-8s against 0.15s for a pass, all of it in alignment. The rig's
+  own log, once it said where the time went, put nearly all of it in one
+  place: OpenCV's full alignment fails on such a frame (nothing back, or
+  a transform 77-92% off in scale or 26° in angle), and the ORB+ECC seed
+  then ran on the same frame with the same engine - the same call at full
+  resolution with more iterations - for 0.3s to produce nothing again, or
+  4-7s to produce a seed the polish made nothing of. The seed is no
+  longer tried on a frame the fast path has just failed on; the JS sweeps
+  find the start in ~200ms. Measured on the rig's 14 known-bad frames:
+  the seven that fell back went from 0.57-8.2s a frame to 0.26-0.72s,
+  with the same verdicts; the seven that did not are unchanged at ~140ms.
+
+  Two smaller things in the same area. The fast path's 15% disagreement
+  gate now applies only to the unpinned search: under a pin the transform
+  has already been held to the trained scale and angle, and disagreement
+  cannot tell a misaligned frame from a defective one, so a validated
+  native alignment is kept and the disagreement reported as the defect
+  it is (1.4s to 0.4s on a frame with most of its label blanked). And the
+  JS polish is bounded: a step size may improve for at most
+  `POLISH_MAX_ROUNDS` (8) rounds before the next takes over, several
+  times what a clean frame needs, with every step size still run.
+
+  `msg.timings` now carries the align bucket's split (`seedMs`,
+  `searchMs`, `localAlignMs` and the rest) and the node's log line prints
+  it with the route taken and the fallback reason, which is how the
+  above was found.
+- **`golden-compare` declares each setting once.** The forty settings were
+  clamped by hand twice - once off the node config, once off the message -
+  and their bounds kept in a third place; `loadImage` and
+  `fingerprintImage` each classified the source their own way with the
+  same three error strings. A `SETTINGS` table now carries every default,
+  clamp and override rule, read by two loops, and one `locateSource` feeds
+  both loaders. Behaviour, defaults, bounds and error messages are
+  unchanged; `test/editorDefaults.test.js` reads the table against the
+  editor's defaults, and the node is a quarter shorter.
+- **Every node's status ends with the time the frame took.** `golden-compare`
+  and `barcode-locate` showed a time; `checkerboard-calibrate`, `label-crop`
+  and `line-finder` showed none, and `perspective-rectify` showed only the
+  warp stage, so reading a flow's cost off the editor meant a debug node on
+  every other message. Each verdict now ends in ` · 84ms` or ` · 1.23s`,
+  wall-clock from the message arriving to the status, previews and encoding
+  included - so what the editor shows is what the flow waits for. The
+  per-stage timings on the message are unchanged. `barcode-locate`'s
+  `none found (12ms)` and `2 found (regions, 12ms)` become `none found ·
+  12ms` and `2 found (regions) · 12ms`, and its time now covers the decode
+  rather than the scans alone.
+- **Heat maps and debug stages are JPEG by default, and encoded
+  concurrently.** Turning on the two heat maps cost ~317ms a frame and
+  the seven debug stages ~734ms, on a 460ms inspection - not the compose
+  (11ms) or the block grid (5ms), but PNG at zlib's default level 6:
+  153ms per image on real frame content at working size, awaited one
+  image at a time while the codec threads idled. A heat map is a picture
+  for a person, so it is now JPEG q85 (22ms, 350KB against 2.4MB), the
+  independent encodes run together, and the binary mask stages stay PNG
+  (two-level content deflates in a few ms; JPEG ringing would put grey
+  where the pipeline has none). Measured through the real handler in the
+  container: heat maps 317 → ~80ms, stages 734 → ~95ms, image bytes per
+  frame 10.3MB → 2.2MB. `heatmapFormat: "png"` keeps PNG, lossless at
+  zlib level 1 (25ms per image, 3.7MB - the fastest deflate worth
+  having; level 0 stores 9.2MB in 11ms); `"raw"` skips the codec
+  entirely and hands the overlay over as the same `{ data, width,
+  height, channels }` object label-crop emits, for a flow that resizes
+  before it displays. `heatmapQuality` sets the JPEG quality; all take
+  `msg.` overrides and are part of the golden cache key, since the
+  golden's own stages are baked in.
+- **The container benches take their samples from `BENCH_SAMPLE_DIR`.**
+  `bench/golden-container-bench.js`, `bench/nuisance-e2e.js` and
+  `bench/nuisance-validate.js` read the folder holding `good/` and `bad/`
+  from that environment variable instead of a hardcoded path, and stop at
+  once if it is unset.
+  `bench/opencv-fast-bench.js` is removed.
+
 ### Fixed
 
 - **An encoded output kept a BGR image's red and blue swapped** on both
@@ -144,6 +425,114 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   heap), an Otsu kernel past 31, an edge kernel past 7, a non-finite
   angle. It used to clamp most of them. An OpenCV error from it is an
   `Error`, not a bare number.
+
+- **A fractional `blockSize` is refused** with a `RangeError` from
+  `compareFrame`. It indexed the block grids by fractional pixels: half the
+  block rows counted nothing, and the heat maps left half their columns as
+  whatever the unzeroed buffer held, so two runs of the same frame could
+  differ. The node already clamps `blockSize` to a whole number from 4 to
+  256; only library callers could pass one.
+
+- **A node saved before a setting existed lost that setting's default in
+  the editor.** Node-RED fills in nothing for a property an older node
+  has no value for, so a box added since rendered unticked and a number
+  blank, and saving the node wrote those back as a choice nobody made:
+  on the first rig to retrain, *from training* came out off and the
+  trained slack was never applied. `golden-compare`'s editor now gives
+  such a setting its default, as a fresh node would have.
+
+- **The worker pool no longer holds on to finished frames.** A shared
+  buffer is freed only when every thread that viewed it has let go, and
+  nothing made a pool worker's collector run; the allocating thread's
+  own collector does not run for shared bytes before some 800 MB of
+  them either. With the pool, 70 MB a frame was retained, 1.8 GB after
+  25 frames at 3 MP. Both sides now count the shared bytes they handle
+  and collect by volume (`lib/shared.js`, `lib/poolWorker.js`); shared
+  buffers hold at ~285 MB over 60 frames at 3 MP, and frame time is
+  within noise at 3 MP and 5-10% over at 4096 px, the cost of giving
+  the memory back. No flag to start Node with; a host that exposes `gc`
+  under a name it cannot be taken by warns once (`VISION_TOOLS_NO_GC`).
+- **The nuisance map no longer gates the print channel.** The map is
+  trained from the background channel - what extra ink looks like on a
+  good part, block by block - but the novelty gate was applied to both
+  channels, so once a map was loaded any print block at the novelty
+  threshold failed against a baseline that had never been measured for
+  print. Training a map silently tightened the print check. The print
+  channel is now judged by its own density and ratio gates only;
+  `printBlemish.worstExcess` is 0 and `noveltyPass` true.
+
+- **A frame with no label in it passed.** Two blank frames in the rig's
+  bad set - paper and a sliver of tray, nothing printed - went through
+  every check, and one passed: the search sat at nominal because every
+  placement scored alike, so position passed; the alignment residual was
+  the golden's own ink fraction, under the mismatch threshold; and with
+  `inkMargin` 64 the ambiguity band covered the whole canvas and voided
+  every blemish claim, so both ratios were zero. Nothing asked whether
+  the golden's ink was in the frame at all. Now `match.coverage` is that
+  fraction, measured on the aligned mask, and under `minCoverage`
+  (default 0.5, 0 disables) the part fails as `labelMissing` with the
+  reason stated and a `label missing?` status. A badly printed part
+  covers 90%+; the blank frames cover about 0.
+- **A rotated part is no longer charged an offset it does not have.**
+  Position was measured at the golden's top-left corner, which a
+  rotation about the label's centre moves by half the label's height
+  times sin(theta): 12-14px at 0.7 degrees on a 2100px label, against a
+  16px tolerance. Three of the synthetic benchmark's 34 clean frames
+  failed on position for exactly that. dx/dy are now measured at the
+  label's centre; at zero rotation the two are identical.
+- **Two-level artwork used at native working size had no ink.** Otsu's
+  between-class variance is the same at every level between the modes
+  of a histogram with an empty gap - pure black-on-white artwork, or a
+  golden binarised before it was saved - and the threshold took the
+  first of them, 0: nothing darker than black, an empty golden, and an
+  inspection that reported zero print defect, a background region the
+  size of the tray, and a position hundreds of pixels out. A resample to
+  a smaller `workingSize` put greys in the gap and hid it, which is why
+  the rig's PDF renders never showed it. The level is now the midpoint
+  of that plateau; on a photograph the plateau is one level wide and
+  nothing changes. Found by the first run of the synthetic benchmark.
+  `checkerboard-calibrate` had already worked around the same case with
+  an inclusive comparison of its own.
+
+- **`label-crop` cut into the label on the production rig.** The boundary
+  refinement defined "label tone" as the frame's brightest 2% (98th
+  percentile − 8 = 246 here). Under the rig's lighting the label's left
+  edge reads 214 and only reaches 250 across the label, so the whole dim
+  third was "not label" and the left side walked ~100 columns in, past
+  the barcode, on three frames in four. The same physical label on a
+  fixed rig came out anywhere from 1165 to 1272px wide and 1688 to 1824
+  tall — placement variation *added* by the node meant to remove it.
+
+  The refinement now looks for a **step**: the innermost place where the
+  mean tone rises ≥ 12 levels across three bins and everything outside it
+  is darker than the label past it. A halo's inner edge qualifies, a
+  barcode band's inner edge does not (the label's own margin sits in its
+  outside strip), and a lighting ramp (~0.6 levels/bin) is not a step.
+  Tone profiles are taken over the central 60% of the rect so the sides
+  not yet trimmed cannot dilute them. Over the 162-frame run: width spread
+  96px → 17px, height wobble gone, every frame keeps its barcode, no frame
+  changed between hit and miss, and every existing fixture (halo, seam,
+  print-inside-label, clipped) still passes. A boundary fainter than 12
+  levels — this rig's label liner, 4 levels off — is left in: the crop
+  errs outward, never into the label.
+- **`label-crop` in front of `golden-compare` measured on the production
+  rig — and left out of the flow.** `bench/nuisance-e2e.js --labelcrop 1`
+  runs the 162 frames both ways: 0 → 79 of 148 good frames rejected, no
+  change on the 14 bad. The golden artwork is wider than the cropped label,
+  so the position gate loses the frame margin it measures against and the
+  clamped alignment search lands ~10% worse (6× the background ratio).
+  When the label is the frame there is nothing for label-crop to remove;
+  README, ARCHITECTURE and the bench doc now say so with the numbers.
+- **`label-crop` misses report what the gate measured.** A
+  `border-contact` miss carried `borderContact: 0` and `dominance: NaN`;
+  it now carries `borderContact: 0.75`, and fields a gate never reached
+  are `null` rather than 0. On this rig that reads straight off as
+  "raise `maxBorderContact` to 0.75", which takes the run from 137 to 151
+  of 151 full frames detected.
+- **`line-finder` accepts a raw frame whose `data` is a bare
+  `ArrayBuffer`.** It used to read an empty view of it and report no edge
+  or a NaN line; it now finds the same line as from a `Uint8Array`. A test
+  covers it.
 
 ### Added
 
@@ -575,389 +964,6 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   label the inspection exists to catch. It is also not a change to
   `golden-compare`'s alignment model, whose residual is the label bowing
   on the tray (a homography removes 18% of it), not the camera.
-
-### Changed
-
-- **The overlay's canvas is built off the inspector thread.** With the
-  native kernels the checks finished before the inspector thread had
-  built the 9.4 MB RGB canvas on fresh pages (overlay 5.9 → 8.9 ms on the
-  rig). An encoded overlay's canvas is now a spare buffer the pool fills;
-  a raw one, which leaves with the message, is built by a worker beside
-  the pool in memory of its own and moved back. The same pixels; with the
-  JS kernels too, a good frame went from 65.9 to 62.9 ms at the median.
-
-- **`golden-compare` runs a good frame in about half the time.** On the
-  rig's 1475x2125 golden at 12 workers the median good frame went from
-  193 to 94 ms and its p95 from 226 to 119 ms (whole handler, two passes
-  over all 162 sample frames, old and new interleaved on an idle host;
-  the live flow logs 95 ms median), with `msg.result` and `msg.heatmap`
-  unchanged to the bit. A frame's full-size masks are reused from
-  the frame before instead of allocated anew: the pool workers collect
-  by the volume of shared memory they have not seen, and new masks every
-  frame had one of them collecting inside nearly every frame (the spares
-  kept for reuse are capped at 128 MB across golden sizes), and each
-  worker starts its collection interval at its own point of it: every
-  worker is shown the same new buffers (the rectified frame, mostly), so
-  all twelve collected inside the same frame, one frame in eight, which
-  took ~160 ms; now about one collects in a frame, for ~80 MB more
-  held. The
-  thresholding counts (Otsu's histogram, the golden's ink and its
-  coverage, the native path's disagreement) are taken by the pool as it
-  binarizes; the print and background checks run as one pass over the
-  pool that also counts each mask per block for the heat-map grids,
-  where they were five passes, two of them strided, and three serial
-  grids; the native warp's uncovered pixels are blanked by runs; the
-  local alignment works out its per-column terms once. With the preview
-  on, the thumbnail is drawn small in the inspector from the aligned
-  frame and its region boxes, so the node no longer decodes, resizes and
-  encodes the full-size picture on its own thread, and that picture is
-  no longer drawn at all when `outputHeatmap` is off and no viewer is
-  open (the thumbnail now shows the boxes, not each region's pixels).
-  The heat-map format and quality no longer re-prepare the golden when
-  its debug stages are not baked in.
-
-- **The tone check costs about half as much.** On the same rig and set
-  its stage went from 17.6 to 10.3 ms median on a good frame at 12
-  workers (p95 45 to 26 ms) and from 43 to 37 ms on one, results again
-  identical to the bit. The pool's workers claim the check's cells and
-  rows a small chunk at a time instead of a fixed twelfth each, which a
-  worker the host had paused held the frame up for; a speck threshold
-  equal to the tone one, the default, shares its tables instead of being
-  tested again per pixel; the speck seeds are gathered from the rows the
-  comparison counted one in instead of a scan of the whole mask; the
-  golden's grey-to-level fractions are worked out once per golden; and
-  the defect and speck masks come from the frame's reused scratch.
-
-- **The local alignment, the threshold, the diff and the tone check
-  cost less, results identical to the bit.** On the same rig and set,
-  together with the two overlay changes below, the median good frame went
-  from 91 to 67 ms, p95 from 115 to 86 ms and p99 from 134 to 98 ms
-  (local align 14.6 to 11.3 ms, diff 13.8 to 10.2, the tone stage 11.3
-  to 0.5 with its comparison now in the threshold stage, which stays at
-  ~10, overlay 13.1 to 6.1; two rounds of two passes over the 162 sample
-  frames, old and new interleaved). On the pool, the local alignment's resampling
-  counts the grey it writes for Otsu's level and for the tone check's
-  per-cell histograms, so neither runs a pass of its own; the tone comparison,
-  the check's one pass left, runs in the binarization's dispatch over
-  the same rows, and counts its defect pixels per heat-map block as it
-  sets them, so the tone grid no longer walks the mask again (unless an
-  edge margin cleared some). The binarization's workers, the local
-  alignment's and the fused print and background diff's claim rows,
-  tiles, squares and block rows a small chunk at a time
-  instead of a fixed share each (the slowest fixed share took 40-100%
-  longer than the average). The resampling works out each column's
-  horizontal interpolation once per band of rows sharing a pair of field
-  rows rather than once per pixel; the tile search reads each tile's
-  golden samples from one gathered array, the frame's outer tiles stop a
-  losing offset early as the inner ones do, and which tiles have the
-  contrast to search is measured once per golden. The diff's dilation
-  walks each row in runs that need no edge test, and moves its column
-  window by the entering and leaving rows in one pass. The tone levels and
-  tables are worked out outside the async check, where their loops ran
-  unoptimised in runs of frames; the workers clear the tone and speck
-  masks as they compare; and the check's per-frame tables and counts
-  come from the frame's reused scratch, so the workers no longer meet
-  new shared memory for them every frame.
-
-- **The preview's thumbnail encodes while the overlay is composed.** The
-  inspector asks sharp for the thumbnail's JPEG before it composes the
-  full-size overlay, not after, so the encode runs on sharp's threads
-  during the compose instead of waiting behind it. The bytes are
-  unchanged.
-
-- **The overlay's canvas is built while the checks run.** The full-size
-  overlay starts from the aligned grey as RGB, a new 9.4 MB buffer every
-  frame (it leaves with the message) whose fresh pages were most of the
-  overlay stage. It is now built on the inspector thread a slice at a
-  time from the moment the grey is final, while that thread would
-  otherwise wait on the pool's threshold, diff and tone passes, and the
-  overlay stage only draws the regions on it; `msg.heatmap` is unchanged
-  to the bit. The timing is in the entry above.
-
-- **The JS alignment - the frames OpenCV cannot align - is faster, with
-  identical results.** The density sweeps run on the worker pool, every
-  rung or hypothesis of a stage in one batch; stage 2 sweeps angle only
-  for the hypotheses stage 3 refines (5 of 21 at the defaults - the angle
-  sweep never re-ranked them); the polish objective splits each batch by
-  rows across every worker instead of one candidate per worker, and scores
-  its start with its first neighbourhood; the area-average warp reads its
-  table inline; the final warp splits across the pool when it is not
-  magnifying; and the frame mask the search reads is cut on the pool
-  without the ambiguity band nothing read. On the container rig, 12
-  workers: the eight pinned JS-route frames went from 486 to 328ms median
-  wall (search 174 → 141ms); with no trained transform,
-  search went from 2.3s to 0.57s median. `msg.result` is byte-identical on
-  all 162 bench frames, pinned and unpinned.
-
-- **The `golden-compare` edit dialog is grouped into six collapsible
-  sections** — Golden and profile, Ink, Alignment, Position, Blemish
-  checks, Output and preview — with the two legacy file paths under
-  *Legacy files* and the search sweeps, candidates, worker threads and
-  OpenCV prototypes under *Advanced*, both folded by default. 63 fields in
-  one flat list had become hard to scan once profiles arrived. No setting
-  is added, renamed or re-defaulted; the open/closed state is remembered
-  per browser, and a section holding an invalid field opens itself when
-  the dialog is reopened. The angle tolerance now sits under Position,
-  apart from the angle sweep it used to share a row with.
-
-- **The trained transform record records the frame it was measured on.**
-  `frameWidth`/`frameHeight` (the frame at working size),
-  `frameNativeWidth`/`frameNativeHeight` (the frame as `golden-compare`
-  received it) and `placement { ox, oy, angleDeg }` (where the golden sat
-  in the run's last written training frame), in a profile and in a legacy
-  `transformFilePath` file alike. The scales alone map golden px to frame
-  px only up to an offset; these are what let `barcode-locate` carry a box
-  from the artwork onto the camera frame. Older records still pin as
-  before; `barcode-locate` asks for them to be retrained.
-
-- **`barcode-locate`: every result carries `msg.symbol`, and one code is
-  reported once — in list mode too.** `msg.symbol` is the code's own box
-  from zxing's corner points, in full-image px, next to `msg.roi` (the
-  region searched). A code read through overlapping regions (same text,
-  same format, symbol boxes that touch at all) is kept once, under the
-  first region's label; "touch" rather than an overlap ratio because
-  zxing's box for a linear code covers only the rows that decoded. This
-  applies to hand-drawn regions as well, so a flow whose regions overlap
-  now gets one result per symbol and can see `msg.barcodeCount` drop. The
-  none-found message carries `symbol`, `expectedText` and `textMatches` as
-  `null`.
-
-- **`compareFrame`'s result gains `targetNative: { width, height }`**, the
-  frame's size before the working-size resize.
-
-- **The record validators are split out of the file readers.**
-  `validateTransformRecord` (lib/transformFile.js) and
-  `validateNuisanceRecord` (lib/nuisanceMap.js) check an already-parsed
-  record, so a legacy file and a profile section go through the same
-  rules; `readTransformFile` / `readNuisanceMap` are the file read in
-  front of them. Both take `strictContentKey`, which compares the golden's
-  content key on every read rather than only when the cheap keys
-  disagree: under a named golden a new render keeps the name, and a record
-  measured on the old bytes was accepted unchecked. Off by default, so a
-  read without it behaves as before; profiles turn it on. A record that is
-  not a JSON object (`null`, an array) is refused with a reason instead
-  of throwing.
-
-- **`golden-compare`'s content-key memo holds 16 goldens and includes the
-  golden's byte length.** It was one slot, so a rig alternating two
-  goldens re-hashed on every switch. The fingerprint of a path golden now
-  reports its byte length too, so a named path golden's cache key gains
-  `len:<size>`: one re-prepare after upgrade, and a new render under the
-  same name is no longer served from cache when its size changed.
-
-- **With profiles, nuisance training keeps one accumulator per profile
-  and golden version** (4 at most) instead of one per node, so a training
-  run that interleaves two goldens no longer folds both into one map, and
-  a revised artwork under the same name starts a new one. Without
-  profiles it keeps the single accumulator it always had.
-
-- The training errors now read "training needs a profile directory or a
-  Trained transform path to write to" (and the same for the nuisance map).
-
-- **Tests for the barcode code fail rather than skip without zxing-wasm's
-  writer.** `test/locate.test.js` and `test/goldenCompareProfile.test.js`
-  write their barcodes with `zxing-wasm/writer`; zxing-wasm is a hard
-  dependency, so a writer that cannot load fails those tests with the load
-  error instead of skipping them.
-
-- **A frame costs what it did before the tone and speck checks.** The
-  inspector worker moves a frame's raw images to the main thread instead
-  of copying them, and the golden's stages sit in shared memory once.
-  Heat maps decide each block once, masks write only their set pixels,
-  and the tone check's two passes run over the worker pool. The local
-  alignment stops scoring an offset once it cannot win, and the preview
-  renders its stages only while a viewer is open. Every verdict, region
-  and image is byte-identical. On the rig (12 pool workers, working size
-  2125) a frame is 199 ms mean with the preview on and no viewer and 182
-  ms with it off, against 327 ms for the always-rendering preview and
-  455-570 ms before this work.
-
-- **`golden-compare` searches scale on a 4% ladder, not 8%.**
-  `scaleSearchSteps` defaults to 37 over 0.6-2.5 instead of 19. The
-  joint refine did not always bridge an 8% rung: on the synthetic
-  benchmark's clean frames the recovered scale was 0.31% off on average
-  and the angle 0.04 degrees, enough over a 2100px label to leave a
-  residual on every stroke and fail a clean part on both blemish
-  channels. At 37 rungs the errors are 0.08% and 0.02 degrees, clean
-  false fails went from 15 to 10 of 34, and the frame is no slower - a
-  search that starts nearer finishes sooner. Recall on the set fell from
-  48% to 39%, and that is honest: 11 of the 15 detections lost were on
-  frames carrying 350-630 residue regions, one of which happened to
-  cover the defect. A trained transform pins the scale and does not use
-  the ladder; training does, and pins better for it.
-- **`golden-compare` fails as fast as it passes.** With the OpenCV fast
-  path and seed on and a trained transform, a heavily defective print
-  took 0.5-8s against 0.15s for a pass, all of it in alignment. The rig's
-  own log, once it said where the time went, put nearly all of it in one
-  place: OpenCV's full alignment fails on such a frame (nothing back, or
-  a transform 77-92% off in scale or 26° in angle), and the ORB+ECC seed
-  then ran on the same frame with the same engine - the same call at full
-  resolution with more iterations - for 0.3s to produce nothing again, or
-  4-7s to produce a seed the polish made nothing of. The seed is no
-  longer tried on a frame the fast path has just failed on; the JS sweeps
-  find the start in ~200ms. Measured on the rig's 14 known-bad frames:
-  the seven that fell back went from 0.57-8.2s a frame to 0.26-0.72s,
-  with the same verdicts; the seven that did not are unchanged at ~140ms.
-
-  Two smaller things in the same area. The fast path's 15% disagreement
-  gate now applies only to the unpinned search: under a pin the transform
-  has already been held to the trained scale and angle, and disagreement
-  cannot tell a misaligned frame from a defective one, so a validated
-  native alignment is kept and the disagreement reported as the defect
-  it is (1.4s to 0.4s on a frame with most of its label blanked). And the
-  JS polish is bounded: a step size may improve for at most
-  `POLISH_MAX_ROUNDS` (8) rounds before the next takes over, several
-  times what a clean frame needs, with every step size still run.
-
-  `msg.timings` now carries the align bucket's split (`seedMs`,
-  `searchMs`, `localAlignMs` and the rest) and the node's log line prints
-  it with the route taken and the fallback reason, which is how the
-  above was found.
-- **`golden-compare` declares each setting once.** The forty settings were
-  clamped by hand twice - once off the node config, once off the message -
-  and their bounds kept in a third place; `loadImage` and
-  `fingerprintImage` each classified the source their own way with the
-  same three error strings. A `SETTINGS` table now carries every default,
-  clamp and override rule, read by two loops, and one `locateSource` feeds
-  both loaders. Behaviour, defaults, bounds and error messages are
-  unchanged; `test/editorDefaults.test.js` reads the table against the
-  editor's defaults, and the node is a quarter shorter.
-- **Every node's status ends with the time the frame took.** `golden-compare`
-  and `barcode-locate` showed a time; `checkerboard-calibrate`, `label-crop`
-  and `line-finder` showed none, and `perspective-rectify` showed only the
-  warp stage, so reading a flow's cost off the editor meant a debug node on
-  every other message. Each verdict now ends in ` · 84ms` or ` · 1.23s`,
-  wall-clock from the message arriving to the status, previews and encoding
-  included - so what the editor shows is what the flow waits for. The
-  per-stage timings on the message are unchanged. `barcode-locate`'s
-  `none found (12ms)` and `2 found (regions, 12ms)` become `none found ·
-  12ms` and `2 found (regions) · 12ms`, and its time now covers the decode
-  rather than the scans alone.
-- **Heat maps and debug stages are JPEG by default, and encoded
-  concurrently.** Turning on the two heat maps cost ~317ms a frame and
-  the seven debug stages ~734ms, on a 460ms inspection - not the compose
-  (11ms) or the block grid (5ms), but PNG at zlib's default level 6:
-  153ms per image on real frame content at working size, awaited one
-  image at a time while the codec threads idled. A heat map is a picture
-  for a person, so it is now JPEG q85 (22ms, 350KB against 2.4MB), the
-  independent encodes run together, and the binary mask stages stay PNG
-  (two-level content deflates in a few ms; JPEG ringing would put grey
-  where the pipeline has none). Measured through the real handler in the
-  container: heat maps 317 → ~80ms, stages 734 → ~95ms, image bytes per
-  frame 10.3MB → 2.2MB. `heatmapFormat: "png"` keeps PNG, lossless at
-  zlib level 1 (25ms per image, 3.7MB - the fastest deflate worth
-  having; level 0 stores 9.2MB in 11ms); `"raw"` skips the codec
-  entirely and hands the overlay over as the same `{ data, width,
-  height, channels }` object label-crop emits, for a flow that resizes
-  before it displays. `heatmapQuality` sets the JPEG quality; all take
-  `msg.` overrides and are part of the golden cache key, since the
-  golden's own stages are baked in.
-
-### Fixed
-
-- **A fractional `blockSize` is refused** with a `RangeError` from
-  `compareFrame`. It indexed the block grids by fractional pixels: half the
-  block rows counted nothing, and the heat maps left half their columns as
-  whatever the unzeroed buffer held, so two runs of the same frame could
-  differ. The node already clamps `blockSize` to a whole number from 4 to
-  256; only library callers could pass one.
-
-- **A node saved before a setting existed lost that setting's default in
-  the editor.** Node-RED fills in nothing for a property an older node
-  has no value for, so a box added since rendered unticked and a number
-  blank, and saving the node wrote those back as a choice nobody made:
-  on the first rig to retrain, *from training* came out off and the
-  trained slack was never applied. `golden-compare`'s editor now gives
-  such a setting its default, as a fresh node would have.
-
-- **The worker pool no longer holds on to finished frames.** A shared
-  buffer is freed only when every thread that viewed it has let go, and
-  nothing made a pool worker's collector run; the allocating thread's
-  own collector does not run for shared bytes before some 800 MB of
-  them either. With the pool, 70 MB a frame was retained, 1.8 GB after
-  25 frames at 3 MP. Both sides now count the shared bytes they handle
-  and collect by volume (`lib/shared.js`, `lib/poolWorker.js`); shared
-  buffers hold at ~285 MB over 60 frames at 3 MP, and frame time is
-  within noise at 3 MP and 5-10% over at 4096 px, the cost of giving
-  the memory back. No flag to start Node with; a host that exposes `gc`
-  under a name it cannot be taken by warns once (`VISION_TOOLS_NO_GC`).
-- **The nuisance map no longer gates the print channel.** The map is
-  trained from the background channel - what extra ink looks like on a
-  good part, block by block - but the novelty gate was applied to both
-  channels, so once a map was loaded any print block at the novelty
-  threshold failed against a baseline that had never been measured for
-  print. Training a map silently tightened the print check. The print
-  channel is now judged by its own density and ratio gates only;
-  `printBlemish.worstExcess` is 0 and `noveltyPass` true.
-
-- **A frame with no label in it passed.** Two blank frames in the rig's
-  bad set - paper and a sliver of tray, nothing printed - went through
-  every check, and one passed: the search sat at nominal because every
-  placement scored alike, so position passed; the alignment residual was
-  the golden's own ink fraction, under the mismatch threshold; and with
-  `inkMargin` 64 the ambiguity band covered the whole canvas and voided
-  every blemish claim, so both ratios were zero. Nothing asked whether
-  the golden's ink was in the frame at all. Now `match.coverage` is that
-  fraction, measured on the aligned mask, and under `minCoverage`
-  (default 0.5, 0 disables) the part fails as `labelMissing` with the
-  reason stated and a `label missing?` status. A badly printed part
-  covers 90%+; the blank frames cover about 0.
-- **A rotated part is no longer charged an offset it does not have.**
-  Position was measured at the golden's top-left corner, which a
-  rotation about the label's centre moves by half the label's height
-  times sin(theta): 12-14px at 0.7 degrees on a 2100px label, against a
-  16px tolerance. Three of the synthetic benchmark's 34 clean frames
-  failed on position for exactly that. dx/dy are now measured at the
-  label's centre; at zero rotation the two are identical.
-- **Two-level artwork used at native working size had no ink.** Otsu's
-  between-class variance is the same at every level between the modes
-  of a histogram with an empty gap - pure black-on-white artwork, or a
-  golden binarised before it was saved - and the threshold took the
-  first of them, 0: nothing darker than black, an empty golden, and an
-  inspection that reported zero print defect, a background region the
-  size of the tray, and a position hundreds of pixels out. A resample to
-  a smaller `workingSize` put greys in the gap and hid it, which is why
-  the rig's PDF renders never showed it. The level is now the midpoint
-  of that plateau; on a photograph the plateau is one level wide and
-  nothing changes. Found by the first run of the synthetic benchmark.
-  `checkerboard-calibrate` had already worked around the same case with
-  an inclusive comparison of its own.
-
-- **`label-crop` cut into the label on the production rig.** The boundary
-  refinement defined "label tone" as the frame's brightest 2% (98th
-  percentile − 8 = 246 here). Under the rig's lighting the label's left
-  edge reads 214 and only reaches 250 across the label, so the whole dim
-  third was "not label" and the left side walked ~100 columns in, past
-  the barcode, on three frames in four. The same physical label on a
-  fixed rig came out anywhere from 1165 to 1272px wide and 1688 to 1824
-  tall — placement variation *added* by the node meant to remove it.
-
-  The refinement now looks for a **step**: the innermost place where the
-  mean tone rises ≥ 12 levels across three bins and everything outside it
-  is darker than the label past it. A halo's inner edge qualifies, a
-  barcode band's inner edge does not (the label's own margin sits in its
-  outside strip), and a lighting ramp (~0.6 levels/bin) is not a step.
-  Tone profiles are taken over the central 60% of the rect so the sides
-  not yet trimmed cannot dilute them. Over the 162-frame run: width spread
-  96px → 17px, height wobble gone, every frame keeps its barcode, no frame
-  changed between hit and miss, and every existing fixture (halo, seam,
-  print-inside-label, clipped) still passes. A boundary fainter than 12
-  levels — this rig's label liner, 4 levels off — is left in: the crop
-  errs outward, never into the label.
-- **`label-crop` in front of `golden-compare` measured on the production
-  rig — and left out of the flow.** `bench/nuisance-e2e.js --labelcrop 1`
-  runs the 162 frames both ways: 0 → 79 of 148 good frames rejected, no
-  change on the 14 bad. The golden artwork is wider than the cropped label,
-  so the position gate loses the frame margin it measures against and the
-  clamped alignment search lands ~10% worse (6× the background ratio).
-  When the label is the frame there is nothing for label-crop to remove;
-  README, ARCHITECTURE and the bench doc now say so with the numbers.
-- **`label-crop` misses report what the gate measured.** A
-  `border-contact` miss carried `borderContact: 0` and `dominance: NaN`;
-  it now carries `borderContact: 0.75`, and fields a gate never reached
-  are `null` rather than 0. On this rig that reads straight off as
-  "raise `maxBorderContact` to 0.75", which takes the run from 137 to 151
-  of 151 full frames detected.
 
 ## [1.2.0] - 2026-09-10
 
