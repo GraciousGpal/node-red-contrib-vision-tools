@@ -404,11 +404,14 @@ test("a text mismatch is warned once per (expected, read) pair", { skip }, async
 
 // What golden-compare upstream puts on msg.result for a frame it registered
 // at `placement`: this frame's transform with the sizes a trained record has.
-function upstreamResult(file, { placement = TRANSFORM.placement, grade = "good", contentKey = KEY } = {}) {
+function upstreamResult(
+	file,
+	{ placement = TRANSFORM.placement, grade = "good", labelMissing = false, mismatchSuspected = false, contentKey = KEY } = {},
+) {
 	const { placement: _trained, goldenContentKey: _key, ...sizes } = TRANSFORM;
 	return {
 		profile: { path: file, contentKey },
-		match: { grade, labelMissing: false, mismatchSuspected: false },
+		match: { grade, labelMissing, mismatchSuspected },
 		transform: { ...sizes, pinned: false, ox: placement.ox, oy: placement.oy, angleDeg: placement.angleDeg },
 	};
 }
@@ -446,6 +449,29 @@ test("a frame that did not register falls back to the trained transform", { skip
 	assert.strictEqual(out[0].regionPlacement, "trained");
 	assert.deepStrictEqual(warns, []);
 });
+
+test("a marginal frame registered: its own placement wins over the trained one", { skip }, async () => {
+	const { barcodes, mapped, frame } = await fixture();
+	const file = writeProfile("marginal", { transform: { ...TRANSFORM, placement: WRONG }, barcodes });
+	const { run, warns } = makeNode({ mode: "regionsOnly" });
+	const out = await run({ payload: frame, result: upstreamResult(file, { grade: "marginal" }) });
+	assertProfileRead(out, mapped);
+	assert.strictEqual(out[0].regionPlacement, "frame");
+	assert.deepStrictEqual(warns, []);
+});
+
+// graded good, yet not a placement of this golden's artwork
+for (const flag of ["labelMissing", "mismatchSuspected"]) {
+	test(`a ${flag} frame falls back to the trained transform, even graded good`, { skip }, async () => {
+		const { barcodes, mapped, frame } = await fixture();
+		const file = writeProfile(`flag-${flag}`, { barcodes });
+		const { run, warns } = makeNode({ mode: "regionsOnly" });
+		const out = await run({ payload: frame, result: upstreamResult(file, { placement: WRONG, [flag]: true }) });
+		assertProfileRead(out, mapped);
+		assert.strictEqual(out[0].regionPlacement, "trained");
+		assert.deepStrictEqual(warns, []);
+	});
+}
 
 test("no trained transform and a frame that did not register: full image, no profile warning", { skip }, async () => {
 	const { barcodes, frame } = await fixture();
