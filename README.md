@@ -71,7 +71,7 @@ per-stage breakdown, where a node has one, is on the message (`msg.timings`,
 A ~23MP camera frame decodes, aligns, diffs and heat-maps in well under a
 second: around 0.45s against a same-scale golden, and roughly double that
 when magnification and stretch both have to be searched over a wide range
-(see Notes).
+(see Deployment notes).
 
 ## Install
 
@@ -523,7 +523,7 @@ within ~10% (pinned search 236ms vs 222ms, unpinned align 2075ms vs
 2219ms). What looked like a container tax was the power profile above.
 
 `workingSize` is the one that changes *what is detectable* rather than
-just how long it takes — see Notes before lowering it.
+just how long it takes — see Deployment notes before lowering it.
 
 `bench/frame-bench.js` times one frame; it says nothing about whether a
 defect was *found*. For that there is `bench/synth/` — a generator that
@@ -662,8 +662,6 @@ debug stages off, median of three warm frames:
 | clean | 663ms | **243ms** | 2.7× |
 | high-compression reject | 1065ms | **443ms** | 2.4× |
 
-Run `node bench/opencv-fast-bench.js [golden.png] [frame.png] [iterations]`
-to compare the JS, conservative seed, and full OpenCV paths on another set.
 A missing or failed engine falls back to JS.
 
 ### Native alignment seed (prototype, off by default)
@@ -1760,7 +1758,7 @@ nothing is found at all, one message with `msg.text = null`,
   restart failed. The node now loads the binary shipped inside the
   package and never touches the network.
 
-## Notes
+## Deployment notes
 
 - `goldenPath`/`scaleFilePath` are paths **inside the container** — use
   `/data` for anything that should survive a rebuild.
@@ -1898,7 +1896,7 @@ nothing is found at all, one message with `msg.text = null`,
 
 `npm test` (Node 20.9+, no test framework needed — `node --test`), 773
 tests. Fixtures are generated with `sharp` rather than read from
-`data/sample_images`, so the suite runs anywhere; the real QC photos are
+real camera photos, so the suite runs anywhere; the real QC photos are
 gitignored. Coverage spans the lib pipeline (`compare`, `align`, `warp`,
 `localAlign`, `checkerboard`, `threshold`), the worker pool (byte-identity
 against serial, mid-flight termination, oversized pools, and two

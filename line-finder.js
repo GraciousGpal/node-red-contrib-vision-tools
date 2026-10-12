@@ -74,7 +74,7 @@ module.exports = (RED) => {
 		POLARITIES,
 		EDGE_SELECTS,
 	} = require("./lib/lineFinder.js");
-	const { clampInt, clampFloat, pickMode } = require("./lib/nodeInput.js");
+	const { clampInt, clampFloat, pickMode, asView } = require("./lib/nodeInput.js");
 	const { formatMs } = require("./lib/formatMs.js");
 
 	const BOUNDS = {
@@ -135,10 +135,7 @@ module.exports = (RED) => {
 		}
 		if (!entry.png) {
 			const sharp = require("sharp");
-			const data = Buffer.isBuffer(p.data)
-				? p.data
-				: Buffer.from(p.data.buffer, p.data.byteOffset, p.data.byteLength);
-			entry.png = sharp(data, {
+			entry.png = sharp(asView(p.data), {
 				raw: { width: p.width, height: p.height, channels: p.channels || 1 },
 			})
 				.png({ compressionLevel: 1 })
@@ -167,10 +164,7 @@ module.exports = (RED) => {
 	async function toGray(payload) {
 		if (payload && payload.data && payload.width && payload.height) {
 			const channels = payload.channels || 1;
-			const data =
-				payload.data instanceof Uint8Array
-					? payload.data
-					: new Uint8Array(payload.data.buffer, payload.data.byteOffset, payload.data.byteLength);
+			const data = asView(payload.data);
 			if (channels === 1) {
 				return { gray: data, width: payload.width, height: payload.height };
 			}

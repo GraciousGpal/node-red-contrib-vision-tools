@@ -33,6 +33,7 @@ const {
 	clampInt,
 	pickMode,
 	isBytes,
+	asView,
 	assertUnderCap,
 	readRegularFile,
 	rawGeometry,
@@ -73,12 +74,6 @@ function setPath(msg, p, value) {
 	o[keys[keys.length - 1]] = value;
 }
 
-function asBuffer(v) {
-	if (Buffer.isBuffer(v)) return v;
-	if (v instanceof ArrayBuffer) return Buffer.from(v);
-	return Buffer.from(v.buffer, v.byteOffset, v.byteLength);
-}
-
 /** The input as a raw descriptor the engine takes; `decoded` when it came
  * through sharp. */
 async function resolveRaw(msg, source, label) {
@@ -91,11 +86,11 @@ async function resolveRaw(msg, source, label) {
 		if (!bytes) throw new Error(`${label} does not exist on disk: "${source}"`);
 	} else if (isBytes(source)) {
 		assertUnderCap(source, label);
-		bytes = asBuffer(source);
+		bytes = asView(source);
 		geometry = rawGeometry(msg, source);
 	} else if (typeof source === "object" && isBytes(source.data)) {
 		assertUnderCap(source.data, label);
-		bytes = asBuffer(source.data);
+		bytes = asView(source.data);
 		geometry = rawGeometry(msg, source);
 		if (!geometry) throw new Error(`${label} has data but no usable width/height/channels`);
 		colorSpace = typeof source.colorSpace === "string" ? source.colorSpace.toUpperCase() : undefined;
@@ -183,11 +178,6 @@ module.exports = (RED) => {
 		}
 
 		node.on("input", async (msg, send, done) => {
-			send =
-				send ||
-				function () {
-					node.send.apply(node, arguments);
-				};
 			const t0 = performance.now();
 			try {
 				const selected = await require("./lib/engine.js").resolve();
@@ -201,20 +191,19 @@ module.exports = (RED) => {
 				const label = `msg.${node.inputPath}`;
 				const { image, decoded } = await resolveRaw(msg, getPath(msg, node.inputPath), label);
 				const size = targetSize(image.width, image.height, node.size);
-				const fmt = node.outputFormat === "jpg" ? "jpg" : node.outputFormat;
 				// An encoded image asked for raw at its own size is a decode:
 				// the engine would only copy it (~28ms on a 3000x3700 RGB
 				// frame). A flow decodes the camera frame once this way and
 				// hands the pixels to every node after it. A raw input still
 				// goes through the engine, so the output never aliases it.
-				const same = decoded && fmt === "raw" && size.width === image.width && size.height === image.height;
+				const same = decoded && node.outputFormat === "raw" && size.width === image.width && size.height === image.height;
 				const out = same
 					? { image }
-					: await selected.engine.resize(image, "num", size.width, "num", size.height, fmt, node.outputQuality);
+					: await selected.engine.resize(image, "num", size.width, "num", size.height, node.outputFormat, node.outputQuality);
 				const result = out.image;
 				if (node.outputFormat === "raw") {
 					setPath(msg, node.outputPath, {
-						data: Buffer.isBuffer(result.data) ? result.data : asBuffer(result.data),
+						data: asView(result.data),
 						width: result.width,
 						height: result.height,
 						channels: result.channels,

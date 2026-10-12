@@ -226,7 +226,7 @@ Inputs reproduce the saved comparison tab:
 
 - `Demo_Good_60.pdf`, first page, 400 dpi, RAW, rotation 270, then the native 0.5x resize.
 - Resulting golden: **1475 × 2125 × 4**, SHA-256 `cfafbcb1a7d93658d83b8254084b9b84f71ef2c44c301e68c8b85dd3e9c35d3f`.
-- Camera files from `/data/Inspection/sample_images/{good,bad}`, decoded to raw RGB and resized 0.5x through the native OpenCV engine of the time.
+- Camera files from `$BENCH_SAMPLE_DIR/{good,bad}`, decoded to raw RGB and resized 0.5x through the native OpenCV engine of the time.
 - **148 good-folder images and 14 bad-folder images**.
 - Sequential inputs, no overlapping comparisons; first comparison and an additional warmup excluded from timing. Full-set runs measured each image once; the initial 10-image sweeps measured each image three times.
 
@@ -273,8 +273,7 @@ At 12 workers with a named golden, the isolated Wasm-backed source snapshot meas
 
 All variants accept all 148 good-folder images and reject **12/14** bad-folder images. These two bad-folder images are accepted by both the original and optimized node, including the downstream `grade === "good"` check:
 
-- `image_20260907_095106-749Z.jpg`
-- `image_20260907_095138-803Z.jpg`
+- two bad-folder frames, file names withheld
 
 These need a separate defect/ground-truth investigation before treating the current settings as production-validated. No thresholds were relaxed to improve performance. The full-set parity assertion compared the entire `msg.result` object, not just pass/fail, for the code-only change; the pinned configuration was checked for verdict parity separately.
 
@@ -289,7 +288,7 @@ Copy the harness into the container, then run from PowerShell/cmd (the test does
 
 ```text
 docker cp bench/golden-container-bench.js nodered-test-node-red-1:/tmp/golden-container-bench.js
-docker exec -e NODE_PATH=/usr/src/node-red/node_modules -e VISION_BENCH_ROOT=/usr/src/node-red/node_modules/@graciousstar/node-red-contrib-vision-tools nodered-test-node-red-1 node /tmp/golden-container-bench.js --workers 12 --named 0 --iterations 1 --limit 0 --out /tmp/golden-full-baseline.json
+docker exec -e BENCH_SAMPLE_DIR=/path/to/samples -e NODE_PATH=/usr/src/node-red/node_modules -e VISION_BENCH_ROOT=/usr/src/node-red/node_modules/@graciousstar/node-red-contrib-vision-tools nodered-test-node-red-1 node /tmp/golden-container-bench.js --workers 12 --named 0 --iterations 1 --limit 0 --out /tmp/golden-full-baseline.json
 ```
 
 For an isolated source snapshot, set `VISION_BENCH_ROOT` to its directory. Use `--named 1`, `--workers 16`, and `--working 2656` to reproduce the combined configuration; `--limit 5 --iterations 3` reproduces the sample sweep. In Git Bash, prefix Docker commands with `MSYS_NO_PATHCONV=1` to avoid rewriting container paths.
@@ -316,7 +315,8 @@ good frame 0.2500 at 74 training frames, 0.2655 at 37; the two defects score
 
 Reproduce with `bench/nuisance-e2e.js --holdout 2` (trains through the node,
 then re-inspects everything) or `bench/nuisance-validate.js` (library-level,
-two-way split). Both need the container's flow and fixtures.
+two-way split). Both need the container's flow and fixtures, with
+`BENCH_SAMPLE_DIR` set to the folder holding `good/` and `bad/`.
 
 ## label-crop in front of golden-compare: measured, and worse
 

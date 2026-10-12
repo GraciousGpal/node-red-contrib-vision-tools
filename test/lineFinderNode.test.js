@@ -90,6 +90,19 @@ test("finds the edge and reports it on msg.lineFinder", async () => {
 	assert.strictEqual(h.statuses.at(-1).fill, "green");
 });
 
+test("raw data as an ArrayBuffer finds the same line as a Uint8Array", async () => {
+	const cfg = { ...REGION, scanDirection: "right", polarity: "darkToLight", calipers: 8 };
+	const typed = makeNode(cfg);
+	await typed.run({ payload: { data: grayFrame(), width: W, height: H, channels: 1 } });
+	const buf = makeNode(cfg);
+	await buf.run({ payload: { data: grayFrame().buffer, width: W, height: H, channels: 1 } });
+	const a = typed.sent[0].lineFinder;
+	const b = buf.sent[0].lineFinder;
+	assert.strictEqual(a.found, true, a.reason);
+	assert.strictEqual(b.found, true, b.reason);
+	assert.deepStrictEqual(b.line, a.line);
+});
+
 test("a legacy single-region config reports exactly the shape it always has", async () => {
 	// Pinned before regions were added: a flow saved with regionX/Y/Width/
 	// Height/AngleDeg and no `regions` must see the same msg.lineFinder,

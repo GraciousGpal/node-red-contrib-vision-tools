@@ -37,9 +37,13 @@ const {
 	clampFloat,
 	pickMode,
 	isBytes,
-	assertUnderCap,
 	openRegularFile,
 	readRegularFile,
+	locateSource,
+	geometryOf,
+	geometryFromImages,
+	rawGeometry,
+	assertRawFits,
 } = require("./lib/nodeInput.js");
 
 /**
@@ -231,33 +235,6 @@ module.exports = (RED) => {
 		else delete msg[key];
 	}
 
-	/** A raw descriptor that cannot fit in the buffer it travels with
-	 * would be decoded past the end by sharp (libvips's generic 'memory
-	 * area too small') - refuse with the actual numbers before sharp is
-	 * involved. */
-	function assertRawFits(buffer, raw, label) {
-		if (!raw) return;
-		const need = raw.width * raw.height * raw.channels;
-		if (buffer.byteLength < need) {
-			throw new Error(
-				`${label} raw descriptor ${raw.width}x${raw.height}x${raw.channels} needs ` +
-					`${need} bytes but the buffer holds ${buffer.byteLength}`,
-			);
-		}
-	}
-
-	/** The byte-carrying forms, in one place - the top-level buffer and the
-	 * `data`/`buffer` member of an object descriptor are validated
-	 * identically. */
-	function bytesOf(source) {
-		const data = isBytes(source)
-			? source
-			: source && typeof source === "object"
-				? source.data || source.buffer
-				: null;
-		return isBytes(data) ? data : null;
-	}
-
 	/** One copy of `data` into shared memory, as a Buffer view over it, so
 	 * handing it to the inspector later is a handle rather than a second
 	 * copy. Falls back to an ordinary Buffer where SharedArrayBuffer is
@@ -280,33 +257,6 @@ module.exports = (RED) => {
 			.update(Buffer.isBuffer(bytes) ? bytes : Buffer.from(bytes))
 			.digest("hex");
 
-	const objectFormError = (label) =>
-		`${label} object must contain "data"/"buffer" or an existing "path"`;
-
-	/**
-	 * Where an image source keeps its bytes: `{ data }` for the in-memory
-	 * forms, checked against the size cap, or `{ path, missing }` for a
-	 * file, `missing` being the error to raise if it is not there - a bare
-	 * path string and a path inside an object have always said different
-	 * things. Anything else is refused here.
-	 */
-	function locateSource(source, label) {
-		if (source == null || source === "") throw new Error(`${label} is empty`);
-		const data = bytesOf(source);
-		if (data) {
-			assertUnderCap(data, label);
-			return { data };
-		}
-		if (typeof source === "string") {
-			return { path: source, missing: `${label} does not exist on disk: "${source}"` };
-		}
-		if (typeof source === "object" && typeof source.path === "string") {
-			return { path: source.path, missing: objectFormError(label) };
-		}
-		if (typeof source === "object") throw new Error(objectFormError(label));
-		throw new Error(`unsupported ${label} type: ${typeof source}`);
-	}
-
 	/**
 	 * Load an image source to { buffer, raw }. `prefetched` is the handle
 	 * fingerprintImage already holds open on a path golden, so the bytes are
@@ -321,7 +271,7 @@ module.exports = (RED) => {
 			// to, so it is copied - straight into shared memory, where the
 			// frame has to end up anyway to reach the inspector.
 			const buffer = Buffer.isBuffer(at.data) ? at.data : sharedCopy(at.data);
-			const raw = rawGeometry(source);
+			const raw = geometryOf(source);
 			assertRawFits(buffer, raw, label);
 			return { buffer, raw };
 		}
@@ -369,62 +319,6 @@ module.exports = (RED) => {
 	}
 
 	/**
-	 * Geometry for pixels that arrive with no container around them.
-	 * Undefined unless all three are present and sane - a partial
-	 * descriptor is worse than none, because sharp would read past the end
-	 * of the buffer rather than tell you the numbers are wrong.
-	 */
-	function rawGeometry(source) {
-		if (!source || typeof source !== "object") return undefined;
-		const width = Number(source.width);
-		const height = Number(source.height);
-		const channels = Number(source.channels);
-		if (!Number.isInteger(width) || width <= 0) return undefined;
-		if (!Number.isInteger(height) || height <= 0) return undefined;
-		if (!Number.isInteger(channels) || channels < 1 || channels > 4)
-			return undefined;
-		// A descriptor past this is a mistake, not a sensor: 64M pixels at
-		// 4 channels is 256MB, far beyond anything this inspection runs.
-		// Capping here keeps such a descriptor from reaching sharp's raw
-		// path, where the length mismatch would surface only as libvips's
-		// generic 'memory area too small' error.
-		if (width * height > 64 * 1024 * 1024) return undefined;
-		return { width, height, channels };
-	}
-
-	/** pdf-to-image's convention: raw bytes on the payload, geometry on
-	 * msg.images[] (raw pixels have no container to carry it). */
-	function rawGeometryFromImages(msg) {
-		if (!msg || String(msg.format).toUpperCase() !== "RAW") return undefined;
-		const images = Array.isArray(msg.images) ? msg.images : null;
-		if (!images || images.length === 0) return undefined;
-		const match =
-			(msg.page != null && images.find((i) => i && i.page === msg.page)) ||
-			images[0];
-		return rawGeometry(match);
-	}
-
-	/**
-	 * Raw geometry for the frame under inspection.
-	 *
-	 * `msg.images[]` is only consulted when no golden travels on the same
-	 * message. When the golden is the PDF render - the intended setup -
-	 * msg.images describes *that*, not the camera frame, and silently
-	 * decoding a 23MP capture at the artwork's dimensions would produce a
-	 * confident, wrong answer rather than an error. Say `msg.rawInfo` when
-	 * both are raw on one message.
-	 */
-	function targetRawGeometry(msg, source) {
-		const direct = rawGeometry(source);
-		if (direct) return direct;
-		if (!msg) return undefined;
-		const explicit = rawGeometry(msg.rawInfo);
-		if (explicit) return explicit;
-		if (msg.golden != null) return undefined;
-		return rawGeometryFromImages(msg);
-	}
-
-	/**
 	 * Raw geometry for the golden. Beyond the self-describing object form,
 	 * `msg.goldenRawInfo` states it outright, and a bare buffer from
 	 * pdf-to-image is read from msg.images[] - which is what wiring that
@@ -438,12 +332,12 @@ module.exports = (RED) => {
 	 * garbage golden cached under cfg.raw for every later frame.
 	 */
 	function goldenRawGeometry(msg, source) {
-		const direct = rawGeometry(source);
+		const direct = geometryOf(source);
 		if (direct) return direct;
 		if (!msg) return undefined;
-		const explicit = rawGeometry(msg.goldenRawInfo);
+		const explicit = geometryOf(msg.goldenRawInfo);
 		if (explicit) return explicit;
-		return isBytes(source) ? rawGeometryFromImages(msg) : undefined;
+		return isBytes(source) ? geometryFromImages(msg) : undefined;
 	}
 
 	/**
@@ -974,11 +868,6 @@ module.exports = (RED) => {
 		});
 
 		node.on("input", async (msg, send, done) => {
-			send =
-				send ||
-				function () {
-					node.send.apply(node, arguments);
-				};
 			const totalStart = performance.now();
 			node.frameSeq++;
 			try {
@@ -1233,7 +1122,7 @@ module.exports = (RED) => {
 					msg.payload,
 					"msg.payload",
 				);
-				cfg.targetRaw = targetRawGeometry(msg, msg.payload) || targetRawFromSource;
+				cfg.targetRaw = rawGeometry(msg, msg.payload) || targetRawFromSource;
 				assertRawFits(targetBuf, cfg.targetRaw, "msg.payload");
 				// Copied into shared memory once, so the inspector gets a handle
 				// rather than tens of megabytes, and so the decoder never reads

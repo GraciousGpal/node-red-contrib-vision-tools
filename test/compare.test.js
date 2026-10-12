@@ -1,7 +1,7 @@
 /**
  * Regression tests for lib/compare.js.
  *
- * Fixtures are generated here rather than read from data/sample_images
+ * Fixtures are generated here rather than read from a local photo folder
  * (which is gitignored - real customer QC photos), so these run anywhere:
  * `node --test` from the package root.
  */

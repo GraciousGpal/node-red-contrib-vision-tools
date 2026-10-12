@@ -331,6 +331,33 @@ test("nodeInput raw helpers: descriptor rules and the length guard", () => {
 	assert.throws(() => assertRawFits(data, { width: 10, height: 5, channels: 3 }, "msg.payload"), /msg\.payload raw descriptor 10x5x3 needs 150 bytes but the buffer holds 120/);
 });
 
+test("locateSource: a missing bare path and a missing path in an object say different things", () => {
+	const { locateSource } = require("../lib/nodeInput.js");
+	const missing = path.join(__dirname, "no-such-golden.png");
+	assert.strictEqual(typeof locateSource, "function", "nodeInput exports locateSource");
+
+	const bare = locateSource(missing, "msg.golden");
+	assert.deepStrictEqual(bare, { path: missing, missing: `msg.golden does not exist on disk: "${missing}"` });
+	const inObject = locateSource({ path: missing }, "msg.golden");
+	assert.deepStrictEqual(inObject, {
+		path: missing,
+		missing: 'msg.golden object must contain "data"/"buffer" or an existing "path"',
+	});
+	assert.throws(() => locateSource({}, "msg.golden"), /^Error: msg\.golden object must contain "data"\/"buffer" or an existing "path"$/);
+	assert.throws(() => locateSource("", "msg.golden"), /^Error: msg\.golden is empty$/);
+	assert.throws(() => locateSource(5, "msg.golden"), /^Error: unsupported msg\.golden type: number$/);
+	const data = Buffer.alloc(4);
+	assert.strictEqual(locateSource({ data }, "msg.golden").data, data);
+});
+
+test("resolveImage on a missing path keeps both errors", async () => {
+	const missing = path.join(__dirname, "no-such-golden.png");
+	await assert.rejects(resolveImage(missing, "msg.golden"), { message: `msg.golden does not exist on disk: "${missing}"` });
+	await assert.rejects(resolveImage({ path: missing }, "msg.golden"), {
+		message: 'msg.golden object must contain "data"/"buffer" or an existing "path"',
+	});
+});
+
 test("EAN-8 is off by default and found when asked for", async () => {
 	const { png, ean8 } = await fixture();
 	assert.ok(!DEFAULT_FORMATS.includes("EAN8"));

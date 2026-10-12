@@ -12,7 +12,7 @@
  * then scores are mostly ones the map never saw. Without it the good set
  * is scored against a map trained on itself, which flatters the result.
  *
- *   node bench/nuisance-e2e.js --holdout 2 --threshold 0.27
+ *   BENCH_SAMPLE_DIR=/path/to/samples node bench/nuisance-e2e.js --holdout 2 --threshold 0.27
  *
  * --labelcrop 1 runs every frame through lib/labelCrop.js first (blob
  * mode, maxBorderContact 0.75 - this rig's label touches three frame
@@ -125,8 +125,15 @@ async function buildGolden(flows, config) {
 	return half(out.payload);
 }
 
+// Sample frames: $BENCH_SAMPLE_DIR/{good,bad}/*.{jpg,jpeg,png}.
+function sampleDir() {
+	const d = process.env.BENCH_SAMPLE_DIR;
+	assert(d, "set BENCH_SAMPLE_DIR to a folder holding good/ and bad/");
+	return d;
+}
+
 function listFixtures(label) {
-	const dir = `/data/Inspection/sample_images/${label}`;
+	const dir = path.join(sampleDir(), label);
 	return fs
 		.readdirSync(dir)
 		.filter((f) => /\.(jpg|jpeg|png)$/i.test(f))
@@ -135,6 +142,7 @@ function listFixtures(label) {
 }
 
 async function main() {
+	sampleDir(); // fail on an unset folder before any slow work
 	const flows = JSON.parse(fs.readFileSync("/data/flows.json"));
 	const config = flows.find((n) => n.type === "golden-compare");
 	assert(config, "no golden-compare node in the saved flow");

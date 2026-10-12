@@ -4,7 +4,7 @@
  * Run inside the NodeRed-Test container with NODE_PATH set and
  * VISION_BENCH_ROOT pointing at the source snapshot under test:
  *
- *   node bench/nuisance-validate.js --threshold 0.25 --out /tmp/nuisance.json
+ *   BENCH_SAMPLE_DIR=/path/to/samples node bench/nuisance-validate.js --threshold 0.25 --out /tmp/nuisance.json
  *
  * Two numbers matter and both are reported held-out, never on the frames
  * the map was trained on: the worst novelty score a good frame reaches, and
@@ -104,8 +104,15 @@ async function buildGolden(flows, config) {
 	return half(out.payload);
 }
 
+// Sample frames: $BENCH_SAMPLE_DIR/{good,bad}/*.{jpg,jpeg,png}.
+function sampleDir() {
+	const d = process.env.BENCH_SAMPLE_DIR;
+	assert(d, "set BENCH_SAMPLE_DIR to a folder holding good/ and bad/");
+	return d;
+}
+
 function listFixtures(label) {
-	const dir = `/data/Inspection/sample_images/${label}`;
+	const dir = path.join(sampleDir(), label);
 	const files = fs
 		.readdirSync(dir)
 		.filter((f) => /\.(jpg|jpeg|png)$/i.test(f))
@@ -114,6 +121,7 @@ function listFixtures(label) {
 }
 
 async function main() {
+	sampleDir(); // fail on an unset folder before any slow work
 	const flows = JSON.parse(fs.readFileSync("/data/flows.json"));
 	const config = flows.find((n) => n.type === "golden-compare");
 	assert(config, "no golden-compare node in the saved flow");

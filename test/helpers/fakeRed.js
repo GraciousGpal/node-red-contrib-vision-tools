@@ -36,7 +36,10 @@ function loadNode(file, config = {}, { id, comms, log } = {}) {
 				node.config = cfg;
 				node.listeners = {};
 				node.on = (evt, fn) => {
-					node.listeners[evt] = fn;
+					// like the runtime, always hand input a send; node.send is
+					// looked up per call because tests replace it after load
+					node.listeners[evt] =
+						evt === "input" ? (msg, send, done) => fn(msg, send || ((...a) => node.send(...a)), done) : fn;
 				};
 				node.send = () => {};
 				node.error = () => {};

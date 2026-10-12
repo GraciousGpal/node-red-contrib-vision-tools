@@ -1327,7 +1327,7 @@ weeks of that work. Everything below in this entry shipped in it.
   marked reject still failed with four background regions. Median warm
   container measurements, 4096x5500 PNG, 12 workers, diagnostics off:
   663ms -> 243ms clean and 1065ms -> 443ms reject. Reproduce with
-  `bench/opencv-fast-bench.js`.
+  `bench/opencv-fast-bench.js` (script since removed).
 
 - **`nativeAlignSeed` - a prototype, off by default.** The pinned search
   can start from an ORB+ECC alignment measured by the optional

@@ -44,11 +44,6 @@ module.exports = (RED) => {
 		node.scaleFilePath = String(config.scaleFilePath || "").trim();
 
 		node.on("input", async (msg, send, done) => {
-			send =
-				send ||
-				function () {
-					node.send.apply(node, arguments);
-				};
 			const totalStart = performance.now();
 			try {
 				if (!node.scaleFilePath) {
@@ -198,9 +193,7 @@ module.exports = (RED) => {
 				done();
 			} catch (err) {
 				node.status({ fill: "red", shape: "ring", text: "error" });
-				// done(err) routes the failure through node.error exactly
-				// once; an explicit node.error here reported every failure
-				// twice (double log lines, Catch nodes firing twice)
+				// done(err) reports through node.error once; don't also call it
 				done(err);
 			}
 		});

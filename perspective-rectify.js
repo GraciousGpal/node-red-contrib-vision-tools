@@ -46,20 +46,13 @@ const {
 	clampInt,
 	pickMode,
 	isBytes,
+	asView,
 	assertUnderCap,
 	readRegularFile,
 } = require("./lib/nodeInput.js");
 
 module.exports = (RED) => {
 	const OUTPUT_FORMATS = ["raw", "jpg", "png"];
-
-	// A Buffer over the same memory, never a copy: a 24MP frame is copied
-	// once into shared memory for the worker and that is enough.
-	function asBuffer(v) {
-		if (Buffer.isBuffer(v)) return v;
-		if (v instanceof ArrayBuffer) return Buffer.from(v);
-		return Buffer.from(v.buffer, v.byteOffset, v.byteLength);
-	}
 
 	function rawGeometry(source) {
 		if (!source || typeof source !== "object") return undefined;
@@ -88,7 +81,7 @@ module.exports = (RED) => {
 		let bytes;
 		if (isBytes(source)) {
 			assertUnderCap(source, label);
-			bytes = asBuffer(source);
+			bytes = asView(source);
 			geometry = rawGeometry(msg.rawInfo);
 		} else if (typeof source === "string") {
 			bytes = await readRegularFile(source, label);
@@ -97,7 +90,7 @@ module.exports = (RED) => {
 			const data = source.data || source.buffer;
 			if (isBytes(data)) {
 				assertUnderCap(data, label);
-				bytes = asBuffer(data);
+				bytes = asView(data);
 				geometry = rawGeometry(source);
 			} else if (typeof source.path === "string") {
 				bytes = await readRegularFile(source.path, label);
@@ -151,11 +144,6 @@ module.exports = (RED) => {
 		node.workers = clampInt(config.workers, 0, [0, 64]);
 
 		node.on("input", async (msg, send, done) => {
-			send =
-				send ||
-				function () {
-					node.send.apply(node, arguments);
-				};
 			const t0 = performance.now();
 			try {
 				if (!node.scaleFilePath) {
@@ -250,9 +238,7 @@ module.exports = (RED) => {
 				const outputFormat = pickMode(msg.outputFormat, node.outputFormat, OUTPUT_FORMATS);
 				if (outputFormat === "raw") {
 					msg.payload = {
-						data: Buffer.isBuffer(out.data)
-							? out.data
-							: Buffer.from(out.data.buffer, out.data.byteOffset, out.data.byteLength),
+						data: asView(out.data),
 						width: out.width,
 						height: out.height,
 						channels: out.channels,

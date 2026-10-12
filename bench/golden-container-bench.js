@@ -3,10 +3,11 @@
  * Run inside that container with NODE_PATH=/usr/src/node-red/node_modules.
  * VISION_BENCH_ROOT selects installed code or an isolated source snapshot.
  *
- * node bench/golden-container-bench.js --workers 12,1,2,4,8,16 --iterations 3
- * node bench/golden-container-bench.js --workers 12,4 --limit 0 --iterations 1
- * VISION_TOOLS_ENGINE=opencv-js node bench/golden-container-bench.js --workers 4
+ * BENCH_SAMPLE_DIR=/path/to/samples node bench/golden-container-bench.js --workers 12,1,2,4,8,16 --iterations 3
+ * BENCH_SAMPLE_DIR=/path/to/samples node bench/golden-container-bench.js --workers 12,4 --limit 0 --iterations 1
+ * BENCH_SAMPLE_DIR=/path/to/samples VISION_TOOLS_ENGINE=opencv-js node bench/golden-container-bench.js --workers 4
  *
+ * BENCH_SAMPLE_DIR (required) is the folder holding the good/ and bad/ frames.
  * Settings come from /data/flows.json; --config overrides them for diagnosis.
  * --files selects comma-separated basenames; --expect-labels asserts all verdicts.
  * --stages DIR saves diagnostic PNGs (not representative performance timings).
@@ -23,6 +24,13 @@ const path = require("node:path");
 const assert = require("node:assert/strict");
 const crypto = require("node:crypto");
 const os = require("node:os");
+
+// Sample frames: $BENCH_SAMPLE_DIR/{good,bad}/*.{jpg,jpeg,png}.
+function sampleDir() {
+	const d = process.env.BENCH_SAMPLE_DIR;
+	assert(d, "set BENCH_SAMPLE_DIR to a folder holding good/ and bad/");
+	return d;
+}
 
 function arg(name, fallback) {
 	const i = process.argv.indexOf(`--${name}`);
@@ -111,6 +119,7 @@ function stats(values) {
 const hash = (data) => crypto.createHash("sha256").update(data).digest("hex");
 
 async function main() {
+	sampleDir(); // fail on an unset folder before any slow work
 	let flows;
 	try {
 		flows = JSON.parse(fs.readFileSync("/data/flows.json"));
@@ -204,7 +213,7 @@ async function main() {
 		config.scaleFilePath = re(config.scaleFilePath);
 	}
 	const fixturePaths = ["good", "bad"].flatMap((label) => {
-		const dir = `/data/Inspection/sample_images/${label}`;
+		const dir = path.join(sampleDir(), label);
 		const files = fs
 			.readdirSync(dir)
 			.filter((f) => /\.(jpg|jpeg|png)$/i.test(f))

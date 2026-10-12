@@ -73,8 +73,8 @@ authoritative list.
 | file | role |
 | --- | --- |
 | `golden-compare.js` | Node-RED wiring: config and clamping, `msg` overrides, golden cache key, the golden's profile (resolution, cached reads, legacy import, barcode derivation after send), transform and nuisance-map training, logging; hands frames to `lib/inspector.js`. Keeps each node's last inspection (the inspector's small thumbnail every frame; every stage and heat map while a viewer is open) for the editor's stage viewer and serves it over admin routes (last, stage, hold, watch) |
-| `lib/nodeInput.js` | input handling shared by every node: bounded `clampInt`/`clampFloat`/`pickMode` settings, the size-capped image loader for `msg.payload` / `msg.golden` (bytes, a path, or an object carrying `data`/`buffer`/`path`), and `rawGeometry`/`assertRawFits` for bare pixels (`barcode-locate` uses them; `golden-compare` still has its own copies) |
-| `lib/inspector.js` | main-thread client for the inspection pipeline: one unref()'d worker per process, spawned on first use; runs the core inline when worker threads or `SharedArrayBuffer` are unavailable |
+| `lib/nodeInput.js` | input handling shared by every node: bounded `clampInt`/`clampFloat`/`pickMode` settings, the size-capped image loader for `msg.payload` / `msg.golden` (bytes, a path, or an object carrying `data`/`buffer`/`path`), `locateSource`/`resolveImage` behind it, `asView`, `geometryOf`/`geometryFromImages`, and `rawGeometry`/`assertRawFits` for bare pixels. The loader serves `barcode-locate`, `checkerboard-calibrate`, `synthetic-defects` and `golden-compare` (which keeps `sharedCopy`, `loadImage`, `fingerprintImage` and `goldenRawGeometry`, the golden-side geometry rule on `geometryOf`/`geometryFromImages`: one stat-then-read on a single handle; `loadImage` copies a `Uint8Array` or `ArrayBuffer` into shared memory through `sharedCopy`, passes a `Buffer` uncopied, and returns a path's bytes as a plain `Buffer` that `toShared` moves to shared memory later); `image-resize`, `perspective-rectify`, `line-finder` and `label-crop` keep their own loaders, the first three on `asView`. `image-resize`'s still uses nodeInput's `rawGeometry`, `assertRawFits`, `assertUnderCap` and `readRegularFile`; `perspective-rectify` has its own `rawGeometry`, which reads `GRAY` as one channel |
+| `lib/inspector.js` | main-thread client for the inspection pipeline: one unref()'d worker per process, spawned on first use; runs the core inline when worker threads or `SharedArrayBuffer` are unavailable. `GOLDEN_COMPARE_INLINE=1` runs it inline regardless |
 | `lib/inspectorCore.js` | the pipeline behind one request/response surface (`prepare`, `inspect`, `calibrate`, `rectify`) plus the bounded prepared-golden store; same code on the worker and inline, no file I/O |
 | `lib/inspectorWorker.js` | worker side of the inspector: message plumbing around `inspectorCore`, replies matched to requests by id, a frame's raw images moved to the main thread rather than copied |
 | `lib/compare.js` | the pipeline above — `prepareGolden` and `compareFrame`, including the tone and speck checks on the aligned grey |
@@ -109,7 +109,9 @@ authoritative list.
 | `lib/labelCrop.js` | deskew-and-crop op: decode-once, low-res Otsu mask analysis (connected component + exterior minimum-area rectangle) + brightness/Sobel boundary refinement, ROI-only rotation, final crop in the engine; composes the OpenCV engine |
 | `line-finder.js` | Node-RED wiring for the line-finder node: config/clamping, `msg.region` override, payload passes through with `msg.lineFinder` attached; a miss is a result, not an error; needs no engine |
 | `lib/lineFinder.js` | caliper line finder: sample a user-drawn region in its own axes, average bands into profiles, sub-pixel edge per caliper, outlier-dropping total-least-squares line fit; pure JS over a grey raster |
-| `lib/engine.js` | picks the OpenCV engine (`@graciousstar/opencv5`, else opencv.js WASM), honours `VISION_TOOLS_ENGINE`, warms it up |
+| `lib/engine.js` | picks the OpenCV engine (`@graciousstar/opencv5`, else opencv.js WASM), honours `VISION_TOOLS_ENGINE`; `candidate()` chooses synchronously, `warmup()` awaits the engine's `ready()` (the WASM start for opencv.js), `resolve()` is a compatibility shim |
+| `image-resize.js` | Node-RED wiring for the resize node: scale by a factor or to a size (rp-resize's width/height rules) with INTER_LINEAR on the engine `lib/engine.js` picks; raw, bare-raw, encoded or path in, raw or encoded out |
+| `lib/formatMs.js` | `formatMs`: the time seven of the eight nodes (all but `synthetic-defects`) append to their status, `84ms` under a second, `1.23s` from there |
 | `lib/cvjs.js` | the engine op surface on `@techstark/opencv-js`, the fallback: colorConvert, resize, filter (otsu/edge), crop, rotate — raw in, raw out |
 | `lib/cvjsAlign.js` | `imageAlign` on opencv.js: ORB + RANSAC affine, ECC refinement, one warp into the reference frame |
 | `lib/opencv5.js` | requires `@graciousstar/opencv5`, the default engine: a dependency, developed in its own repository ([GraciousGpal/opencv5](https://github.com/GraciousGpal/opencv5): the op surface, manifest-checked loader, plain N-API over a six-module static OpenCV 5, its build scripts, CI and byte-pinning tests) |
@@ -789,7 +791,7 @@ The per-pixel stages run on a persistent worker pool (`lib/pool.js`),
 which takes them from 323ms to 88ms. Four properties make it safe:
 
 - **One implementation.** The workers call the same `warpRows`,
-  `fieldRows`, `applyRows` and `slidingMax1D` the main thread does, rather
+  `fieldCells`, `applyCells` and `slidingMax1D` the main thread does, rather
   than a copy. A divergence would show up as a defect that appears or
   disappears with core count, which would look like a flaky camera rather
   than a bug — `test/parallel.test.js` asserts byte-identical output.
@@ -922,13 +924,14 @@ and every heat map were identical on all 648 frame-passes of each.
 
 ### Still on the table
 
-500ms was the target and 605ms is where this lands. Closing the last
-100ms needs a change of kind:
+500ms was the target; what is left of the gap needs a change of kind:
 
 - **coarse-to-fine inspection** — diff at low resolution, then re-inspect
   only flagged neighbourhoods at full resolution. The largest remaining
   win, since the whole reason for 3072 is a handful of pixels;
-- **native or WASM inner loops** for the warp and the diff.
+- **native or WASM inner loops** for the warp (the diff already has an
+  optional native twin, with the JS kernel as the fallback where no binary
+  loads: see the stage medians above).
 
 The `nativeFastAlign` branch is the intentionally non-equivalent version of
 that experiment: OpenCV owns decode, an unrestricted affine solve and the
@@ -1490,14 +1493,17 @@ function rather than copying it into the worker.
 - `workingSize` cannot exceed the golden's own resolution (see Resolution),
   so raising it past that buys nothing and the node says so.
 - Heat maps and debug stages are output, not inspection: ~900ms of a frame
-  between them, and off by default in the demo flow. The verdict does not
+  between them. The three heat maps (`outputHeatmap`,
+  `outputPrintHeatmap`, `outputBackgroundHeatmap`) default to on; turn them
+  off where nothing reads them. The verdict does not
   depend on either.
 - `localAlign` and the morphological tolerances are **coupled**. The
   defaults of 2/1 assume refinement is on; turning it off without widening
   them again will fail good parts, because the registration error it was
   absorbing comes straight back.
-- `checkerboard-calibrate`'s `cols`/`rows` count **dark squares**, not
-  physical squares: a standard 4×6 physical board is `cols: 2, rows: 6`,
+- `checkerboard-calibrate`'s `checkerboardCols`/`checkerboardRows` count **dark squares**, not
+  physical squares: a standard 4×6 physical board is `checkerboardCols: 2,
+  checkerboardRows: 6`,
   while the editor's default `4 × 6` describes an 8×6 board. A photo too
   thin to measure a pitch is reported as not detected rather than as a
   bogus scale.

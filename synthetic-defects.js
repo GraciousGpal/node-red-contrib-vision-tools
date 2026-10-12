@@ -166,7 +166,6 @@ module.exports = (RED) => {
 		}
 
 		node.on("input", async (msg, send, done) => {
-			send = send || function () { node.send.apply(node, arguments); };
 			stop();
 			const mine = run;
 			const alive = () => run === mine;

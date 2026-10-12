@@ -303,7 +303,7 @@ function labelGray(
 	return g;
 }
 
-test("refineRectBoundary snaps to the measured label boundary (13112025_003 fixture)", () => {
+test("refineRectBoundary snaps to the measured label boundary (halo fixture)", () => {
 	// Detection copy at maxEdge 640: scale = 640/5500 = 0.1164.
 	const W = 477;
 	const H = 640;
