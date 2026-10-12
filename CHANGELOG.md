@@ -8,6 +8,29 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Changed
 
+- **`barcode-locate` reads regions faster, most of all from raw
+  pixels.** Bare pixels are no longer run through sharp before slicing;
+  preview crops are encoded only for regions that read a code, at zlib
+  level 1; and a region that names its format, as profile regions do, is
+  searched for that format alone - a code of another format inside a
+  profile region's padding is no longer read with it. A raw payload is
+  read in place rather than copied first (~20-28 ms for a 3000x3700 RGB
+  frame).
+  - **Why:** on 162 camera frames (3000x3700 JPEG, two Code128 regions)
+    the region pass took ~157 ms: ~100 ms decoding the frame, and most of
+    the rest encoding previews at the default zlib level and running
+    seven formats' detectors. It now takes ~115 ms from the JPEG and
+    ~44 ms from the frame as raw RGB, with the same codes read on every
+    frame. Previews are about 40% larger.
+
+- **`resize` at × 1 with raw output decodes and does nothing else.**
+  An encoded input at its own size skipped no work before: the engine
+  copied the decoded frame (~28 ms at 3000x3700 RGB). Now it is the
+  decode, so a flow can decode the camera frame once, halve it from raw
+  (~7 ms) and give `barcode-locate` the native pixels instead of the JPEG
+  it would decode again. A raw input at its own size still goes through
+  the engine, so the output never shares the input's buffer.
+
 - **`barcode-locate` places profile regions with the frame's own
   transform; training is no longer needed for them.** `golden-compare`
   now puts the golden's and the frame's sizes on `msg.result.transform`

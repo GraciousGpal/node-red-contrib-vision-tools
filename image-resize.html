@@ -82,8 +82,14 @@
   <p>
     The resized image at the configured property: a raw
     <code>{ data, width, height, channels, colorSpace, dtype }</code> object
-    with the input's channels and colour space, or an encoded png or jpg
-    Buffer. The rest of the message passes through.
+    with a raw input's channels and colour space (an encoded input comes
+    out 8-bit RGB or RGBA, as sharp decodes it, grey included), or an
+    encoded png or jpg
+    Buffer. The rest of the message passes through. An encoded image asked
+    for raw at its own size (× 1) is simply decoded, with no resize: a flow
+    decodes the camera frame once this way and hands the pixels to every
+    node after it - <code>barcode-locate</code> then reads its regions
+    without decoding the JPEG again.
   </p>
 
   <h3>Errors</h3>

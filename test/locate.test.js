@@ -46,7 +46,8 @@ const fs = require("node:fs");
 const path = require("node:path");
 const sharp = require("sharp");
 const { locateBarcodes, DEFAULT_FORMATS } = require("../lib/locate.js");
-const { rawGeometry, assertRawFits } = require("../lib/nodeInput.js");
+const { rawGeometry, assertRawFits, resolveImage } = require("../lib/nodeInput.js");
+const { loadNode } = require("./helpers/fakeRed.js");
 
 // The writer ships in zxing-wasm, a hard dependency of this package, so
 // a load failure is a broken install and fails every test that needs it
@@ -214,10 +215,20 @@ test("raw input decodes to the same results as the PNG", async () => {
 	const { png } = await fixture();
 	const strip = (rs) => rs.map(({ text, format, source, regionLabel, roi, symbol }) => ({ text, format, source, regionLabel, roi, symbol }));
 
-	for (const channels of [3, 1]) {
+	// every channel count cropToImageData expands: grey, grey+alpha, RGB, RGBA
+	for (const channels of [4, 3, 2, 1]) {
 		let pipeline = sharp(png).removeAlpha();
-		if (channels === 1) pipeline = pipeline.toColourspace("b-w");
-		const { data, info } = await pipeline.raw().toBuffer({ resolveWithObject: true });
+		if (channels <= 2) pipeline = pipeline.toColourspace("b-w");
+		if (channels === 4) pipeline = pipeline.ensureAlpha();
+		const decoded = await pipeline.raw().toBuffer({ resolveWithObject: true });
+		const info = { ...decoded.info };
+		let data = decoded.data;
+		if (channels === 2) {
+			// sharp keeps a b-w image single-channel even with ensureAlpha
+			data = Buffer.alloc(data.length * 2, 255);
+			for (let i = 0; i < decoded.data.length; i++) data[i * 2] = decoded.data[i];
+			info.channels = 2;
+		}
 		assert.strictEqual(info.channels, channels, "precondition: raw channel count");
 
 		// the descriptor goes through the same helpers barcode-locate uses
@@ -233,8 +244,49 @@ test("raw input decodes to the same results as the PNG", async () => {
 			assert.strictEqual(fromRaw.usedFullImage, fromPng.usedFullImage);
 			assert.ok(fromPng.results.length >= 2, `${options.mode}: PNG finds the codes`);
 			assert.deepStrictEqual(strip(fromRaw.results), strip(fromPng.results), `${channels}-channel raw, ${options.mode}`);
+			for (const r of fromRaw.results) {
+				const meta = await sharp(r.previewBuffer).metadata();
+				assert.deepStrictEqual([meta.format, meta.width, meta.height], ["png", r.roi.width, r.roi.height], "the preview is the roi");
+			}
 		}
 	}
+});
+
+test("a region naming its format is searched for that format alone", async () => {
+	const { png, c128 } = await fixture();
+	const box = { x: c128.left - 60, y: c128.top - 60, width: c128.width + 120, height: c128.height + 120 };
+	const read = async (format) => (await locateBarcodes(png, { mode: "regionsOnly", regions: [{ ...box, label: "c", format }] })).results;
+
+	assert.deepStrictEqual((await read("Code128")).map((r) => r.text), [c128.text]);
+	assert.deepStrictEqual(await read("QRCode"), [], "a Code128 is not looked for in a QR code's region");
+	// a format the caller did not enable leaves the region's search as it was
+	const notEnabled = await locateBarcodes(png, {
+		mode: "regionsOnly",
+		regions: [{ ...box, label: "c", format: "EAN8" }],
+		readerOptions: { formats: ["Code128"], tryHarder: true, tryRotate: true },
+	});
+	assert.deepStrictEqual(notEnabled.results.map((r) => r.text), [c128.text]);
+});
+
+test("barcode-locate reads a raw payload in place: not copied, not changed", async () => {
+	const { png } = await fixture();
+	const { data, info } = await sharp(png).removeAlpha().raw().toBuffer({ resolveWithObject: true });
+	const frame = { data, width: info.width, height: info.height, channels: 3 };
+
+	const view = await resolveImage(frame, "msg.payload", { copy: false });
+	assert.strictEqual(view.buffer, data.buffer, "copy: false is the caller's memory");
+	assert.strictEqual(view.byteOffset, data.byteOffset);
+	assert.notStrictEqual((await resolveImage(frame, "msg.payload")).buffer, data.buffer, "the default still copies");
+
+	const before = Buffer.from(data);
+	const node = loadNode("barcode-locate.js", { mode: "autoOnly" });
+	const sent = [];
+	node.send = (m) => sent.push(m);
+	const errors = [];
+	await node.listeners.input({ payload: frame }, undefined, (err) => err && errors.push(err));
+	assert.deepStrictEqual(errors, []);
+	assert.deepStrictEqual(sent.map((m) => m.text).sort(), ["VT-DM-0042", "VT-LOCATE-128"]);
+	assert.ok(data.equals(before), "the frame the next node gets is the one this node got");
 });
 
 test("nodeInput raw helpers: descriptor rules and the length guard", () => {

@@ -1138,10 +1138,19 @@ and `bench/golden-container-bench.js` produce.
 The input can be a raw `{ data, width, height, channels, colorSpace }`
 object, a bare raw Buffer with `msg.rawInfo` (or pdf-to-image's
 `msg.images`), an encoded image Buffer, or a file path; the output is the
-same raw object shape (channels and colour space kept) or a png or jpg
-Buffer. An input that is not an image, or a size that cannot be made,
+same raw object shape or a png or jpg Buffer. A raw input keeps its
+channels and colour space; an encoded one comes out as sharp decodes it,
+8-bit RGB or RGBA - a grey PNG or JPEG included. An input that is not an image, or a size that cannot be made,
 stops the message with an error: a frame at the wrong scale would be
 graded against the wrong golden.
+
+An encoded image asked for raw at its own size (× 1) is decoded and
+nothing else: the engine's same-size resize would only copy it (~28 ms on
+a 3000x3700 RGB frame). That is how a flow decodes the camera frame once
+and keeps the pixels for every node after it - a halving `resize` then
+works from raw (~7 ms), and `barcode-locate` reads its regions without a
+second decode (below). A raw input at its own size still goes through the
+engine, so the output never shares the input's buffer.
 
 `scripts/migrate-rp-nodes.js` writes a copy of a flows.json with its
 `rp-resize` nodes turned into this node (same ids, positions and wires)
@@ -1668,6 +1677,20 @@ one of the calibration when set) and a header read of the payload for
 its size, 1–3 ms, none for raw pixels; placing through the frame's own
 transform adds a few corners' arithmetic per box. In **Full image only** the profile is not read.
 
+The decode and the reads are the rest. On 162 camera frames (3000x3700
+JPEG, two Code128 regions each) the region pass took ~115 ms from the
+JPEG, most of it decoding the frame, and ~44 ms from the same frame as
+raw RGB pixels - the same codes on every frame. So decode the frame once
+(a `resize` at × 1 with raw output, see *How `resize` works*), keep those
+pixels on the message, and give them to this node. Bare pixels are sliced
+as they are, in any channel count; a region's preview PNG is encoded only
+when it read something, at zlib level 1; and a profile region is searched
+only for the format the golden has there (its other enabled formats are a
+detector pass each).
+The full-image fallback scans every enabled format over the whole frame
+(~320 ms on those frames, ~130 ms with Code128 alone): untick the formats
+the labels never carry.
+
 ### Input
 
 `msg.payload` — a Buffer/Uint8Array/ArrayBuffer, a file path string, or an
@@ -1870,7 +1893,7 @@ nothing is found at all, one message with `msg.text = null`,
 
 ## Tests
 
-`npm test` (Node 20.9+, no test framework needed — `node --test`), 768
+`npm test` (Node 20.9+, no test framework needed — `node --test`), 771
 tests. Fixtures are generated with `sharp` rather than read from
 `data/sample_images`, so the suite runs anywhere; the real QC photos are
 gitignored. Coverage spans the lib pipeline (`compare`, `align`, `warp`,

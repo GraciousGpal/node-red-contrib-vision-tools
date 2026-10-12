@@ -406,7 +406,8 @@ module.exports = (RED) => {
 			send = send || function () { node.send.apply(node, arguments); };
 			const started = performance.now();
 			try {
-				const buffer = await resolveImage(msg.payload, "msg.payload");
+				// read-only from here on: no copy of a raw frame's bytes
+				const buffer = await resolveImage(msg.payload, "msg.payload", { copy: false });
 				const raw = rawGeometry(msg, msg.payload);
 				assertRawFits(buffer, raw, "msg.payload");
 				const mode = msg.mode || node.mode;

@@ -16,7 +16,7 @@
  * Input (at the configured path, msg.payload by default): a raw
  * { data, width, height, channels, colorSpace } object, a bare raw Buffer
  * with msg.rawInfo (or pdf-to-image's msg.images), an encoded image Buffer
- * (decoded by sharp at its own channel count), or a file path. Output (at
+ * (decoded by sharp: 8-bit RGB or RGBA, grey included), or a file path. Output (at
  * the configured path): the same raw object shape, or an encoded png/jpg
  * Buffer.
  *
@@ -199,10 +199,18 @@ module.exports = (RED) => {
 					);
 				}
 				const label = `msg.${node.inputPath}`;
-				const { image } = await resolveRaw(msg, getPath(msg, node.inputPath), label);
+				const { image, decoded } = await resolveRaw(msg, getPath(msg, node.inputPath), label);
 				const size = targetSize(image.width, image.height, node.size);
 				const fmt = node.outputFormat === "jpg" ? "jpg" : node.outputFormat;
-				const out = await selected.engine.resize(image, "num", size.width, "num", size.height, fmt, node.outputQuality);
+				// An encoded image asked for raw at its own size is a decode:
+				// the engine would only copy it (~28ms on a 3000x3700 RGB
+				// frame). A flow decodes the camera frame once this way and
+				// hands the pixels to every node after it. A raw input still
+				// goes through the engine, so the output never aliases it.
+				const same = decoded && fmt === "raw" && size.width === image.width && size.height === image.height;
+				const out = same
+					? { image }
+					: await selected.engine.resize(image, "num", size.width, "num", size.height, fmt, node.outputQuality);
 				const result = out.image;
 				if (node.outputFormat === "raw") {
 					setPath(msg, node.outputPath, {

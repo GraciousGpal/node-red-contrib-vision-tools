@@ -127,6 +127,60 @@ test("input and output paths, a bare Buffer with msg.rawInfo, and an encoded ima
 	await fsp.rm(dir, { recursive: true, force: true });
 });
 
+test("an encoded image at its own size comes out as its decode, without the engine", { skip }, async () => {
+	const image = noise(64, 48, 3);
+	const png = await sharp(image.data, { raw: { width: 64, height: 48, channels: 3 } }).png().toBuffer();
+	const { engine } = await engineModule.resolve();
+	const resize = engine.resize;
+	let calls = 0;
+	engine.resize = (...args) => {
+		calls++;
+		return resize.apply(engine, args);
+	};
+	try {
+		const n = makeNode({ widthMode: "multiply", widthValue: 1, heightMode: "auto" });
+		assert.strictEqual(await n.run({ payload: png }), null);
+		const out = n.sent[0].payload;
+		assert.deepStrictEqual([out.width, out.height, out.channels, out.colorSpace, out.dtype], [64, 48, 3, "RGB", "uint8"]);
+		assert.ok(out.data.equals(image.data), "the decoded pixels");
+		assert.strictEqual(calls, 0, "a decode needs no resize");
+
+		// whatever sharp makes of grey, alpha or 16-bit input, the shortcut
+		// is what the engine would have made of the same decode
+		const encoded = {
+			grey: await sharp(noise(64, 48, 1).data, { raw: { width: 64, height: 48, channels: 1 } }).png().toBuffer(),
+			rgba: await sharp(noise(64, 48, 4).data, { raw: { width: 64, height: 48, channels: 4 } }).png().toBuffer(),
+			rgb16: await sharp(png).toColourspace("rgb16").png().toBuffer(),
+		};
+		for (const [kind, bytes] of Object.entries(encoded)) {
+			const s = makeNode({ widthMode: "multiply", widthValue: 1, heightMode: "auto" });
+			assert.strictEqual(await s.run({ payload: bytes }), null);
+			const short = s.sent[0].payload;
+			const { data, info } = await sharp(bytes).raw().toBuffer({ resolveWithObject: true });
+			const decoded = { data, width: info.width, height: info.height, channels: info.channels, colorSpace: { 1: "GRAY", 3: "RGB", 4: "RGBA" }[info.channels], dtype: "uint8" };
+			const viaEngine = (await resize.call(engine, decoded, "num", 64, "num", 48, "raw", 90)).image;
+			assert.deepStrictEqual(
+				[short.width, short.height, short.channels, short.colorSpace],
+				[viaEngine.width, viaEngine.height, viaEngine.channels, viaEngine.colorSpace || decoded.colorSpace],
+				kind,
+			);
+			assert.ok(short.data.equals(Buffer.from(viaEngine.data.buffer, viaEngine.data.byteOffset, viaEngine.data.byteLength)), `${kind} pixels`);
+		}
+		assert.strictEqual(calls, 0, "still no resize");
+
+		// raw in at its own size still goes through the engine, so the
+		// output is never the input's own buffer
+		const input = { ...image };
+		const r = makeNode({ widthMode: "multiply", widthValue: 1, heightMode: "auto" });
+		assert.strictEqual(await r.run({ payload: input }), null);
+		assert.strictEqual(calls, 1);
+		assert.notStrictEqual(r.sent[0].payload.data, input.data);
+		assert.ok(r.sent[0].payload.data.equals(input.data));
+	} finally {
+		engine.resize = resize;
+	}
+});
+
 test("png and jpg outputs are encoded Buffers of the resized image", { skip }, async () => {
 	const image = noise(80, 60, 3);
 	const raw = makeNode({ widthMode: "multiply", widthValue: 0.5, heightMode: "auto" });
