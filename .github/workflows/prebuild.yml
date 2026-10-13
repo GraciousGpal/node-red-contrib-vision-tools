@@ -11,11 +11,12 @@
 # the binaries go into the package by hand, from the `prebuilds` artifact.
 # The Linux ones are built in images pinned by digest
 # (native/prebuild-linux.sh), so the same source gives the same bytes. The
-# macOS ones are built with the runner's Xcode, which nothing pins; they
-# have matched the committed bytes, but a runner image update can change
-# them with no source change. The linux and macos jobs fail when a rebuild
-# differs from the committed binary. The Windows one is not checked, as
-# MSVC's link timestamps and PDB GUID make each build different.
+# macOS ones are built with the runner's Xcode and the Windows one with the
+# runner's Visual Studio (link /Brepro and /PDBALTPATH, so no timestamp or
+# build path in the bytes), neither of which anything pins; the committed
+# ones are builds from these runners, but a runner image update can change
+# the bytes with no source change. Every job fails when its rebuild differs
+# from the committed binary.
 
 name: prebuild
 
@@ -200,7 +201,19 @@ jobs:
           cp native/build/Release/vision_kernels.node "$OUT"
           rm -rf native/build
           ls -l "$OUT"
-          node native/manifest.js > /dev/null
+
+      # Before the manifest is rewritten below, so it compares against the
+      # committed hash. /Brepro and /PDBALTPATH (binding.gyp) take out the
+      # link timestamp and build path; the toolchain is the runner's Visual
+      # Studio, which nothing pins: a runner image update can turn this red
+      # with no source change.
+      - name: Check the rebuild is the committed binary
+        run: node native/manifest.js --check "$OUT"
+
+      # The loader checks every prebuild against the manifest, so the one
+      # just built must be in it
+      - name: List the binaries in the manifest
+        run: node native/manifest.js > /dev/null
 
       - run: npm install --no-audit --no-fund
 

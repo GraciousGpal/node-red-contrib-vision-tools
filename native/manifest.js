@@ -7,9 +7,13 @@
  *                                          against the committed manifest; exit 1
  *                                          on any difference
  *
- * The check is how CI holds a rebuild to the committed binary: the builds
- * are deterministic in their pinned images (native/build.sh), so a
- * different hash is a different compiler, flag or source, not noise.
+ * The check is how CI holds a rebuild to the committed binary. The Linux
+ * builds run in images pinned by digest (native/prebuild-linux.sh), so a
+ * different hash there is a different compiler, flag or source, not
+ * noise. The macOS and Windows builds use the runner image's Xcode and
+ * Visual Studio, which nothing pins: a DIFFERENT there after a runner
+ * image update means the committed binary must be replaced from that
+ * run's artifact, not that the source changed.
  */
 
 "use strict";
@@ -25,6 +29,10 @@ const entry = (file) => {
 const keyOf = (file) => file.split(path.sep).join("/").split("/").slice(-2).join("/");
 
 if (process.argv[2] === "--check") {
+	if (process.argv.length < 4) {
+		console.error("usage: node native/manifest.js --check FILE...");
+		process.exit(1);
+	}
 	const manifest = JSON.parse(fs.readFileSync(path.join(__dirname, "..", "prebuilds", "manifest.json"), "utf8"));
 	let bad = 0;
 	for (const file of process.argv.slice(3)) {

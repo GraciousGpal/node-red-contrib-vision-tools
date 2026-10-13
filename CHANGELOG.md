@@ -36,8 +36,15 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   `/PDBALTPATH:%_PDB%` to the linker. The link timestamps and PDB GUID
   become a hash of the output, and only the PDB's file name is
   embedded, so the same source, toolchain and Node headers give the same
-  bytes whatever the build path. The Windows CI check comes once the
-  committed win32-x64 binary is a CI build with these flags.
+  bytes whatever the build path. See the next entry for the CI check.
+- **The prebuild workflow checks the win32-x64 rebuild against the
+  committed binary too**, so every job now fails when its rebuild
+  differs. The committed `prebuilds/win32-x64/vision-kernels.node` is
+  now the CI build of commit 9cc7ec2 (run 38362567349), made with
+  `/Brepro` and `/PDBALTPATH`, and its manifest hash changed with it
+  (same size, 177152 bytes). Like Xcode, the runner's Visual Studio is
+  not pinned, so a runner image update can fail the win32 check with no
+  source change.
 
 ## [1.3.0] - 2026-10-12
 
