@@ -29,8 +29,15 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   committed binary**, not only linux-x64. The macOS builds use the
   runner's unpinned Xcode: they matched the committed bytes in both CI
   runs checked (38305271710 and 38315051299), and a runner image update can fail the darwin check with no source
-  change. win32-x64 stays unchecked, as MSVC's link timestamps and PDB
-  GUID differ per build.
+  change. win32-x64 was left unchecked at this point, as MSVC's link
+  timestamps and PDB GUID differed per build; see the next entry.
+- **The win32-x64 kernels build is byte-reproducible.** `native/binding.gyp`
+  passes MSVC's `/Brepro` to the compiler and the linker, and
+  `/PDBALTPATH:%_PDB%` to the linker. The link timestamps and PDB GUID
+  become a hash of the output, and only the PDB's file name is
+  embedded, so the same source, toolchain and Node headers give the same
+  bytes whatever the build path. The Windows CI check comes once the
+  committed win32-x64 binary is a CI build with these flags.
 
 ## [1.3.0] - 2026-10-12
 

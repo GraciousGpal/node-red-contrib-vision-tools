@@ -21,7 +21,14 @@
 			"msvs_settings": {
 				"VCCLCompilerTool": {
 					"Optimization": 2,
-					"AdditionalOptions": ["/fp:precise"]
+					"AdditionalOptions": ["/fp:precise", "/Brepro"]
+				},
+				# /Brepro on both: link timestamps and PDB GUID become a
+				# hash of the output. /PDBALTPATH:%_PDB% embeds only the
+				# PDB's file name, not its absolute path, so the bytes do
+				# not depend on where the build runs.
+				"VCLinkerTool": {
+					"AdditionalOptions": ["/Brepro", "/PDBALTPATH:%_PDB%"]
 				}
 			}
 		}
