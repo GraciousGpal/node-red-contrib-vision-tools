@@ -21,14 +21,12 @@ const { loadNode } = require("./helpers/fakeRed.js");
 
 function makeNode(config = {}) {
 	const published = [];
-	const node = loadNode("line-finder.js", config, {
-		id: "line-finder-test",
-		comms: {
-			publish(topic, data) {
-				published.push({ topic, data });
-			},
+	const comms = {
+		publish(topic, data) {
+			published.push({ topic, data });
 		},
-	});
+	};
+	const node = loadNode("line-finder.js", config, { id: "line-finder-test", comms });
 	const sent = [];
 	const statuses = [];
 	const doneErrors = [];
@@ -44,7 +42,7 @@ function makeNode(config = {}) {
 				},
 			);
 		});
-	return { node, run, sent, statuses, doneErrors, published };
+	return { node, run, sent, statuses, doneErrors, published, comms };
 }
 
 // A pale panel on a dark ground: a clean vertical edge at x = 99.5.
@@ -163,6 +161,20 @@ test("a multi-channel raw payload is converted to luma, not rejected", async () 
 	assert.ok(Math.abs(r.line.x - 99.5) < 1, `edge at ${r.line.x}`);
 });
 
+test("a grey-plus-alpha raw payload reads the grey, not the next pixel", async () => {
+	const cfg = { ...REGION, scanDirection: "right", polarity: "darkToLight", calipers: 8 };
+	const g = grayFrame();
+	const ga = Buffer.alloc(W * H * 2, 255);
+	for (let i = 0; i < g.length; i++) ga[i * 2] = g[i];
+	const gray = makeNode(cfg);
+	await gray.run({ payload: rawGray() });
+	const two = makeNode(cfg);
+	await two.run({ payload: { data: ga, width: W, height: H, channels: 2 } });
+	assert.deepStrictEqual(two.doneErrors, []);
+	assert.strictEqual(two.sent[0].lineFinder.found, true, two.sent[0].lineFinder.reason);
+	assert.deepStrictEqual(two.sent[0].lineFinder.line, gray.sent[0].lineFinder.line);
+});
+
 test("a miss is a normal result, not an error", async () => {
 	const h = makeNode({
 		regionX: 10, regionY: 10, regionWidth: 60, regionHeight: 60,
@@ -231,6 +243,70 @@ test("an unusable payload is an error, not a miss", async () => {
 	assert.strictEqual(h.doneErrors.length, 1);
 	assert.match(h.doneErrors[0], /must be an encoded image Buffer/);
 	assert.strictEqual(h.statuses.at(-1).fill, "red");
+});
+
+test("raw data one byte short of width x height x channels is an error naming both counts", async () => {
+	const h = makeNode({ ...REGION, scanDirection: "right", calipers: 8 });
+	await h.run({ payload: { data: Buffer.alloc(W * H - 1), width: W, height: H, channels: 1 } });
+	assert.strictEqual(h.sent.length, 0, "nothing is sent");
+	assert.strictEqual(h.doneErrors.length, 1);
+	assert.match(h.doneErrors[0], new RegExp(`${W}x${H}x1 needs ${W * H} bytes but the buffer holds ${W * H - 1}`));
+	assert.strictEqual(h.statuses.at(-1).fill, "red");
+});
+
+test("raw data longer than width x height x channels is an error naming both counts", async () => {
+	const h = makeNode({ ...REGION, scanDirection: "right", calipers: 8 });
+	await h.run({ payload: { data: Buffer.alloc(W * H * 3 + 5), width: W, height: H, channels: 3 } });
+	assert.strictEqual(h.sent.length, 0, "nothing is sent");
+	assert.strictEqual(h.doneErrors.length, 1);
+	assert.match(h.doneErrors[0], new RegExp(`${W}x${H}x3 needs ${W * H * 3} bytes but the buffer holds ${W * H * 3 + 5}`));
+});
+
+test("channels 0 or \"0\" reads as one channel, as it always did", async () => {
+	const cfg = { ...REGION, scanDirection: "right", polarity: "darkToLight", calipers: 8 };
+	const one = makeNode(cfg);
+	await one.run({ payload: rawGray() });
+	for (const channels of [0, "0"]) {
+		const h = makeNode(cfg);
+		await h.run({ payload: { ...rawGray(), channels } });
+		assert.deepStrictEqual(h.doneErrors, [], `channels ${JSON.stringify(channels)}`);
+		assert.deepStrictEqual(h.sent[0].lineFinder.line, one.sent[0].lineFinder.line);
+	}
+});
+
+test("width, height and channels given as numeric strings read like numbers", async () => {
+	const cfg = { ...REGION, scanDirection: "right", polarity: "darkToLight", calipers: 8 };
+	const num = makeNode(cfg);
+	await num.run({ payload: rawGray() });
+	const str = makeNode(cfg);
+	await str.run({ payload: { ...rawGray(), width: String(W), height: String(H), channels: "1" } });
+	assert.deepStrictEqual(str.doneErrors, []);
+	assert.strictEqual(str.sent.length, 1);
+	assert.strictEqual(str.sent[0].lineFinder.found, true, str.sent[0].lineFinder.reason);
+	assert.deepStrictEqual(str.sent[0].lineFinder.line, num.sent[0].lineFinder.line);
+});
+
+for (const [what, payload, message] of [
+	["non-numeric channels", { data: Buffer.alloc(W * H * 3), width: W, height: H, channels: "rgb" }, /channels must be an integer from 1 to 4, got "rgb"/],
+	["a negative width", { data: Buffer.alloc(W * H), width: -W, height: -H, channels: 1 }, /width must be a positive integer, got -240/],
+	["five channels", { data: Buffer.alloc(W * H * 5), width: W, height: H, channels: 5 }, /channels must be an integer from 1 to 4, got 5/],
+	["data as a string", { data: "abc", width: W, height: H, channels: 1 }, /data must be a Buffer, Uint8Array, ArrayBuffer or Array of bytes, got string/],
+]) {
+	test(`a raw descriptor with ${what} is an error naming the field`, async () => {
+		const h = makeNode({ ...REGION, scanDirection: "right", calipers: 8 });
+		await h.run({ payload });
+		assert.strictEqual(h.sent.length, 0, "nothing is sent");
+		assert.strictEqual(h.doneErrors.length, 1, "done(err) once");
+		assert.match(h.doneErrors[0], message);
+	});
+}
+
+test("empty raw data is an error, not a silent miss", async () => {
+	const h = makeNode({ ...REGION, scanDirection: "right", calipers: 8 });
+	await h.run({ payload: { data: [], width: W, height: H, channels: 1 } });
+	assert.strictEqual(h.sent.length, 0, "nothing is sent");
+	assert.strictEqual(h.doneErrors.length, 1);
+	assert.match(h.doneErrors[0], new RegExp(`${W}x${H}x1 needs ${W * H} bytes but the buffer holds 0`));
 });
 
 // ---- preview ----------------------------------------------------------
@@ -437,15 +513,17 @@ test("the Run endpoint refuses a missing image or an invalid region with a 400 a
 	assert.ok(garbage.body.error.length > 0, "an undecodable image says so");
 });
 
-test("a preview failure warns but does not fail the frame", async () => {
+test("a preview publish that throws warns but does not fail the frame", async () => {
 	const h = makeNode({
 		...REGION, scanDirection: "right", calipers: 8, previewEnabled: true,
 	});
 	const warnings = [];
 	h.node.warn = (m) => warnings.push(String(m));
-	// a raw descriptor whose data is far too short for its stated geometry:
-	// the finder tolerates it, sharp does not
-	await h.run({ payload: { data: Buffer.alloc(16), width: W, height: H, channels: 1 } });
+	// the preview step fails after the search succeeded
+	h.comms.publish = () => {
+		throw new Error("comms down");
+	};
+	await h.run({ payload: rawGray() });
 	assert.deepStrictEqual(h.doneErrors, [], "the frame must still complete");
 	assert.strictEqual(h.sent.length, 1);
 	assert.ok(h.sent[0].lineFinder, "the result is still reported");
@@ -721,6 +799,18 @@ test("an encoded frame is served back as the very bytes that came in, typed by i
 	const webp = await encodeGray("webp");
 	await h.run({ payload: webp });
 	assert.strictEqual((await lastFrame(h)).headers["content-type"], "image/webp");
+});
+
+test("a raw frame with numeric-string geometry is served as a PNG too, like Run reads it", async () => {
+	const h = makeNode({ ...REGION, scanDirection: "right", calipers: 8 });
+	await h.run({ payload: { ...rawGray(), width: String(W), height: String(H), channels: "1" } });
+	assert.deepStrictEqual(h.doneErrors, []);
+	const res = await lastFrame(h);
+	assert.strictEqual(res.status, 200, JSON.stringify(res.body));
+	assert.strictEqual(res.headers["content-type"], "image/png");
+	assert.strictEqual(res.headers["x-frame-width"], String(W));
+	assert.strictEqual(res.headers["x-frame-height"], String(H));
+	assert.strictEqual((await runOnNode(h, { nodeId: "line-finder-test", region: { x: 60, y: 20, width: 80, height: 160 } })).status, 200);
 });
 
 test("a raw frame is served as a PNG of the same size, encoded once and kept until the next frame", async () => {

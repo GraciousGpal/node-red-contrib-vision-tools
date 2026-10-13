@@ -384,6 +384,7 @@ the alignment to the OpenCV engine.
 
 `msg.payload` — camera frame as a `Buffer` (any format `sharp` can decode:
 PNG/JPEG/etc.) or a file path string.
+Raw pixels as `{ data, width, height, channels }` (or bytes plus `msg.rawInfo`) are read too, and their `data` may be a `Buffer`, `Uint8Array` or `ArrayBuffer`, not a plain Array.
 
 Per-message overrides are listed under **Speed** below. `msg.golden`
 (path or Buffer) swaps and re-caches the golden reference if it differs
@@ -549,7 +550,7 @@ The same generator, in the editor. `synthetic-defects` takes a golden —
 your own label's artwork is the golden with an empty inject; else nothing
 at all, in which case it draws the synthetic label itself — and emits the
 frame set one message at a time on output 1, with the golden announced
-once on output 2 first. Whichever golden it is, the defects are painted
+once on output 2 first. A raw descriptor's `data` may be a `Buffer`, `Uint8Array`, `ArrayBuffer` or a plain Array of bytes; image bytes outside a descriptor must be a `Buffer`, `Uint8Array` or `ArrayBuffer`. Whichever golden it is, the defects are painted
 into that artwork, so a set made from a real label exercises
 `golden-compare` on that label's strokes and paper. Every frame message carries `msg.payload` (the
 frame), `msg.golden` (the golden as PNG), `msg.goldenKey` (so
@@ -1057,6 +1058,7 @@ message still carries only what the output boxes asked for.
 ### Input
 
 `msg.payload` — a photo of the printed checkerboard (Buffer or path).
+Raw pixels are not read: an object's `data` must be encoded image bytes as a `Buffer`, `Uint8Array` or `ArrayBuffer`.
 `msg.save` (bool) — persist the freshly detected scale as the new
 baseline. Optional per-message overrides: `msg.targetPitchMm`,
 `msg.checkerboardCols`, `msg.checkerboardRows`, `msg.allowedErrorPercent`.
@@ -1113,8 +1115,8 @@ rectified frame, since that is what the node will see.
 
 `msg.payload` — an encoded image Buffer, a file path, or a raw
 `{ data, width, height, channels }` object (a bare raw Buffer with
-`msg.rawInfo` is accepted too). `msg.outputFormat` and `msg.workers`
-override the configured values.
+`msg.rawInfo` is accepted too). Raw `data` may be a `Buffer`, `Uint8Array` or `ArrayBuffer`, not a plain Array.
+`msg.outputFormat` and `msg.workers` override the configured values.
 
 ### Output
 
@@ -1146,7 +1148,7 @@ and `bench/golden-container-bench.js` produce.
 The input can be a raw `{ data, width, height, channels, colorSpace }`
 object, a bare raw Buffer with `msg.rawInfo` (or pdf-to-image's
 `msg.images`), an encoded image Buffer, or a file path; the output is the
-same raw object shape or a png or jpg Buffer. A raw input keeps its
+same raw object shape or a png or jpg Buffer. Raw `data` may be a `Buffer`, `Uint8Array` or `ArrayBuffer`, not a plain Array. A raw input keeps its
 channels and colour space; an encoded one comes out as sharp decodes it,
 8-bit RGB or RGBA - a grey PNG or JPEG included. An input that is not an image, or a size that cannot be made,
 stops the message with an error: a frame at the wrong scale would be
@@ -1304,8 +1306,9 @@ or file-in node and re-aim the four regions in the line-finder's editor.
 ### Input
 
 `msg.payload` — an encoded image Buffer (JPEG/PNG/…) or a raw
-`{ data, width, height, channels }` object (the same shapes
-`golden-compare` accepts). Any setting can be overridden per message by
+`{ data, width, height, channels }` object.
+Raw `data` must be a `Buffer` or `Uint8Array` (any typed-array view passes the check), not an `ArrayBuffer` or a plain Array.
+Any setting can be overridden per message by
 name: `msg.boundaryMode`, `msg.edgeRegions`, `msg.maxEdge`,
 `msg.polarity`, `msg.minAreaFraction`, `msg.maxAreaFraction`,
 `msg.minRectangularity`, `msg.maxBorderContact`, `msg.minDominance`,
@@ -1372,6 +1375,7 @@ Per region:
    vertical line, and two edges of an upright label are vertical), peeling
    the single worst outlier per pass.
 
+`msg.payload` is an encoded image Buffer or a raw `{ data, width, height, channels }` object whose `data` is a `Buffer`, `Uint8Array`, `ArrayBuffer` or plain Array of exactly width × height × channels bytes; any other length is an error.
 `msg.payload` passes through untouched; the result lands on
 `msg.lineFinder`. With one region it is `{ found, reason, line,
 angleDeg, score, calipers, residualPx, points, region, imageWidth,
@@ -1704,7 +1708,7 @@ the labels never carry.
 `msg.payload` — a Buffer/Uint8Array/ArrayBuffer, a file path string, or an
 object with `data`/`buffer`/`path`; or bare pixels, as
 `{ data, width, height, channels }` or bytes plus `msg.rawInfo`, by the
-same rules as `golden-compare`. Raw pixels are read in place, not
+same rules as `golden-compare`. Raw `data` may be a `Buffer`, `Uint8Array` or `ArrayBuffer`, not a plain Array. Raw pixels are read in place, not
 copied, so they must not be changed until this node has sent its
 messages; a Function node that reuses a frame buffer must hand this node
 a copy. Optional per-message overrides:

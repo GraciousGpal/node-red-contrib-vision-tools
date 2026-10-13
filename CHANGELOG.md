@@ -4,6 +4,33 @@ All notable changes to this project are documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [Unreleased]
+
+### Fixed
+
+- **line-finder refuses a raw `msg.payload` it cannot read correctly.**
+  A short buffer was read past its end and a long one was read with the
+  wrong geometry, so a mis-sized frame still reported `found: true` or a
+  silent miss; so did a negative width and height, `channels` outside 1
+  to 4, and a typed array wider than bytes such as a `Uint16Array`.
+  `data` that is a string or number threw a bare `TypeError`. Each is now
+  an error through `done(err)` naming the field or both byte counts, and
+  nothing is sent. Numeric strings for width, height and channels are
+  still read as numbers.
+  A two-channel (grey plus alpha) frame now reads its grey channel
+  instead of mixing in the next pixel, and the preview renders the same
+  checked bytes the search read.
+
+### Changed
+
+- **README states what raw `data` may be** for golden-compare,
+  synthetic-defects, checkerboard-calibrate, perspective-rectify,
+  image-resize, label-crop, line-finder and barcode-locate: `Buffer`,
+  `Uint8Array` or `ArrayBuffer`, plus a plain Array for line-finder and
+  synthetic-defects' raw descriptor; label-crop takes no `ArrayBuffer`
+  or Array, and checkerboard-calibrate reads no raw pixels. label-crop no
+  longer claims to accept the same shapes as golden-compare.
+
 ## [1.3.1] - 2026-10-13
 
 ### Added

@@ -4,8 +4,9 @@
  * rectangle.
  *
  * Input (msg.payload): an encoded image Buffer or a raw
- * { data, width, height, channels } object - the same image shapes
- * golden-compare and label-crop accept.
+ * { data, width, height, channels } object whose data is a Buffer,
+ * Uint8Array, ArrayBuffer or Array of exactly width x height x channels
+ * bytes (see checkedRaw).
  *
  * Output: msg.payload passes through untouched (this is a measuring
  * tool, not a filter) and msg.lineFinder carries the result. With one
@@ -49,8 +50,9 @@
  * id - so the editor can show the operator the real picture instead of
  * asking for a file every time: GET /line-finder/last-frame/:id serves
  * it, and a Run request that names `nodeId` and carries no image
- * searches that frame in full. It is a reference to the payload as it
- * arrived, not a copy, so the cost is one frame per line-finder node;
+ * searches that frame in full. It shares the payload's memory, not a
+ * copy (a plain Array of bytes is the exception: it is read through a
+ * Buffer copy), so the cost is one frame per line-finder node;
  * it survives a redeploy but not a restart, and a deleted node's entry
  * goes with it.
  *
@@ -74,7 +76,7 @@ module.exports = (RED) => {
 		POLARITIES,
 		EDGE_SELECTS,
 	} = require("./lib/lineFinder.js");
-	const { clampInt, clampFloat, pickMode, asView } = require("./lib/nodeInput.js");
+	const { clampInt, clampFloat, pickMode, isBytes, asView, assertRawFits } = require("./lib/nodeInput.js");
 	const { formatMs } = require("./lib/formatMs.js");
 
 	const BOUNDS = {
@@ -98,8 +100,9 @@ module.exports = (RED) => {
 	/**
 	 * The last frame through each node, by node id, for the editor:
 	 * { payload, width, height, receivedAt, png }. `payload` is the
-	 * message's own payload - the encoded Buffer or the raw descriptor -
-	 * held by reference; `png` memoises a raw frame's encoding from the
+	 * encoded Buffer as it came, or for a raw frame the checked
+	 * { data, width, height, channels } that toGray returned - numeric
+	 * geometry and a Buffer view over the caller's pixels; `png` memoises a raw frame's encoding from the
 	 * first time the editor asks for it until the next frame replaces the
 	 * entry. Lives in this closure, so it outlasts a redeploy of the flow
 	 * (Node-RED calls this factory once per process) and nothing else.
@@ -136,7 +139,7 @@ module.exports = (RED) => {
 		if (!entry.png) {
 			const sharp = require("sharp");
 			entry.png = sharp(asView(p.data), {
-				raw: { width: p.width, height: p.height, channels: p.channels || 1 },
+				raw: { width: p.width, height: p.height, channels: p.channels },
 			})
 				.png({ compressionLevel: 1 })
 				.toBuffer()
@@ -154,30 +157,94 @@ module.exports = (RED) => {
 		return err;
 	}
 
+	/** A value as an error message shows it: strings quoted, objects by type. */
+	function shown(v) {
+		if (typeof v === "string") return JSON.stringify(v);
+		if (v && typeof v === "object") return (v.constructor && v.constructor.name) || "object";
+		return String(v);
+	}
+
+	/**
+	 * A raw descriptor's fields validated, and its data as one Buffer view:
+	 * { data, width, height, channels }, or an error naming the bad field.
+	 * Data longer than the geometry is refused here too; assertRawFits
+	 * only refuses short data, because other nodes legitimately trim.
+	 */
+	function checkedRaw(payload) {
+		const label = "line-finder: msg.payload";
+		// numeric strings are read as numbers, as geometryOf does for the other nodes
+		const width = Number(payload.width);
+		const height = Number(payload.height);
+		// null, undefined and 0 mean one channel, as `channels || 1` always did
+		const channels =
+			payload.channels == null || Number(payload.channels) === 0 ? 1 : Number(payload.channels);
+		if (!Number.isInteger(width) || width <= 0) {
+			throw new Error(`${label}.width must be a positive integer, got ${shown(payload.width)}`);
+		}
+		if (!Number.isInteger(height) || height <= 0) {
+			throw new Error(`${label}.height must be a positive integer, got ${shown(payload.height)}`);
+		}
+		if (!Number.isInteger(channels) || channels < 1 || channels > 4) {
+			throw new Error(
+				`${label}.channels must be an integer from 1 to 4, got ${shown(payload.channels)}`,
+			);
+		}
+		if (!isBytes(payload.data) && !Array.isArray(payload.data)) {
+			throw new Error(
+				`${label}.data must be a Buffer, Uint8Array, ArrayBuffer or Array of bytes, ` +
+					`got ${typeof payload.data === "object" ? shown(payload.data) : typeof payload.data}`,
+			);
+		}
+		const data = asView(payload.data);
+		const raw = { data, width, height, channels };
+		assertRawFits(data, raw, label);
+		const need = width * height * channels;
+		if (data.byteLength > need) {
+			throw new Error(
+				`${label} raw descriptor ${width}x${height}x${channels} needs ` +
+					`${need} bytes but the buffer holds ${data.byteLength}`,
+			);
+		}
+		return raw;
+	}
+
 	/**
 	 * Grayscale raster from whatever the flow handed us.
 	 *
 	 * A raw descriptor is used in place: the caller already paid for the
 	 * pixels and the finder only reads them. Only an encoded buffer goes
 	 * through sharp, and then only once.
+	 *
+	 * A raw descriptor must have positive integer width and height,
+	 * channels (default 1) an integer from 1 to 4, and data of exactly
+	 * width x height x channels bytes: the finder would read a short buffer
+	 * past its end and find edges that are not there, and a long one means
+	 * the geometry is not the camera's. Returns the checked view as `raw`
+	 * so the preview and the last-frame cache use the same bytes and
+	 * numbers. A Buffer, Uint8Array or ArrayBuffer is viewed in place; an
+	 * Array is copied. The cached view is not re-checked when served; a
+	 * Run on the cached frame comes through here again.
 	 */
 	async function toGray(payload) {
 		if (payload && payload.data && payload.width && payload.height) {
-			const channels = payload.channels || 1;
-			const data = asView(payload.data);
+			const raw = checkedRaw(payload);
+			const { data, width, height, channels } = raw;
 			if (channels === 1) {
-				return { gray: data, width: payload.width, height: payload.height };
+				return { gray: data, width, height, raw };
 			}
 			// Rec. 601 luma, matching what sharp's .grayscale() produces, so a
 			// region tuned on an encoded sample behaves the same on raw input.
-			const n = payload.width * payload.height;
+			// Two channels are grey plus alpha: the grey is already the luma.
+			const n = width * height;
 			const gray = new Uint8Array(n);
 			for (let i = 0; i < n; i++) {
 				const p = i * channels;
 				gray[i] =
-					(data[p] * 77 + data[p + 1] * 150 + data[p + 2] * 29 + 128) >> 8;
+					channels === 2
+						? data[p]
+						: (data[p] * 77 + data[p + 1] * 150 + data[p + 2] * 29 + 128) >> 8;
 			}
-			return { gray, width: payload.width, height: payload.height };
+			return { gray, width, height, raw };
 		}
 		if (Buffer.isBuffer(payload)) {
 			const sharp = require("sharp");
@@ -381,7 +448,7 @@ module.exports = (RED) => {
 		const pipeline =
 			payload && payload.data && payload.width
 				? sharp(
-						Buffer.isBuffer(payload.data) ? payload.data : Buffer.from(payload.data),
+						asView(payload.data),
 						{
 							raw: {
 								width: payload.width,
@@ -619,9 +686,12 @@ module.exports = (RED) => {
 					}));
 				}
 
-				const { gray, width, height } = await toGray(msg.payload);
-				// for the editor: the payload by reference, nothing copied or encoded
-				lastFrames.set(this.id, { payload: msg.payload, width, height, receivedAt: Date.now(), png: null });
+				const { gray, width, height, raw } = await toGray(msg.payload);
+				// for the editor, not encoded: a Buffer, Uint8Array or ArrayBuffer is
+				// viewed in place, an Array is copied; a raw frame is cached as its
+				// checked view and numeric geometry, so last-frame encodes exactly
+				// what was searched
+				lastFrames.set(this.id, { payload: raw || msg.payload, width, height, receivedAt: Date.now(), png: null });
 				const result = searchRegions(gray, width, height, useRegions, cfg, minScore);
 				result.imageWidth = width;
 				result.imageHeight = height;
@@ -634,7 +704,7 @@ module.exports = (RED) => {
 				if (previewEnabled && RED.comms && typeof RED.comms.publish === "function") {
 					try {
 						const data = await buildPreview(
-							msg.payload,
+							raw || msg.payload,
 							result,
 							clampInt(msg.previewWidth, configuredPreviewWidth, BOUNDS.previewWidth),
 						);
