@@ -14,6 +14,17 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   hashed. Exit 0 identical, 1 different, 2 when it cannot compare.
   `--quick` runs about 35 cases.
 
+### Fixed
+
+- **line-finder reads a plain Array of bytes as raw `msg.payload.data`.**
+  It never did: before 1.3.0 the array became a zero-length view, so the
+  frame silently returned `found: false` ("no-edge"), and from 1.3.0 it
+  threw a bare `TypeError`. The array is now copied into a Buffer.
+- **An ArrayBuffer image source is copied when the node asks for a
+  copy.** The loader returned a view over the caller's memory, so a flow
+  that changed the ArrayBuffer afterwards changed the node's image too.
+  checkerboard-calibrate and synthetic-defects load through it.
+
 ### Changed
 
 - **One word per meaning in the code and docs.** *Engine* is the OpenCV

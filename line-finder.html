@@ -355,7 +355,10 @@
   <h3>Input</h3>
   <p>
     <code>msg.payload</code> — an encoded image Buffer or a raw
-    <code>{ data, width, height, channels }</code> object. The payload is
+    <code>{ data, width, height, channels }</code> object, where
+    <code>data</code> is a Buffer, Uint8Array, ArrayBuffer, or an Array of
+    byte values 0-255 (values outside that range wrap, as
+    <code>Buffer.from</code> does). The payload is
     <b>not</b> modified; this is a measuring tool.
   </p>
   <p>

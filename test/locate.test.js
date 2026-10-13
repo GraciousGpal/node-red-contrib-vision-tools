@@ -358,6 +358,40 @@ test("resolveImage on a missing path keeps both errors", async () => {
 	});
 });
 
+// copy: true promises bytes the caller can no longer change: each source
+// kind is mutated after the call and the result must not follow it.
+test("resolveImage copy:true: an ArrayBuffer source is copied, not viewed", async () => {
+	const ab = new Uint8Array([1, 2, 3, 4]).buffer;
+	const out = await resolveImage(ab, "msg.payload", { copy: true });
+	new Uint8Array(ab).fill(9);
+	assert.deepStrictEqual([...out], [1, 2, 3, 4]);
+});
+
+test("resolveImage copy:true: a Buffer source is copied, not viewed", async () => {
+	const buf = Buffer.from([1, 2, 3, 4]);
+	const out = await resolveImage(buf, "msg.payload", { copy: true });
+	buf.fill(9);
+	assert.deepStrictEqual([...out], [1, 2, 3, 4]);
+});
+
+test("resolveImage copy:true: a Uint8Array at an offset is copied, its own range only", async () => {
+	const backing = new Uint8Array([7, 7, 1, 2, 3, 4, 7, 7]);
+	const view = backing.subarray(2, 6);
+	const out = await resolveImage({ data: view }, "msg.payload", { copy: true });
+	backing.fill(9);
+	assert.deepStrictEqual([...out], [1, 2, 3, 4]);
+});
+
+test("resolveImage copy:true: a file path's bytes do not follow the file", async (t) => {
+	const dir = fs.mkdtempSync(path.join(require("node:os").tmpdir(), "vt-resolve-"));
+	t.after(() => fs.rmSync(dir, { recursive: true, force: true }));
+	const file = path.join(dir, "frame.bin");
+	fs.writeFileSync(file, Buffer.from([1, 2, 3, 4]));
+	const out = await resolveImage(file, "msg.payload", { copy: true });
+	fs.writeFileSync(file, Buffer.from([9, 9, 9, 9]));
+	assert.deepStrictEqual([...out], [1, 2, 3, 4]);
+});
+
 test("EAN-8 is off by default and found when asked for", async () => {
 	const { png, ean8 } = await fixture();
 	assert.ok(!DEFAULT_FORMATS.includes("EAN8"));

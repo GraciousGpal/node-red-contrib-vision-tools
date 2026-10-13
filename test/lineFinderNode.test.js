@@ -103,6 +103,19 @@ test("raw data as an ArrayBuffer finds the same line as a Uint8Array", async () 
 	assert.deepStrictEqual(b.line, a.line);
 });
 
+test("raw data as a plain Array of bytes finds the same line as a Uint8Array", async () => {
+	const cfg = { ...REGION, scanDirection: "right", polarity: "darkToLight", calipers: 8 };
+	const typed = makeNode(cfg);
+	await typed.run({ payload: { data: grayFrame(), width: W, height: H, channels: 1 } });
+	const arr = makeNode(cfg);
+	await arr.run({ payload: { data: Array.from(grayFrame()), width: W, height: H, channels: 1 } });
+	assert.deepStrictEqual(arr.doneErrors, []);
+	const a = typed.sent[0].lineFinder;
+	const b = arr.sent[0].lineFinder;
+	assert.strictEqual(b.found, true, b.reason);
+	assert.deepStrictEqual(b.line, a.line);
+});
+
 test("a legacy single-region config reports exactly the shape it always has", async () => {
 	// Pinned before regions were added: a flow saved with regionX/Y/Width/
 	// Height/AngleDeg and no `regions` must see the same msg.lineFinder,
