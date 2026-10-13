@@ -6,6 +6,38 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Added
+
+- **barcode-locate reports the frame end to end.** `msg.timings` carries
+  `inputMs`, `profileMs`, `warmupMs`, `headerMs`, `decodeMs`, `cropMs`,
+  `readMs`, `previewMs` and `totalMs` next to `regionsMs` /
+  `fullImageMs`, ms with one decimal. `msg.decodeMs` is zxing's time for
+  that one read alone, one decimal too (it was a whole number, and
+  could include a neighbouring region's read). The status shows
+  `totalMs`.
+- **Preview option on barcode-locate**, default on. Off, no preview PNG
+  is encoded and `msg.payload` passes through: a 500x1300 region's
+  takes ~14 ms to encode and is ~2 MB per code. A node saved before the
+  option existed keeps the preview.
+- **`bench/barcode-bench.js`** times the decode path per stage over one
+  frame or a folder: the encoded file, the same frame as raw pixels, and
+  the full-image pass; `--auto` derives profile-like regions from the
+  first frame.
+
+### Changed
+
+- **barcode-locate warms zxing up at deploy**, not on the first frame
+  after a restart (~750 ms on a workstation). A frame that arrives
+  before the warm-up is done waits for it and reports the wait as
+  `warmupMs`. The warm-up's WASM heap (~170 MB, never released) is now
+  resident in every Node-RED process that deploys the node, not only
+  one that decoded a frame.
+- **Regions are read one after another.** zxing's WASM runs on one
+  thread, so interleaving the reads gained nothing and blurred each
+  read's time; the preview encodes still overlap the following reads.
+  A region's RGB pixels are expanded to RGBA by a loop per channel
+  count, about a quarter faster than the branch per pixel.
+
 ### Fixed
 
 - **line-finder refuses a raw `msg.payload` it cannot read correctly.**

@@ -411,3 +411,88 @@ test("EAN-8 is off by default and found when asked for", async () => {
 	assert.ok(Math.abs(sym.width - ean8.width) <= 3 && sym.y + sym.height <= ean8.top + ean8.height + 3, JSON.stringify(sym));
 	assert.deepStrictEqual(networkCalls, []);
 });
+
+test("timings: every stage is reported; bare pixels skip the header read and the decode", async () => {
+	const { png, c128 } = await fixture();
+	const fromPng = await locateBarcodes(png, { mode: "regionsOnly", regions: [placed(c128)] });
+	for (const k of ["warmupMs", "headerMs", "decodeMs", "cropMs", "readMs", "previewMs", "regionsMs"]) {
+		assert.ok(typeof fromPng.timings[k] === "number" && fromPng.timings[k] >= 0, `${k}: ${fromPng.timings[k]}`);
+	}
+	assert.ok(!("fullImageMs" in fromPng.timings), "no fallback ran");
+	assert.ok(fromPng.timings.headerMs > 0 && fromPng.timings.decodeMs > 0, "a PNG is read and decoded");
+	assert.ok(fromPng.timings.readMs > 0, "one read");
+	assert.ok(fromPng.results[0].decodeMs > 0 && fromPng.results[0].decodeMs <= fromPng.timings.readMs);
+	// previewMs is the wait after the reads; a whole-canvas region's
+	// encode cannot have finished before its read ends
+	const whole = await locateBarcodes(png, { mode: "regionsOnly", regions: [{ x: 0, y: 0, width: CANVAS.width, height: CANVAS.height }] });
+	assert.ok(whole.timings.previewMs > 0, `previewMs ${whole.timings.previewMs}`);
+
+	const decoded = await sharp(png).ensureAlpha().raw().toBuffer({ resolveWithObject: true });
+	const raw = { width: decoded.info.width, height: decoded.info.height, channels: 4 };
+	const fromRaw = await locateBarcodes(decoded.data, { mode: "regionsOnly", regions: [placed(c128)], raw });
+	assert.strictEqual(fromRaw.timings.headerMs, 0);
+	assert.strictEqual(fromRaw.timings.decodeMs, 0);
+	assert.ok(fromRaw.timings.readMs > 0);
+
+	const full = await locateBarcodes(png, { mode: "autoOnly" });
+	assert.ok(full.timings.fullImageMs > 0 && !("regionsMs" in full.timings));
+});
+
+test("preview: false leaves previewBuffer null and encodes nothing", async () => {
+	const { png, c128, dm } = await fixture();
+	const on = await locateBarcodes(png, { mode: "regionsOnly", regions: [placed(c128)] });
+	const off = await locateBarcodes(png, { mode: "regionsOnly", regions: [placed(c128)], preview: false });
+	assert.strictEqual(on.results.length, 1);
+	assert.ok(Buffer.isBuffer(on.results[0].previewBuffer));
+	assert.strictEqual(off.results.length, 1);
+	assert.strictEqual(off.results[0].previewBuffer, null);
+	assert.strictEqual(off.timings.previewMs, 0);
+	assert.strictEqual(off.results[0].text, on.results[0].text);
+
+	// the encodes are deferred past the reads: each result still gets its
+	// own region's PNG, the size of its roi
+	const two = await locateBarcodes(png, { mode: "regionsOnly", regions: [placed(c128), placed(dm)] });
+	assert.strictEqual(two.results.length, 2);
+	for (const r of two.results) {
+		const meta = await sharp(r.previewBuffer).metadata();
+		assert.deepStrictEqual([meta.width, meta.height], [r.roi.width, r.roi.height], `${r.text} preview is its own region`);
+	}
+	assert.ok(!two.results[0].previewBuffer.equals(two.results[1].previewBuffer));
+
+	const fullOff = await locateBarcodes(png, { mode: "autoOnly", preview: false });
+	assert.ok(fullOff.results.length >= 2);
+	assert.ok(fullOff.results.every((r) => r.previewBuffer === null));
+	assert.strictEqual(fullOff.timings.previewMs, 0);
+});
+
+test("barcode-locate node: msg.timings spans the frame end to end, and Preview off passes the payload through", async () => {
+	const { png, c128 } = await fixture();
+	for (const preview of [true, false]) {
+		const node = loadNode("barcode-locate.js", { mode: "regionsOnly", regions: [placed(c128)], preview });
+		const sent = [];
+		node.send = (m) => sent.push(m);
+		const errors = [];
+		await node.listeners.input({ payload: png }, undefined, (err) => err && errors.push(err));
+		assert.deepStrictEqual(errors, []);
+		assert.strictEqual(sent.length, 1);
+		const t = sent[0].timings;
+		for (const k of ["inputMs", "profileMs", "warmupMs", "headerMs", "decodeMs", "cropMs", "readMs", "previewMs", "regionsMs", "totalMs"]) {
+			assert.ok(typeof t[k] === "number" && t[k] >= 0, `${k}: ${t[k]}`);
+		}
+		assert.ok(t.totalMs >= t.inputMs + t.regionsMs, "the node's total spans input and the pass");
+		assert.strictEqual(t.profileMs, 0, "no profile was looked up");
+		if (preview) {
+			assert.ok(Buffer.isBuffer(sent[0].payload) && sent[0].payload !== png, "a preview PNG");
+		} else {
+			assert.strictEqual(sent[0].payload, png, "the input passes through");
+			assert.strictEqual(t.previewMs, 0);
+		}
+	}
+	// a node saved before the option existed has no preview key: on
+	const legacy = loadNode("barcode-locate.js", { mode: "regionsOnly", regions: [placed(c128)] });
+	assert.strictEqual(legacy.preview, true);
+	const sent = [];
+	legacy.send = (m) => sent.push(m);
+	await legacy.listeners.input({ payload: png }, undefined, () => {});
+	assert.ok(Buffer.isBuffer(sent[0].payload) && sent[0].payload !== png, "a legacy node still previews");
+});

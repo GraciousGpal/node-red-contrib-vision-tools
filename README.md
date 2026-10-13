@@ -1689,18 +1689,29 @@ one of the calibration when set) and a header read of the payload for
 its size, 1–3 ms, none for raw pixels; placing through the frame's own
 transform adds a few corners' arithmetic per box. In **Full image only** the profile is not read.
 
-The decode and the reads are the rest. On 162 camera frames (3000x3700
-JPEG, two Code128 regions each) the region pass took ~115 ms from the
-JPEG, most of it decoding the frame, and ~44 ms from the same frame as
-raw RGB pixels - the same codes on every frame. So decode the frame once
-(a `resize` at × 1 with raw output, see *How `resize` works*), keep those
-pixels on the message, and give them to this node. Bare pixels are sliced
-as they are, in any channel count; a region's preview PNG is encoded only
-when it read something, at zlib level 1; and a profile region is searched
-only for the format the golden has there (its other enabled formats are a
-detector pass each).
+The decode and the reads are the rest. `msg.timings` says where a
+frame's time went (below), and `node bench/barcode-bench.js --image
+<frame> --auto` prints the median of every stage for the file, for the
+same frame as raw pixels, and for the full-image pass. On 20 camera
+frames (3000x3700 JPEG, two Code128 regions each, a workstation), the
+region pass is **~86 ms** from the JPEG: **~62 ms** decoding the
+regions' union box out of the JPEG, **~11 ms** zxing's two reads, and
+**~9 ms** waiting for the two preview PNGs (each ~14 ms to encode on
+sharp's threads, overlapping the reads, and ~2 MB on the message). From
+the same frame as raw RGB pixels it is **~25 ms**, and with **Preview**
+off **~14 ms**, of which zxing is ~10 ms. So decode the frame once (a `resize` at × 1
+with raw output, see *How `resize` works*), keep those pixels on the
+message, give them to this node, and turn the preview off when nothing
+downstream shows it. Bare pixels are sliced as they are, in any channel
+count; a region's preview PNG is encoded only when it read something, at
+zlib level 1; and a profile region is searched only for the format the
+golden has there (its other enabled formats are a detector pass each).
+The one-time zxing warm-up (~750 ms, and ~170 MB of WASM heap that
+stays resident) is paid when the node is deployed, not by the first
+frame; a frame that arrives before it is done waits for it and reports
+the wait as `warmupMs`.
 The full-image fallback scans every enabled format over the whole frame
-(~320 ms on those frames, ~130 ms with Code128 alone): untick the formats
+(~300 ms on those frames, ~130 ms with Code128 alone): untick the formats
 the labels never carry.
 
 ### Input
@@ -1721,11 +1732,24 @@ full-image fallback, if it ran): `msg.text`, `msg.format`, `msg.roi`,
 `msg.symbol`, `msg.regionLabel`, `msg.regionSource`, `msg.source`
 (`"region"` or `"fullImage"`), `msg.expectedText`, `msg.textMatches`,
 `msg.barcodeIndex`, `msg.barcodeCount`, `msg.decodeMs`, `msg.timings`,
-and `msg.payload` set to a preview crop of that barcode's region. If
-nothing is found at all, one message with `msg.text = null`,
+and `msg.payload` set to a preview crop of that barcode's region (with
+**Preview** off, the payload passes through). If nothing is found at all, one message with `msg.text = null`,
 `msg.barcodeCount = 0`, and `symbol`, `expectedText` and `textMatches`
 `null`.
 
+- `msg.timings` is the frame end to end, ms with one decimal: `inputMs`
+  (resolving `msg.payload`), `profileMs` (finding and placing profile
+  regions; 0 otherwise), `warmupMs` (the wait for the one-time zxing
+  warm-up; 0 once done), `headerMs` (the header read for the frame's
+  size; 0 for raw pixels), `decodeMs` (decoding the file to pixels; 0 for
+  raw pixels), `cropMs` (slicing the regions to the RGBA zxing takes),
+  `readMs` (zxing, every call summed), `previewMs` (the wait for the
+  preview encodes once the reads are done; they run on sharp's threads
+  while the regions are read, so this is what they add), `regionsMs` /
+  `fullImageMs` (wall time of whichever pass ran; when the fallback ran
+  after the regions, the stages before are summed over both) and
+  `totalMs` (the message arriving to its first result being sent, what
+  the status shows). `msg.decodeMs` is zxing's time for that one read.
 - `msg.roi` is the region the code was searched in; `msg.symbol` is the
   code's own box, from zxing's corner points, in full-image px.
 - `msg.regionSource` — where the regions came from: `"list"`,
@@ -1908,7 +1932,7 @@ nothing is found at all, one message with `msg.text = null`,
 
 ## Tests
 
-`npm test` (Node 20.9+, no test framework needed — `node --test`), 773
+`npm test` (Node 20.9+, no test framework needed — `node --test`), 795
 tests. Fixtures are generated with `sharp` rather than read from
 real camera photos, so the suite runs anywhere; the real QC photos are
 gitignored. Coverage spans the lib pipeline (`compare`, `align`, `warp`,

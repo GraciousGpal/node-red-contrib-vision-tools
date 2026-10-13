@@ -44,13 +44,22 @@
  * msg.regionPlacement ("frame"|"trained"|null), msg.source
  * ("region"|"fullImage"), msg.expectedText/msg.textMatches (profile
  * regions; null otherwise), msg.decodeMs, msg.timings, msg.payload (a
- * preview crop of that barcode's region). If nothing is found at all,
- * sends one message with msg.text = null.
+ * preview crop of that barcode's region; with Preview off the payload
+ * passes through). If nothing is found at all, sends one message with
+ * msg.text = null.
+ *
+ * msg.timings is the frame end to end, ms with one decimal: inputMs
+ * (resolving msg.payload), profileMs (finding and placing profile
+ * regions, 0 otherwise), then lib/locate.js's stages (warmupMs,
+ * headerMs, decodeMs, cropMs, readMs, previewMs, regionsMs,
+ * fullImageMs) and totalMs, from the message arriving to its first
+ * result being sent (sending is the next node's time). The status shows
+ * totalMs.
  */
 
 const fsp = require("fs").promises;
 const sharp = require("sharp");
-const { locateBarcodes, DEFAULT_FORMATS } = require("./lib/locate.js");
+const { locateBarcodes, warmUp, DEFAULT_FORMATS } = require("./lib/locate.js");
 const { resolveImage, rawGeometry, assertRawFits, clampInt, clampFloat, pickMode } = require("./lib/nodeInput.js");
 const { formatMs } = require("./lib/formatMs.js");
 const profileStore = require("./lib/profileStore.js");
@@ -113,6 +122,16 @@ module.exports = (RED) => {
 			maxNumberOfSymbols: 20,
 			formats: enabledFormats.length ? enabledFormats : DEFAULT_FORMATS,
 		};
+
+		// off: no preview PNG per code (a 500x1300 region's takes ~14 ms to
+		// encode and is ~2 MB), and msg.payload passes through
+		node.preview = config.preview !== false;
+
+		// Pay the one-time WASM warm-up now, at deploy, rather than on the
+		// first frame; a frame arriving before it is done waits for it.
+		// The promise is module-level: this neither repeats it nor races
+		// it, and its rejection reaches the message that waits on it.
+		warmUp(node.readerOptions).catch(() => {});
 
 		node.regionCache = new Map();
 		node.warned = new Set();
@@ -404,11 +423,13 @@ module.exports = (RED) => {
 
 		node.on("input", async (msg, send, done) => {
 			const started = performance.now();
+			const ms = (from) => Math.round((performance.now() - from) * 10) / 10;
 			try {
 				// read-only from here on: no copy of a raw frame's bytes
 				const buffer = await resolveImage(msg.payload, "msg.payload", { copy: false });
 				const raw = rawGeometry(msg, msg.payload);
 				assertRawFits(buffer, raw, "msg.payload");
+				const inputMs = ms(started);
 				const mode = msg.mode || node.mode;
 
 				let regions;
@@ -416,6 +437,7 @@ module.exports = (RED) => {
 				let profileFile = null;
 				let fromProfile = [];
 				let regionPlacement = null;
+				let profileMs = 0;
 				if (msg.regions !== undefined) {
 					regions = normalizeRegions(msg.regions);
 					regionSource = "msg";
@@ -424,7 +446,9 @@ module.exports = (RED) => {
 					// a full-image-only scan needs no regions, so do not pay
 					// for (or warn about) a profile it would not use
 					if (mode !== "autoOnly") {
+						const t = performance.now();
 						const got = await profileRegions(msg, buffer, raw);
+						profileMs = ms(t);
 						fromProfile = got.regions;
 						profileFile = got.file;
 						regionPlacement = got.placement;
@@ -441,12 +465,17 @@ module.exports = (RED) => {
 					text: `scanning ${regions.length} ${regionSource === "profile" ? "profile " : ""}region${regions.length === 1 ? "" : "s"}…`,
 				});
 
-				const { results, timings, usedFullImage } = await locateBarcodes(buffer, {
+				const located = await locateBarcodes(buffer, {
 					regions,
 					mode,
 					readerOptions: node.readerOptions,
 					raw,
+					preview: node.preview,
 				});
+				const { results, usedFullImage } = located;
+				// totalMs is set just before the first send: one object on
+				// every message, so every copy shows the same number
+				const timings = { inputMs, profileMs, ...located.timings, totalMs: 0 };
 
 				if (results.length === 0) {
 					const noneMsg = Object.assign({}, msg, {
@@ -464,16 +493,18 @@ module.exports = (RED) => {
 						source: usedFullImage ? "fullImage" : "region",
 						timings,
 					});
+					timings.totalMs = ms(started);
 					send(noneMsg);
 					node.status({
 						fill: "yellow",
 						shape: "ring",
-						text: `none found · ${formatMs(performance.now() - started)}`,
+						text: `none found · ${formatMs(timings.totalMs)}`,
 					});
 					done();
 					return;
 				}
 
+				const out = [];
 				for (let i = 0; i < results.length; i++) {
 					const r = results[i];
 					const expected = regionSource === "profile" ? expectedFor(r, fromProfile) : null;
@@ -502,15 +533,17 @@ module.exports = (RED) => {
 						source: r.source,
 						decodeMs: r.decodeMs,
 						timings,
-						payload: r.previewBuffer,
 					});
-					send(outMsg);
+					if (node.preview) outMsg.payload = r.previewBuffer;
+					out.push(outMsg);
 				}
+				timings.totalMs = ms(started);
+				for (const m of out) send(m);
 
 				node.status({
 					fill: "green",
 					shape: "dot",
-					text: `${results.length} found (${usedFullImage ? "full image" : "regions"}) · ${formatMs(performance.now() - started)}`,
+					text: `${results.length} found (${usedFullImage ? "full image" : "regions"}) · ${formatMs(timings.totalMs)}`,
 				});
 				done();
 			} catch (err) {

@@ -98,6 +98,17 @@
       >both needed for full recall - see Help</span
     >
   </div>
+
+  <div class="form-row">
+    <label><i class="fa fa-picture-o"></i> Preview</label>
+  </div>
+  <div class="form-row" style="margin-left:110px;">
+    <input type="checkbox" id="node-input-preview" style="width:auto;vertical-align:middle;" />
+    <label for="node-input-preview" style="width:auto;">preview crop on msg.payload</label>
+    <span class="node-input-hint" style="margin-left:10px; color:#999;"
+      >off: msg.payload passes through; a preview is a PNG encode per code, see Help</span
+    >
+  </div>
 </script>
 
 <script type="text/html" data-help-name="barcode-locate">
@@ -254,9 +265,29 @@
       nothing to compare). A mismatch is also warned, once per profile.
     </li>
     <li><code>msg.source</code> - <code>"region"</code> or <code>"fullImage"</code></li>
-    <li><code>msg.decodeMs</code> - time for that specific region/scan (not the whole node's runtime)</li>
-    <li><code>msg.timings</code> - <code>{ regionsMs, fullImageMs }</code>, whichever ran</li>
-    <li><code>msg.payload</code> - a cropped preview image of that result's region</li>
+    <li><code>msg.decodeMs</code> - zxing's time for that specific region/scan (not the whole node's runtime)</li>
+    <li>
+      <code>msg.timings</code> - the frame end to end, ms:
+      <code>inputMs</code> (resolving <code>msg.payload</code>),
+      <code>profileMs</code> (finding and placing profile regions),
+      <code>warmupMs</code> (the wait for the one-time WASM warm-up,
+      paid at deploy; 0 once done), <code>headerMs</code> (the header
+      read for the frame's size), <code>decodeMs</code> (decoding the
+      file to pixels; 0 for raw pixels), <code>cropMs</code> (slicing
+      the regions), <code>readMs</code> (zxing, every call summed),
+      <code>previewMs</code> (the wait for the preview encodes once the
+      reads are done; they run on sharp's threads while the regions are
+      read), <code>regionsMs</code> / <code>fullImageMs</code> (whichever
+      pass ran, wall time) and <code>totalMs</code> (the message arriving
+      to its first result being sent), which the status shows
+    </li>
+    <li>
+      <code>msg.payload</code> - a cropped preview PNG of that result's
+      region, with <b>Preview</b> on (the default); off, the payload
+      passes through. A preview of a 500x1300 region takes ~14 ms to
+      encode and is ~2 MB per code, so turn it off when nothing
+      downstream shows it.
+    </li>
   </ul>
   <p>
     If nothing is found anywhere, one message is sent with
@@ -324,6 +355,7 @@
       EAN8: { value: false },
       tryHarder: { value: true },
       tryRotate: { value: true },
+      preview: { value: true },
     },
     inputs: 1,
     outputs: 1,
@@ -335,6 +367,10 @@
       return "barcode locate";
     },
     oneditprepare: function () {
+      // a node saved before the preview option existed has no value: on
+      if (this.preview === undefined) {
+        $("#node-input-preview").prop("checked", true);
+      }
       const list = $("#node-input-region-container")
         .css("min-height", "150px")
         .css("min-width", "450px")
