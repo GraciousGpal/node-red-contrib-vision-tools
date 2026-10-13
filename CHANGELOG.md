@@ -25,6 +25,12 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   exports `withKernels` in place of `withNative`; no setting, message override,
   result field, timing, environment value or editor id did, and output
   is byte-identical.
+- **The prebuild workflow checks every Linux and macOS rebuild against the
+  committed binary**, not only linux-x64. The macOS builds use the
+  runner's unpinned Xcode: they matched the committed bytes in both CI
+  runs checked (38305271710 and 38315051299), and a runner image update can fail the darwin check with no source
+  change. win32-x64 stays unchecked, as MSVC's link timestamps and PDB
+  GUID differ per build.
 
 ## [1.3.0] - 2026-10-12
 

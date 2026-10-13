@@ -10,12 +10,12 @@
 # It builds and tests only. Nothing is committed or published from here:
 # the binaries go into the package by hand, from the `prebuilds` artifact.
 # The Linux ones are built in images pinned by digest
-# (native/prebuild-linux.sh), so the same source gives the same bytes:
-# the linux-x64 jobs fail when a rebuild differs from the committed binary.
-#
-# This workflow has not been run yet. It was written from the documentation
-# of the runners, the actions and the images it uses; expect the first run
-# to need fixes.
+# (native/prebuild-linux.sh), so the same source gives the same bytes. The
+# macOS ones are built with the runner's Xcode, which nothing pins; they
+# have matched the committed bytes, but a runner image update can change
+# them with no source change. The linux and macos jobs fail when a rebuild
+# differs from the committed binary. The Windows one is not checked, as
+# MSVC's link timestamps and PDB GUID make each build different.
 
 name: prebuild
 
@@ -109,7 +109,6 @@ jobs:
 
       # The shipped ones: the same source must give the same bytes
       - name: Check the rebuild is the committed binary
-        if: matrix.arch == 'x64'
         run: node native/manifest.js --check "$OUT"
 
       - name: Check no symbol needs a glibc newer than 2.17
@@ -252,7 +251,17 @@ jobs:
           rm -f "$OUT"
           mkdir -p "$(dirname "$OUT")"
           sh native/build.sh "$OUT" "$(dirname "$(dirname "$(which node)")")/include/node"
-          node native/manifest.js > /dev/null
+
+      # Before the manifest is rewritten below, so it compares against the
+      # committed hash. The toolchain is the runner's Xcode, which nothing
+      # pins: a runner image update can turn this red with no source change.
+      - name: Check the rebuild is the committed binary
+        run: node native/manifest.js --check "$OUT"
+
+      # The loader checks every prebuild against the manifest, so the one
+      # just built must be in it
+      - name: List the binaries in the manifest
+        run: node native/manifest.js > /dev/null
 
       - run: npm install --no-audit --no-fund
 
