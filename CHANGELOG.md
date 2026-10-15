@@ -38,9 +38,16 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   A region's RGB pixels are expanded to RGBA by a loop per channel
   count, about a quarter faster than the branch per pixel.
 - **The test suite is tighter**: vacuous and duplicate tests removed, validator tests tabled, shared test harnesses extracted.
+- **One strict content-key check.** `lib/nuisanceMap.js` carried its own copy of `lib/transformFile.js`'s strict golden-content validation; both validators now call the one function in `transformFile.js`, same checks and messages.
 
 ### Fixed
 
+- **A fetched last frame that does not decode says so.** The
+  line-finder editor's caption read "fetching the last frame…" forever;
+  it now reads "the last frame could not be decoded - send another, or
+  choose a file", next to the existing error notification. When a
+  reloaded frame fails over one already shown, Run uploads the image
+  shown instead of running on the runtime's undecodable frame.
 - **line-finder refuses a raw `msg.payload` it cannot read correctly.**
   A short buffer was read past its end and a long one was read with the
   wrong geometry, so a mis-sized frame still reported `found: true` or a
