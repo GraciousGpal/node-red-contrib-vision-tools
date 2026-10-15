@@ -3,7 +3,7 @@
  *
  * Fixtures are generated here rather than read from a local photo folder
  * (which is gitignored - real customer QC photos), so these run anywhere:
- * `node --test` from the package root.
+ * `npm test` from the package root.
  */
 
 "use strict";

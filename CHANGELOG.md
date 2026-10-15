@@ -39,6 +39,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   count, about a quarter faster than the branch per pixel.
 - **The test suite is tighter**: vacuous and duplicate tests removed, validator tests tabled, shared test harnesses extracted.
 - **One strict content-key check.** `lib/nuisanceMap.js` carried its own copy of `lib/transformFile.js`'s strict golden-content validation; both validators now call the one function in `transformFile.js`, same checks and messages.
+- **Node 22 or newer is required** (`engines.node`, was 20.9; Node 20 is end of life and CI runs 22). `npm test` runs `node --test test/*.test.js`, a glob Node 22 expands itself on every shell, so the helper modules in `test/helpers/` are no longer counted as tests.
 
 ### Fixed
 
