@@ -16,11 +16,18 @@ const path = require("node:path");
 const fsp = require("node:fs/promises");
 const { readScaleFile } = require("../lib/scaleFile.js");
 
-const tmp = async () =>
-	path.join(
-		await fsp.mkdtemp(path.join(os.tmpdir(), "gc-scale-")),
-		"scale.json",
-	);
+const made = [];
+test.after(() =>
+	Promise.all(made.map((d) => fsp.rm(d, { recursive: true, force: true }))),
+);
+
+const tmpDir = async () => {
+	const dir = await fsp.mkdtemp(path.join(os.tmpdir(), "gc-scale-"));
+	made.push(dir);
+	return dir;
+};
+
+const tmp = async () => path.join(await tmpDir(), "scale.json");
 
 test("a valid calibration file round-trips", async () => {
 	const p = await tmp();
@@ -39,7 +46,7 @@ test("a valid calibration file round-trips", async () => {
 });
 
 test("a missing scale file is simply absent, not an error", async () => {
-	const dir = await fsp.mkdtemp(path.join(os.tmpdir(), "gc-scale-"));
+	const dir = await tmpDir();
 	assert.strictEqual(await readScaleFile(path.join(dir, "nope.json")), null);
 	assert.strictEqual(await readScaleFile(""), null);
 });
@@ -93,20 +100,18 @@ test("a homography is validated when present and ignored when absent", async () 
 	assert.deepStrictEqual((await readScaleFile(p)).homography, H);
 });
 
+// Which matrices are junk is validateHomography's table in
+// test/homography.test.js; one of them here proves readScaleFile asks it.
 test("a corrupt homography is refused with a reason, not applied", async () => {
 	const p = await tmp();
 	const base = { mmPerPixelNative: 0.05, nativeWidth: 2000, nativeHeight: 1000 };
-	for (const bad of [
-		[1, 2, 3],
-		[1, 0, 0, 0, 1, 0, 0, 0, 2],
-		[0, 0, 0, 0, 0, 0, 0, 0, 1],
-		"1,0,0,0,1,0,0,0,1",
-	]) {
-		await fsp.writeFile(p, JSON.stringify({ ...base, homography: bad }));
-		const got = await readScaleFile(p);
-		assert.match(got.error, /homography/, JSON.stringify(bad));
-		assert.match(got.error, /re-run checkerboard-calibrate/);
-	}
+	await fsp.writeFile(
+		p,
+		JSON.stringify({ ...base, homography: [0, 0, 0, 0, 0, 0, 0, 0, 1] }),
+	);
+	const got = await readScaleFile(p);
+	assert.match(got.error, /homography.*singular/);
+	assert.match(got.error, /re-run checkerboard-calibrate/);
 });
 
 test("a homography without the geometry it is expressed in is refused", async () => {

@@ -263,27 +263,33 @@ test("rotate uses OpenCV's +angle image-coordinate convention", { skip }, async 
 
 // ---- imageAlign --------------------------------------------------------
 
-test("imageAlign recovers a known shift in reference coordinates", { skip }, async () => {
-	const golden = texture(labelFrame(600, 400, 0, 300, 180, 1));
-	// the target is the golden on a 1.5x canvas, shifted by (13, -7)
-	const tw = 900;
-	const th = 600;
+/** The grey `golden` on a `mx`-times canvas, shifted by (shiftX, shiftY),
+ * nearest-neighbour, the table tone (30) where the golden does not reach. */
+function scaledTarget(golden, mx, shiftX = 0, shiftY = 0) {
+	const { width: gw, height: gh } = golden;
+	const tw = Math.round(gw * mx);
+	const th = Math.round(gh * mx);
 	const target = Buffer.alloc(tw * th, 30);
-	const mx = 1.5;
-	const shiftX = 13;
-	const shiftY = -7;
 	for (let y = 0; y < th; y++) {
 		for (let x = 0; x < tw; x++) {
 			const gx = Math.round((x - shiftX) / mx);
 			const gy = Math.round((y - shiftY) / mx);
-			target[y * tw + x] =
-				gx >= 0 && gx < 600 && gy >= 0 && gy < 400 ? golden.data[gy * 600 + gx] : 30;
+			if (gx >= 0 && gx < gw && gy >= 0 && gy < gh) target[y * tw + x] = golden.data[gy * gw + gx];
 		}
 	}
+	return rawImage(target, tw, th, 1, "GRAY");
+}
+
+test("imageAlign recovers a known shift in reference coordinates", { skip }, async () => {
+	const golden = texture(labelFrame(600, 400, 0, 300, 180, 1));
+	// the target is the golden on a 1.5x canvas, shifted by (13, -7)
+	const mx = 1.5;
+	const shiftX = 13;
+	const shiftY = -7;
 
 	const result = await imageAlign(
 		golden,
-		rawImage(target, tw, th, 1, "GRAY"),
+		scaledTarget(golden, mx, shiftX, shiftY),
 		1,
 		50,
 		1e-4,
@@ -311,20 +317,9 @@ test("imageAlign recovers a known shift in reference coordinates", { skip }, asy
 
 test("imageAlign returns a reference-sized single-channel warp of the frame", { skip }, async () => {
 	const golden = texture(labelFrame(600, 400, 0, 300, 180, 1));
-	const tw = 900;
-	const th = 600;
-	const target = Buffer.alloc(tw * th, 30);
-	for (let y = 0; y < th; y++) {
-		for (let x = 0; x < tw; x++) {
-			const gx = Math.round(x / 1.5);
-			const gy = Math.round(y / 1.5);
-			target[y * tw + x] =
-				gx < 600 && gy < 400 ? golden.data[gy * 600 + gx] : 30;
-		}
-	}
 	const result = await imageAlign(
 		golden,
-		rawImage(target, tw, th, 1, "GRAY"),
+		scaledTarget(golden, 1.5),
 		1,
 		50,
 		1e-4,
@@ -389,11 +384,9 @@ test("imageAlign reports failure rather than a garbage transform", { skip }, asy
 		flat, other, 1, 20, 1e-4, "raw", 90, false, true, null, "affine",
 		"features+ecc", "auto", "orb",
 	);
-	assert.strictEqual(typeof result.success, "boolean");
-	if (!result.success) {
-		assert.strictEqual(result.transformMatrix, null);
-		assert.strictEqual(result.image, null);
-	}
+	assert.strictEqual(result.success, false);
+	assert.strictEqual(result.transformMatrix, null);
+	assert.strictEqual(result.image, null);
 });
 
 test("imageAlign refuses ECC past 500 iterations, so a huge count cannot hold the event loop", { skip }, async () => {

@@ -143,7 +143,10 @@ for (const node of NODES) {
 	const libs = [...nodeJs.matchAll(/require\("(\.\/lib\/[\w.]+\.js)"\)/g)]
 		.map((m) => fs.readFileSync(path.join(DIR, m[1]), "utf8"));
 	const js = [nodeJs, ...libs].join("\n");
-	const defaults = parseDefaults(braceBlock(html, "defaults:"));
+	// from the editor script on, so a `defaults:` in a template hint is not
+	// read as the block
+	const script = html.slice(html.indexOf('<script type="text/javascript">'));
+	const defaults = parseDefaults(braceBlock(script, "defaults:"));
 	const table = js.includes("SETTINGS = {")
 		? parseDefaults(braceBlock(js, "SETTINGS = "))
 		: {};
@@ -152,17 +155,17 @@ for (const node of NODES) {
 		const names = Object.keys(defaults);
 		assert.ok(names.length > 0, "parsed no defaults at all");
 		const mismatches = [];
-		let compared = 0;
 		for (const name of names) {
 			if (NO_RUNTIME_EQUIVALENT.has(name)) continue;
 			const runtime = runtimeDefault(js, name, table);
+			// fails on the first default the parser cannot place, so every
+			// non-exempt default is compared below
 			assert.ok(
 				runtime !== null,
 				`${name} has an editor default (${defaults[name].value}) but no ` +
 					`recognisable runtime fallback in ${node.js} - either it is ` +
 					`ignored at runtime, or this test needs to learn the idiom`,
 			);
-			compared++;
 			// numerically where both are numbers, textually otherwise, so 0.15
 			// and .15 do not read as a mismatch
 			const a = Number(defaults[name].value);
@@ -178,15 +181,6 @@ for (const node of NODES) {
 			}
 		}
 		assert.deepStrictEqual(mismatches, [], mismatches.join("\n"));
-		// guards against the parser quietly matching almost nothing and the
-		// whole test passing vacuously: today this is 38 of 39, 5 of 6, and
-		// 17 of 20 (label-crop exempts name, aspectRatio, expectedSizeFraction)
-		const expected = names.filter((n) => !NO_RUNTIME_EQUIVALENT.has(n)).length;
-		assert.strictEqual(
-			compared,
-			expected,
-			`compared ${compared} of ${expected} non-exempt defaults`,
-		);
 	});
 
 	test(`${node.html}: numeric validators allow blank`, () => {

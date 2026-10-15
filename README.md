@@ -1932,8 +1932,9 @@ and `msg.payload` set to a preview crop of that barcode's region (with
 
 ## Tests
 
-`npm test` (Node 20.9+, no test framework needed — `node --test`), 795
-tests. Fixtures are generated with `sharp` rather than read from
+`npm test` (Node 20.9+, no test framework needed — `node --test`), 731
+tests in `test/*.test.js`; `npm test` lists the helper modules too.
+Fixtures are generated with `sharp` rather than read from
 real camera photos, so the suite runs anywhere; the real QC photos are
 gitignored. Coverage spans the lib pipeline (`compare`, `align`, `warp`,
 `localAlign`, `checkerboard`, `threshold`), the worker pool (byte-identity

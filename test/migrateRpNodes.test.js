@@ -78,13 +78,12 @@ test("rp-resize becomes image-resize in place, with rp-resize's sizes", () => {
 	});
 	assert.strictEqual(out.find((n) => n.id === "b").outputFormat, "png");
 	assert.strictEqual(out.find((n) => n.id === "b").outputQuality, 80);
-	// rp-resize's own arithmetic for multiply 0.5 / set "": round(w * 0.5),
-	// then round(w' * h / w)
-	for (const [w, h] of [[2950, 4250], [3001, 2001], [1, 7]]) {
-		const width = Math.round(w * 0.5) || 1;
-		assert.deepStrictEqual(targetSize(w, h, a), { width, height: Math.round((width * h) / w) });
-	}
-	assert.strictEqual(changes.length, 3);
+	// rp-resize's sizes for multiply 0.5 / set "": round(w * 0.5), then
+	// round(w' * h / w), worked by hand
+	assert.deepStrictEqual(targetSize(2950, 4250, a), { width: 1475, height: 2125 });
+	assert.deepStrictEqual(targetSize(3001, 2001, a), { width: 1501, height: 1001 });
+	assert.deepStrictEqual(targetSize(1, 7, a), { width: 1, height: 7 });
+	assert.strictEqual(changes.length, 3, "one change each: rp-resize a, rp-resize b, rp-heat-diff hd");
 });
 
 test("rp-heat-diff is removed from the flow, every wire and its group", () => {
@@ -106,7 +105,12 @@ test("anything it cannot carry over exactly stops the migration, naming every no
 	];
 	assert.throws(
 		() => migrate(bad),
-		(err) => ["x", "y", "z", "w", "v", "rp-crop u"].every((id) => err.message.includes(id)),
+		(err) => {
+			// one line per node: `<type> <id> "<name>": <reason>`
+			const named = err.message.split("\n").slice(1).map((line) => line.trim().split(" ").slice(0, 2).join(" "));
+			assert.deepStrictEqual(named, ["rp-resize x", "rp-resize y", "rp-resize z", "rp-resize w", "rp-resize v", "rp-crop u"]);
+			return true;
+		},
 	);
 	// set with a size stays set
 	const { flow: out } = migrate([rpResize("s", { widthMode: "set", widthValue: "800", heightMode: "set", heightValue: "600" })]);

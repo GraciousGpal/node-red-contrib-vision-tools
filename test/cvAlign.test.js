@@ -1,10 +1,11 @@
 /**
- * The cvAlign seed is optional and must be invisible when it is absent.
+ * The cvAlign route must be invisible when no OpenCV engine is there.
  *
- * The engine it needs ships prebuilt binaries for a handful of platforms
- * and is not a dependency, so on most installs - including CI - these
- * exercise the fallback path rather than the seed itself. That is the
- * point: a flag whose failure mode is "silently different inspection"
+ * opencv5 is a dependency, so lib/engine.js finds an engine on every
+ * supported install; the fallback is still reachable, because engine.js
+ * answers null when neither opencv5 nor opencv.js loads. These tests install
+ * a fake engine, or none, through _setEngine, so they run the same whatever
+ * the box has. A flag whose failure mode is "silently different inspection"
  * would be worse than no flag.
  */
 
@@ -64,17 +65,43 @@ const svg = (w, h) =>
 			`</svg>`,
 	);
 
-test("available() answers without throwing when the engine is absent", () => {
-	assert.strictEqual(typeof cvAlign.available(), "boolean");
-});
+// An engine whose imageAlign hands back `pixels(reference)` as the aligned
+// canvas, under the given 2x3 matrix.
+function fakeAlign(matrix2x3, pixels = (reference) => Buffer.from(reference.data)) {
+	return {
+		async imageAlign(reference) {
+			return {
+				success: true,
+				image: {
+					data: pixels(reference),
+					width: reference.width,
+					height: reference.height,
+					channels: 1,
+				},
+				transformMatrix: { matrix2x3 },
+			};
+		},
+	};
+}
 
-test("seedTransform returns null rather than throwing without the engine", async (t) => {
-	if (cvAlign.available()) return t.skip("engine installed - fallback not exercised");
-	const gray = new Uint8Array(64 * 64);
-	assert.strictEqual(
-		await cvAlign.seedTransform(gray, 64, 64, gray, 64, 64),
-		null,
-	);
+const inverted = (reference) => {
+	const out = Buffer.alloc(reference.data.length);
+	for (let i = 0; i < out.length; i++) out[i] = 255 - reference.data[i];
+	return out;
+};
+
+test("seedTransform returns null rather than throwing without the engine", async () => {
+	cvAlign._setEngine(null);
+	try {
+		assert.strictEqual(cvAlign.available(), false);
+		const gray = new Uint8Array(64 * 64);
+		assert.strictEqual(
+			await cvAlign.seedTransform(gray, 64, 64, gray, 64, 64),
+			null,
+		);
+	} finally {
+		cvAlign._resetEngine();
+	}
 });
 
 test("alignFrame returns OpenCV's aligned canvas and target-space transform", async () => {
@@ -142,20 +169,7 @@ test("cvAlign rejects geometry outside the configured search", () => {
 });
 
 test("the cvAlign fast path bypasses JS search and warp", async () => {
-	cvAlign._setEngine({
-		async imageAlign(reference) {
-			return {
-				success: true,
-				image: {
-					data: Buffer.from(reference.data),
-					width: reference.width,
-					height: reference.height,
-					channels: 1,
-				},
-				transformMatrix: { matrix2x3: [1, 0, 0, 0, 1, 0] },
-			};
-		},
-	});
+	cvAlign._setEngine(fakeAlign([1, 0, 0, 0, 1, 0]));
 	try {
 		const goldenBuf = await sharp(svg(400, 560)).png().toBuffer();
 		const golden = await prepareGolden(goldenBuf, CFG);
@@ -174,24 +188,7 @@ test("the cvAlign fast path bypasses JS search and warp", async () => {
 });
 
 test("without a pin, a poor cvAlign score falls back to the JS alignment", async () => {
-	cvAlign._setEngine({
-		async imageAlign(reference) {
-			const inverted = Buffer.alloc(reference.data.length);
-			for (let i = 0; i < inverted.length; i++) {
-				inverted[i] = 255 - reference.data[i];
-			}
-			return {
-				success: true,
-				image: {
-					data: inverted,
-					width: reference.width,
-					height: reference.height,
-					channels: 1,
-				},
-				transformMatrix: { matrix2x3: [1, 0, 0, 0, 1, 0] },
-			};
-		},
-	});
+	cvAlign._setEngine(fakeAlign([1, 0, 0, 0, 1, 0], inverted));
 	try {
 		const goldenBuf = await sharp(svg(400, 560)).png().toBuffer();
 		const golden = await prepareGolden(goldenBuf, CFG);
@@ -212,24 +209,7 @@ test("under a pin, a validated cvAlign alignment is kept however poor its score"
 	// bad as it gets. But the transform matches the pin exactly, which is
 	// the misalignment check - so the disagreement is reported as the
 	// defect it would be, not spent on a second alignment.
-	cvAlign._setEngine({
-		async imageAlign(reference) {
-			const inverted = Buffer.alloc(reference.data.length);
-			for (let i = 0; i < inverted.length; i++) {
-				inverted[i] = 255 - reference.data[i];
-			}
-			return {
-				success: true,
-				image: {
-					data: inverted,
-					width: reference.width,
-					height: reference.height,
-					channels: 1,
-				},
-				transformMatrix: { matrix2x3: [1, 0, 0, 0, 1, 0] },
-			};
-		},
-	});
+	cvAlign._setEngine(fakeAlign([1, 0, 0, 0, 1, 0], inverted));
 	try {
 		const goldenBuf = await sharp(svg(400, 560)).png().toBuffer();
 		const golden = await prepareGolden(goldenBuf, CFG);
@@ -280,21 +260,8 @@ test("after the fast path fails on a frame, the seed is not tried on it", async 
 });
 
 test("under a pin, a cvAlign transform off the trained scale still falls back", async () => {
-	cvAlign._setEngine({
-		async imageAlign(reference) {
-			return {
-				success: true,
-				image: {
-					data: Buffer.from(reference.data),
-					width: reference.width,
-					height: reference.height,
-					channels: 1,
-				},
-				// 10% off the pin on x: outside validateAlignment's 3%
-				transformMatrix: { matrix2x3: [1.1, 0, 0, 0, 1, 0] },
-			};
-		},
-	});
+	// 10% off the pin on x: outside validateAlignment's 3%
+	cvAlign._setEngine(fakeAlign([1.1, 0, 0, 0, 1, 0]));
 	try {
 		const goldenBuf = await sharp(svg(400, 560)).png().toBuffer();
 		const golden = await prepareGolden(goldenBuf, CFG);
@@ -311,25 +278,31 @@ test("under a pin, a cvAlign transform off the trained scale still falls back", 
 	}
 });
 
-test("the flag changes nothing when the engine is unavailable", async (t) => {
-	if (cvAlign.available()) return t.skip("engine installed - fallback not exercised");
-	const goldenBuf = await sharp(svg(400, 560)).png().toBuffer();
-	const frameBuf = await sharp(svg(400, 560)).resize(520, 728).png().toBuffer();
-	const golden = await prepareGolden(goldenBuf, CFG);
-	const pinnedScale = { mx: 1.3, my: 1.3 };
-	const off = await compareFrame(frameBuf, golden, { ...CFG, pinnedScale });
-	const on = await compareFrame(frameBuf, golden, {
-		...CFG,
-		pinnedScale,
-		nativeAlignSeed: true,
-	});
-	assert.strictEqual(on.transform.seeded, false, "reported seeded without an engine");
-	assert.strictEqual(on.transform.scaleX, off.transform.scaleX);
-	assert.strictEqual(on.transform.scaleY, off.transform.scaleY);
-	assert.strictEqual(on.transform.ox, off.transform.ox);
-	assert.strictEqual(on.transform.oy, off.transform.oy);
-	assert.strictEqual(on.transform.score, off.transform.score);
-	assert.strictEqual(on.pass, off.pass);
+test("the flags change nothing when the engine is unavailable", async () => {
+	cvAlign._setEngine(null);
+	try {
+		const goldenBuf = await sharp(svg(400, 560)).png().toBuffer();
+		const frameBuf = await sharp(svg(400, 560)).resize(520, 728).png().toBuffer();
+		const golden = await prepareGolden(goldenBuf, CFG);
+		const pinnedScale = { mx: 1.3, my: 1.3 };
+		const off = await compareFrame(frameBuf, golden, { ...CFG, pinnedScale });
+		const on = await compareFrame(frameBuf, golden, {
+			...CFG,
+			pinnedScale,
+			nativeAlignSeed: true,
+			nativeFastAlign: true,
+		});
+		assert.strictEqual(on.transform.seeded, false, "reported seeded without an engine");
+		assert.ok(!on.transform.native, "reported the fast path without an engine");
+		assert.strictEqual(on.transform.scaleX, off.transform.scaleX);
+		assert.strictEqual(on.transform.scaleY, off.transform.scaleY);
+		assert.strictEqual(on.transform.ox, off.transform.ox);
+		assert.strictEqual(on.transform.oy, off.transform.oy);
+		assert.strictEqual(on.transform.score, off.transform.score);
+		assert.strictEqual(on.pass, off.pass);
+	} finally {
+		cvAlign._resetEngine();
+	}
 });
 
 /**
@@ -345,20 +318,11 @@ test("the cvAlign path blanks pixels that fall outside the frame", async () => {
 	// imageAlign normalises the target to the reference dimensions, so this
 	// matrix decodes to mx=0.8, my=1, ox=2.4, oy=-2: the golden's top two rows
 	// map above the frame and its last two columns run off the right of it.
-	cvAlign._setEngine({
-		async imageAlign(reference) {
-			return {
-				success: true,
-				image: {
-					data: Buffer.alloc(reference.width * reference.height, 0),
-					width: reference.width,
-					height: reference.height,
-					channels: 1,
-				},
-				transformMatrix: { matrix2x3: [1, 0, 3, 0, 1, -2] },
-			};
-		},
-	});
+	cvAlign._setEngine(
+		fakeAlign([1, 0, 3, 0, 1, -2], (reference) =>
+			Buffer.alloc(reference.width * reference.height, 0),
+		),
+	);
 	try {
 		const gW = 10;
 		const gH = 8;

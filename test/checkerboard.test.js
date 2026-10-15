@@ -183,7 +183,6 @@ test("a square-on board measures no perspective and an identity homography", asy
 	p.homography.forEach((v, i) =>
 		assert.ok(Math.abs(v - I[i]) < 1e-6, `H[${i}] = ${v}`),
 	);
-	assert.strictEqual(p.homography[8], 1);
 });
 
 test("a keystoned board is measured, and its homography flattens it", async () => {

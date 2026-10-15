@@ -20,17 +20,23 @@
 
 const test = require("node:test");
 const assert = require("node:assert");
+
+// a "#rgb" or "#rrggbb" colour as [r, g, b]: a fail must read red and a
+// pass green, not only differ, or swapping the two would pass
+const rgb = (hex) => {
+	const m = /^#(?:([0-9a-f])([0-9a-f])([0-9a-f])|([0-9a-f]{2})([0-9a-f]{2})([0-9a-f]{2}))$/i.exec(hex);
+	assert.ok(m, `not a #rgb or #rrggbb colour: ${hex}`);
+	return m[1] ? m.slice(1, 4).map((h) => parseInt(h + h, 16)) : m.slice(4).map((h) => parseInt(h, 16));
+};
+const redDominant = (hex) => rgb(hex)[0] > rgb(hex)[1];
+const greenDominant = (hex) => rgb(hex)[1] > rgb(hex)[0];
 const fs = require("node:fs");
 const path = require("node:path");
 const { makeEditorEnv } = require("./helpers/fakeEditorDom.js");
+const { editorScript } = require("./helpers/previewDom.js");
 
-const HTML = path.join(__dirname, "..", "line-finder.html");
-const html = fs.readFileSync(HTML, "utf8");
-const SCRIPT = (() => {
-	const m = html.match(/<script type="text\/javascript">\n([\s\S]*)\n<\/script>\s*$/);
-	assert.ok(m, "could not find the editor script in line-finder.html");
-	return m[1];
-})();
+const html = fs.readFileSync(path.join(__dirname, "..", "line-finder.html"), "utf8");
+const SCRIPT = editorScript("line-finder.html");
 // The thumbnail's pixel size comes from the template's own attributes, so
 // a change to the markup cannot quietly invalidate the coordinates below.
 const THUMB = (() => {
@@ -46,8 +52,8 @@ const FIT = { scale: 0.96, ox: 66, oy: 12 };
 const toScreen = (x, y) => [FIT.ox + x * FIT.scale, FIT.oy + y * FIT.scale];
 
 /** Boot the editor on `node` - the object oneditprepare/oneditsave see as `this`. */
-function boot(overrides = {}, node = {}) {
-	const env = makeEditorEnv({ script: SCRIPT, imageSize: IMG });
+function boot(overrides = {}, node = {}, script = SCRIPT) {
+	const env = makeEditorEnv({ script, imageSize: IMG });
 	env.node = node;
 	const thumb = env.document.getElementById("line-finder-canvas");
 	thumb.width = THUMB.width;
@@ -83,6 +89,8 @@ function viewerParts(env) {
 		overlay,
 		canvas,
 		ctx: canvas.getContext(),
+		// the header's image size, then the footer's readout
+		imageSize: spans[0],
 		footer: spans[spans.length - 1],
 		button: (label) => overlay.findButton(label),
 	};
@@ -202,8 +210,8 @@ test("loading a frame draws it and opens the viewer on it", () => {
 	for (const label of ["Fit", "100%", "Mode: Draw", "Scan", "Calipers", "Apply", "Cancel"]) {
 		assert.ok(v.button(label), `the viewer needs a ${label} control`);
 	}
-	assert.match(v.footer.textContent, /zoom \d+%/);
-	assert.match(v.footer.textContent, /800 × 600 px|calipers/);
+	assert.match(v.footer.textContent, /^zoom \d+% {2}· {2}x 0 {2}y 0 {2}100×100 px {2}0° {2}scan → {2}16 calipers of 6\.3 px$/);
+	assert.strictEqual(v.imageSize.textContent, "800 × 600 px");
 });
 
 test("the viewer opens zoomed onto the region, not fitted to the whole frame", () => {
@@ -328,10 +336,10 @@ test("shift snaps rotation to five degrees", () => {
 	const v = viewerParts(env);
 	v.button("Fit").click();
 	const [gx, gy] = toScreen(300, 150);
-	// aim at roughly 31 degrees below the centre
+	// aim at atan(60/100) = 31.0 degrees below the centre
 	drag(v.canvas, [gx + 30, gy], toScreen(300, 210), { shiftKey: true });
 	v.button("Apply").click();
-	assert.strictEqual(Number(env.field("regionAngleDeg").value) % 5, 0);
+	assert.strictEqual(Number(env.field("regionAngleDeg").value), 30);
 });
 
 test("arrow keys nudge the region a pixel at a time, ten with shift", () => {
@@ -365,17 +373,23 @@ test("the caliper overlay can be turned off", () => {
 	const v = viewerParts(env);
 	v.button("Fit").click();
 
-	const countAfter = (fn) => {
+	// one line across the region at each band's centre: 16 bands of 20px
+	// down the 320px height, each running the 200px width
+	const near = (c, [x, y]) => Math.abs(c.args[0] - x) < 1e-6 && Math.abs(c.args[1] - y) < 1e-6;
+	const caliperLines = (fn) => {
 		const before = v.ctx.calls.length;
 		fn();
-		return v.ctx.calls.length - before;
+		const calls = v.ctx.calls.slice(before);
+		let n = 0;
+		for (let b = 0; b < 16; b++) {
+			const y = 110 + 20 * b;
+			const i = calls.findIndex((c) => c.op === "moveTo" && near(c, toScreen(100, y)));
+			if (i >= 0 && calls[i + 1].op === "lineTo" && near(calls[i + 1], toScreen(300, y))) n++;
+		}
+		return n;
 	};
-	const withCalipers = countAfter(() => v.button("Fit").click());
-	const withoutCalipers = countAfter(() => v.button("Calipers").click());
-	assert.ok(
-		withoutCalipers < withCalipers,
-		`turning the calipers off should draw less: ${withoutCalipers} vs ${withCalipers}`,
-	);
+	assert.strictEqual(caliperLines(() => v.button("Fit").click()), 16);
+	assert.strictEqual(caliperLines(() => v.button("Calipers").click()), 0);
 });
 
 test("a region hanging off the frame is called out, not silently accepted", () => {
@@ -585,10 +599,8 @@ test("a miss says what stopped it and which field to move; a failed call says wh
 				diagnostics: { peakContrast: 1.3, medianPeakContrast: 1.3, calipersWithEdge: 0, calipersInImage: 8, peakPolarity: "lightToDark" },
 			}),
 		});
-		assert.match(
-			runStatus(env),
-			/not found \(no-edge\): strongest edge contrast 1\.3, threshold 2\.0 - lower Contrast threshold below 1\.3 to pick it up/,
-		);
+		// the wording is pinned by editorRegionGeometry's explainMiss test
+		assert.match(runStatus(env), /^not found \(no-edge\): strongest edge contrast 1\.3/);
 
 		run.dispatch("click");
 		ajax.calls[1].reject({ responseJSON: { ok: false, error: "line-finder: region needs positive width and height" } });
@@ -704,12 +716,8 @@ test("Add rectangle lays four inward-scanning sides over the loaded frame and se
 	loadImage(env);
 	env.window.dispatch("keydown", { key: "Escape" });
 	env.document.getElementById("line-finder-add-rect").dispatch("click");
-	const saved = save(env);
-	assert.deepStrictEqual(saved.map((r) => r.name), ["left", "right", "top", "bottom"], "the untouched default is dropped");
-	assert.deepStrictEqual(saved.map((r) => r.scanDirection), ["right", "left", "down", "up"]);
-	for (const r of saved) {
-		assert.ok(r.x >= 0 && r.y >= 0 && r.x + r.width <= IMG.width && r.y + r.height <= IMG.height, JSON.stringify(r));
-	}
+	// the sides' layout is editorRegionGeometry's "Add rectangle" tests
+	assert.deepStrictEqual(save(env).map((r) => r.name), ["left", "right", "top", "bottom"], "the untouched default is dropped");
 	assert.strictEqual(regionName(env).value, "left");
 	assert.strictEqual(listRows(env).length, 4);
 	// the thumbnail now labels every region by name
@@ -718,7 +726,7 @@ test("Add rectangle lays four inward-scanning sides over the loaded frame and se
 	for (const name of ["left", "right", "top", "bottom"]) assert.ok(texts.includes(name), `${name} labelled`);
 });
 
-test("Copy as label-crop edgeRegions needs all four sides and writes their JSON to the clipboard", async () => {
+test("Copy as label-crop edgeRegions needs all four sides and writes their JSON to the clipboard, or through execCommand without one", async () => {
 	const env = boot({}, { regions: SIDES.slice(0, 3).map((r) => ({ ...r })) });
 	const copy = env.document.getElementById("line-finder-copy-edge-regions");
 	assert.strictEqual(copy.disabled, true, "three sides are not a rectangle");
@@ -734,32 +742,28 @@ test("Copy as label-crop edgeRegions needs all four sides and writes their JSON 
 	copy.dispatch("click");
 	await Promise.resolve();
 	assert.strictEqual(written.length, 1);
+	// what goes into the JSON is editorRegionGeometry's Copy test; here,
+	// that the dialog's own fields are what it is built from
 	const spec = JSON.parse(written[0]);
 	assert.deepStrictEqual(Object.keys(spec), ["left", "right", "top", "bottom"]);
-	assert.deepStrictEqual(
-		spec.left,
-		{ x: 100, y: 200, width: 40, height: 200, polarity: "darkToLight", edgeSelect: "last",
-			calipers: 16, contrastThreshold: 1.5, filterHalfWidth: 2, ignoreCount: 0,
-			outlierTolerancePx: 2.5, minCaliperFraction: 0.5, angleToleranceDeg: null },
-	);
-	assert.strictEqual(spec.left.scanDirection, undefined, "label-crop implies the scan from the side");
-	assert.strictEqual(spec.top.angleDeg, 1.5);
+	assert.strictEqual(spec.left.contrastThreshold, 1.5);
+	assert.strictEqual(spec.left.angleToleranceDeg, null);
 	assert.match(runStatus(env), /copied edgeRegions/);
-});
 
-test("without a clipboard API the JSON goes through a textarea and execCommand", async () => {
-	const env = boot({}, { regions: SIDES.map((r) => ({ ...r })) });
+	// without a clipboard API the same JSON goes through a textarea and execCommand
+	delete env.window.navigator;
 	let copied = false;
 	env.document.execCommand = (cmd) => {
 		copied = cmd === "copy";
 		return true;
 	};
-	env.document.getElementById("line-finder-copy-edge-regions").dispatch("click");
+	copy.dispatch("click");
 	await Promise.resolve();
 	assert.strictEqual(copied, true);
+	assert.strictEqual(written.length, 1, "the clipboard API is gone");
 	const ta = env.created.find((e) => e.tagName === "TEXTAREA");
 	assert.ok(ta && ta.removed, "the scratch textarea is taken down again");
-	assert.deepStrictEqual(Object.keys(JSON.parse(ta.value)), ["left", "right", "top", "bottom"]);
+	assert.strictEqual(ta.value, written[0]);
 	assert.strictEqual(env.document.body.children.length, 0);
 });
 
@@ -849,7 +853,8 @@ test("Run searches every region, one crop each, and sums them up in one line wit
 		const status = runStatus(env);
 		assert.match(status, /left ✓ 90\.0°\s+·\s+right ✓ 90\.0°\s+·\s+top ✓ 0\.1°\s+·\s+bottom ✓ -0\.0°/);
 		assert.match(status, /rect 400×300 px/);
-		assert.strictEqual(env.document.getElementById("line-finder-run-status").style.color, "#2e7d32");
+		const okColour = env.document.getElementById("line-finder-run-status").style.color;
+		assert.ok(greenDominant(okColour), `a clean run reads green: ${okColour}`);
 		assert.strictEqual(run.disabled, false);
 		// the four corners are drawn on the thumbnail, where its mapping puts them
 		const calls = thumb.calls.slice(before);
@@ -876,8 +881,16 @@ test("Run searches every region, one crop each, and sums them up in one line wit
 		});
 		ajax.calls[7].reject({ responseJSON: { ok: false, error: "line-finder: region needs finite x and y" } });
 		const missed = runStatus(env);
-		assert.match(missed, /left ✓ 90\.0°\s+·\s+right ✓ 90\.0°\s+·\s+top ✗ contrast 1\.3<2\.0\s+·\s+bottom ✗ error: line-finder: region needs finite x and y/);
+		// the short reasons are editorRegionGeometry's shortMiss test
+		assert.match(missed, /left ✓ 90\.0°\s+·\s+right ✓ 90\.0°\s+·\s+top ✗ contrast\b.*·\s+bottom ✗ error: line-finder: region needs finite x and y/);
 		assert.doesNotMatch(missed, /rect/);
+		assert.notStrictEqual(
+			env.document.getElementById("line-finder-run-status").style.color,
+			okColour,
+			"a run with a miss is not shown in the colour of a clean one",
+		);
+		const missColour = env.document.getElementById("line-finder-run-status").style.color;
+		assert.ok(redDominant(missColour), `a run with a miss reads red: ${missColour}`);
 		assert.strictEqual(run.disabled, false);
 	});
 });
@@ -918,7 +931,8 @@ test("the dialog fetches the node's last frame, draws it, and Run then names the
 
 		ajax.frames[0].resolve({ size: 1234, type: "image/png" }, FRAME_HEADERS);
 		assert.strictEqual(run.disabled, false, "the frame is the image");
-		assert.strictEqual(frameCaption(env), "last frame through this node, 3 min ago (800×600)");
+		// how the age is put is editorRegionGeometry's relativeTimeEditor test
+		assert.match(frameCaption(env), /^last frame through this node, .+ \(800×600\)$/);
 		assert.ok(env.document.getElementById("line-finder-canvas").getContext().ops().includes("drawImage"));
 		assert.strictEqual(env.document.body.children.length, 0, "the viewer is not flung open while the dialog paints");
 
@@ -986,13 +1000,24 @@ test("Reload last frame fetches it again; a file chosen afterwards takes over an
 	});
 });
 
-test("a frame that does not decode is reported and leaves the caption honest", () => {
+test("an answer with no frame in it, or a frame that does not decode, leaves nothing to run on", () => {
 	withAjax((ajax) => {
 		const env = boot(REGION_FIELDS, { id: "lf4" });
 		// a header-less answer with no blob: nothing to load
 		ajax.frames[0].resolve(null, {});
 		assert.strictEqual(frameCaption(env), "no frame yet - deploy and send one, or choose a file");
 		assert.strictEqual(env.document.getElementById("line-finder-run").disabled, true);
+		assert.strictEqual(env.URL.created, 0, "nothing was handed to an Image");
+	});
+	withAjax((ajax) => {
+		// an Image that fails the way a browser's does on bytes it cannot read
+		const broken = "Image = class { set src(_url) { this.onerror(); } };\n";
+		const env = boot(REGION_FIELDS, { id: "lf6" }, broken + SCRIPT);
+		ajax.frames[0].resolve({ size: 1, type: "image/png" }, FRAME_HEADERS);
+		assert.deepStrictEqual(env.notifications, [{ message: "line-finder: could not read that image", kind: "error" }]);
+		assert.doesNotMatch(frameCaption(env), /through this node/, "no frame is claimed");
+		assert.strictEqual(env.document.getElementById("line-finder-run").disabled, true);
+		assert.strictEqual(env.URL.revoked, env.URL.created, "the failed frame's URL is released");
 	});
 });
 

@@ -2,93 +2,28 @@
  * The synthetic-defects editor's flow-canvas preview: the panel the node
  * draws under itself over RED.comms.
  *
- * Same harness as test/lineFinderPreview.test.js, for the same reason: the
- * panel is a foreignObject inside the node's own <g>, whose origin is the
- * node's top-left corner, and getting that wrong draws the panel over the
- * node without any error. The editor <script> is lifted out of the .html
- * and run against a stub RED that hands back the subscribe callback.
+ * Same harness as test/lineFinderPreview.test.js (test/helpers/previewDom.js),
+ * for the same reason: the panel is a foreignObject inside the node's own
+ * <g>, whose origin is the node's top-left corner, and getting that wrong
+ * draws the panel over the node without any error.
  */
 
 const test = require("node:test");
 const assert = require("node:assert");
-const fs = require("node:fs");
-const path = require("node:path");
 
-const HTML = path.join(__dirname, "..", "synthetic-defects.html");
-const html = fs.readFileSync(HTML, "utf8");
-const SCRIPT = (() => {
-	const m = html.match(/<script type="text\/javascript">\n([\s\S]*)\n<\/script>\s*$/);
-	assert.ok(m, "could not find the editor script in synthetic-defects.html");
-	return m[1];
-})();
+// a "#rgb" or "#rrggbb" colour as [r, g, b]: a fail must read red and a
+// pass green, not only differ, or swapping the two would pass
+const rgb = (hex) => {
+	const m = /^#(?:([0-9a-f])([0-9a-f])([0-9a-f])|([0-9a-f]{2})([0-9a-f]{2})([0-9a-f]{2}))$/i.exec(hex);
+	assert.ok(m, `not a #rgb or #rrggbb colour: ${hex}`);
+	return m[1] ? m.slice(1, 4).map((h) => parseInt(h + h, 16)) : m.slice(4).map((h) => parseInt(h, 16));
+};
+const redDominant = (hex) => rgb(hex)[0] > rgb(hex)[1];
+const greenDominant = (hex) => rgb(hex)[1] > rgb(hex)[0];
+const { editorScript, StubImage, bootPreview } = require("./helpers/previewDom.js");
 
-class El {
-	constructor(tag) {
-		this.tag = tag;
-		this.id = "";
-		this.attrs = {};
-		this.style = {};
-		this.children = [];
-		this.parent = null;
-	}
-	setAttribute(name, value) {
-		this.attrs[name] = value;
-	}
-	appendChild(child) {
-		child.parent = this;
-		this.children.push(child);
-		return child;
-	}
-	remove() {
-		if (this.parent) {
-			this.parent.children = this.parent.children.filter((c) => c !== this);
-			this.parent = null;
-		}
-	}
-	find(pred) {
-		if (pred(this)) return this;
-		for (const c of this.children) {
-			const hit = c.find(pred);
-			if (hit) return hit;
-		}
-		return null;
-	}
-}
-
-// never fires onload: the box drawing is not what is under test here
-class StubImage {}
-
-function boot(node) {
-	const group = new El("g");
-	group.id = node.id;
-	const subscriptions = {};
-	const document = {
-		getElementById(id) {
-			return group.find((e) => e.id === id);
-		},
-		createElementNS(_ns, tag) {
-			return new El(tag);
-		},
-	};
-	const RED = {
-		validators: { number: () => () => true },
-		comms: {
-			subscribe(topic, fn) {
-				subscriptions[topic] = fn;
-			},
-		},
-		nodes: {
-			registerType() {},
-			node(id) {
-				return id === node.id ? node : undefined;
-			},
-		},
-	};
-	new Function("RED", "document", "window", "Image", SCRIPT)(RED, document, {}, StubImage);
-	const publish = (data) => subscriptions["synthetic-defects-preview"](null, data);
-	const panel = () => group.find((e) => e.tag === "foreignObject");
-	return { group, publish, panel };
-}
+const SCRIPT = editorScript("synthetic-defects.html");
+const boot = (node) => bootPreview(SCRIPT, "synthetic-defects-preview", node, { globals: { Image: StubImage } });
 
 const NODE = { id: "n1", x: 300, y: 200, w: 120, h: 30 };
 const EVENT = {
@@ -129,14 +64,20 @@ test("the caption carries the case text and colours by the expected verdict", ()
 	publish(EVENT);
 	const fail = captionOf(panel(), EVENT.text);
 	assert.ok(fail, "caption shows the event text");
-	assert.strictEqual(fail.style.color, "#ffcc80");
 
 	publish({ ...EVENT, pass: true, text: "2/3 · clean · expect pass" });
-	assert.strictEqual(captionOf(panel(), "2/3 · clean · expect pass").style.color, "#a5d6a7");
+	const pass = captionOf(panel(), "2/3 · clean · expect pass");
 
-	const golden = "golden · 400×300 · synthetic · 3 frames to come";
-	publish({ ...EVENT, kind: "golden", pass: true, text: golden });
-	assert.strictEqual(captionOf(panel(), golden).style.color, "#90caf9");
+	const goldenText = "golden · 400×300 · synthetic · 3 frames to come";
+	publish({ ...EVENT, kind: "golden", pass: true, text: goldenText });
+	const golden = captionOf(panel(), goldenText);
+
+	// expect fail, expect pass and the golden each get their own colour
+	const colours = [fail, pass, golden].map((c) => c.style.color);
+	assert.ok(colours.every(Boolean), `every caption is coloured: ${colours}`);
+	assert.strictEqual(new Set(colours).size, 3, `three verdicts, three colours: ${colours}`);
+	assert.ok(redDominant(colours[0]), `expect fail reads red: ${colours[0]}`);
+	assert.ok(greenDominant(colours[1]), `expect pass reads green: ${colours[1]}`);
 });
 
 test("a clear event removes the panel and a repeat replaces it", () => {

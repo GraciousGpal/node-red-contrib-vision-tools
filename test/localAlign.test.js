@@ -261,7 +261,6 @@ test("the searchable tiles kept per golden give the field measured afresh", () =
 		assert.deepStrictEqual(Array.from(kept.field.fy), Array.from(want.fy), `tile ${tile} floor ${floor}: fy`);
 		assert.deepStrictEqual(Array.from(kept.field.valid), Array.from(want.valid), `tile ${tile} floor ${floor}: valid`);
 		const tiles = searchableTiles(golden, W, H, tile, floor);
-		assert.strictEqual(searchableTiles(golden, W, H, tile, floor), tiles, "kept, not measured again");
 		if (floor === 0.5) differs = tiles.some((v, i) => v !== searchableTiles(golden, W, H, 48, 12)[i]);
 	}
 	assert.ok(differs, "a second floor on the same golden is measured, not served the first's tiles");

@@ -42,11 +42,10 @@ function makeNode(config = {}) {
 	const sent = [];
 	const warns = [];
 	const errors = [];
-	const statuses = [];
 	node.send = (m) => sent.push(m);
 	node.warn = (m) => warns.push(String(m));
 	node.error = (m) => errors.push(String(m));
-	node.status = (s) => statuses.push(s);
+	node.status = () => {};
 	// failures routed through the done callback are the real Node-RED
 	// path (done(err) goes to node.error); kept separate so tests can
 	// assert a failure is reported exactly once
@@ -57,7 +56,7 @@ function makeNode(config = {}) {
 				doneErrors.push(err && err.message ? String(err.message) : String(err));
 			}
 		});
-	return { node, run, sent, warns, errors, statuses, doneErrors };
+	return { node, run, sent, warns, errors, doneErrors };
 }
 
 // ---- synthetic label fixture ------------------------------------------
@@ -107,7 +106,7 @@ test("a path-string golden ignores stale pdf-to-image msg.images geometry", asyn
 	const goldenPath = path.join(dir, "golden.png");
 	await fsp.writeFile(goldenPath, await png(labelSvg(900, 1300)));
 
-	const { node, run, sent, errors } = makeNode(NODE_CFG);
+	const { run, sent, errors } = makeNode(NODE_CFG);
 	const msg = {
 		golden: goldenPath, // a path string: a file golden
 		payload: goldenPath, // the frame is the same file, so a clean compare passes
@@ -118,12 +117,9 @@ test("a path-string golden ignores stale pdf-to-image msg.images geometry", asyn
 
 	assert.strictEqual(errors.length, 0, errors.join("\n"));
 	assert.strictEqual(sent.length, 1);
+	// a passing compare: the frame's leftover geometry stamped onto the
+	// golden would have decoded the PNG as raw pixels and failed
 	assert.strictEqual(sent[0].payload, true);
-	// the leftover geometry must not have been stamped onto the golden
-	assert.ok(
-		!node.goldenCache.key.includes("1234x567x3"),
-		`cache key carried the frame's geometry: ${node.goldenCache.key}`,
-	);
 });
 
 test("a bare-buffer golden still inherits geometry from msg.images[]", async () => {
@@ -132,7 +128,7 @@ test("a bare-buffer golden still inherits geometry from msg.images[]", async () 
 		.raw()
 		.toBuffer({ resolveWithObject: true });
 
-	const { node, run, sent, errors } = makeNode(NODE_CFG);
+	const { run, sent, errors } = makeNode(NODE_CFG);
 	const msg = {
 		golden: Buffer.from(data), // bare buffer - the pdf-to-image straight-wire case
 		payload: encoded, // the frame as an encoded file
@@ -146,13 +142,8 @@ test("a bare-buffer golden still inherits geometry from msg.images[]", async () 
 
 	assert.strictEqual(errors.length, 0, errors.join("\n"));
 	assert.strictEqual(sent.length, 1);
+	// raw pixels decode only with the geometry from msg.images[]
 	assert.strictEqual(sent[0].payload, true);
-	assert.ok(
-		node.goldenCache.key.includes(
-			`${info.width}x${info.height}x${info.channels}`,
-		),
-		`raw geometry was not picked up from msg.images[]: ${node.goldenCache.key}`,
-	);
 });
 
 // ---- FW2.2: the path golden cache key follows the file's content -------
@@ -258,6 +249,16 @@ test("a refused trained transform says so on the message, not only in a warning"
 
 // ---- the register slack is trained, not guessed ------------------------
 
+// the label with one band of it 8 px to the right: a patch of substrate
+// that sat differently, which no global fit removes
+async function bandShifted(goldenBuf) {
+	const band = { left: 0, top: 300, width: 900, height: 220 };
+	return sharp(goldenBuf)
+		.composite([{ input: await sharp(goldenBuf).extract(band).toBuffer(), left: 8, top: band.top }])
+		.png()
+		.toBuffer();
+}
+
 test("training measures the register slack and later frames take their tone margin from it", async () => {
 	const dir = await tmpDir();
 	const goldenPath = path.join(dir, "golden.png");
@@ -266,11 +267,7 @@ test("training measures the register slack and later frames take their tone marg
 	await fsp.writeFile(goldenPath, goldenBuf);
 	// trained on a frame with one band off register, so the map varies
 	// and a frame that ignored it would show
-	const band = { left: 0, top: 300, width: 900, height: 220 };
-	const shifted = await sharp(goldenBuf)
-		.composite([{ input: await sharp(goldenBuf).extract(band).toBuffer(), left: 8, top: band.top }])
-		.png()
-		.toBuffer();
+	const shifted = await bandShifted(goldenBuf);
 	const cfg = { ...NODE_CFG, goldenPath, transformFilePath: xformPath, localAlign: true, localAlignTile: 96, localAlignMax: 3 };
 
 	const train = makeNode({ ...cfg, trainTransform: true });
@@ -329,13 +326,7 @@ test("a training run keeps the worst register slack over its frames", async () =
 	const xformPath = path.join(dir, "transform.json");
 	const goldenBuf = await png(labelSvg(900, 1300));
 	await fsp.writeFile(goldenPath, goldenBuf);
-	// the same label with one band of it 8 px to the right: a patch of
-	// substrate that sat differently, which no global fit removes
-	const band = { left: 0, top: 300, width: 900, height: 220 };
-	const shifted = await sharp(goldenBuf)
-		.composite([{ input: await sharp(goldenBuf).extract(band).toBuffer(), left: 8, top: band.top }])
-		.png()
-		.toBuffer();
+	const shifted = await bandShifted(goldenBuf);
 	const cfg = { ...NODE_CFG, goldenPath, transformFilePath: xformPath, localAlign: true, localAlignTile: 96, localAlignMax: 3 };
 
 	const train = makeNode({ ...cfg, trainTransform: true });
@@ -420,7 +411,6 @@ test("mmPerWorkingPx is derived from the calibration photo's native size, not th
 	const golden = await prepareGolden(buf, c);
 	const workingMax = Math.max(golden.width, golden.height);
 	assert.strictEqual(golden.mmPerWorkingPx, 0.05 * (2000 / workingMax));
-	assert.notStrictEqual(golden.mmPerWorkingPx, 0.05 * (1300 / workingMax));
 });
 
 test("a calibration file without its own geometry falls back to the golden's native size", async () => {
@@ -462,7 +452,7 @@ test("a golden at a different native resolution than the calibration photo warns
 		}),
 	);
 
-	const { node, run, warns, sent, errors } = makeNode({
+	const { run, warns, sent, errors } = makeNode({
 		...NODE_CFG,
 		goldenPath,
 		scaleFilePath: scalePath,
@@ -487,7 +477,7 @@ test("a corrupt calibration file warns once and the inspection runs uncalibrated
 	await fsp.writeFile(goldenPath, await png(labelSvg(900, 1300)));
 	await fsp.writeFile(scalePath, "{not json");
 
-	const { node, run, warns, sent, errors } = makeNode({
+	const { run, warns, sent, errors } = makeNode({
 		...NODE_CFG,
 		goldenPath,
 		scaleFilePath: scalePath,
@@ -555,28 +545,29 @@ test("msg.rawInfo geometry larger than the payload buffer is refused", async () 
 	assert.strictEqual(errors.length, 0, "done(err) must be the only report");
 });
 
-test("a payload over the 512MB cap is refused before copy or hash", async () => {
+// golden-compare reads a payload through its own loadImage (locateSource
+// and readRegularFile), not resolveImage, so nodeInput.test.js does not
+// cover this wiring
+test("a payload over the 512MB cap is refused before copy or hash, through done once", async () => {
 	const dir = await tmpDir();
 	const goldenPath = path.join(dir, "golden.png");
 	await fsp.writeFile(goldenPath, await png(labelSvg(900, 1300)));
-	const { run, doneErrors } = makeNode({ ...NODE_CFG, goldenPath });
-	const big = new Uint8Array(512 * 1024 * 1024 + 1);
-	await run({ payload: big });
+	const { run, errors, doneErrors } = makeNode({ ...NODE_CFG, goldenPath });
+	await run({ payload: new Uint8Array(512 * 1024 * 1024 + 1) });
 	assert.strictEqual(doneErrors.length, 1, doneErrors.join("\n"));
-	assert.match(
-		doneErrors[0],
-		/msg\.payload is 536870913 bytes, above the 536870912-byte cap/,
-	);
+	assert.match(doneErrors[0], /msg\.payload is 536870913 bytes, above the 536870912-byte cap/);
+	assert.strictEqual(errors.length, 0, "done(err) must be the only report");
 });
 
-test("a non-regular file payload is refused instead of read", async () => {
+test("a non-regular file payload is refused instead of read, through done once", async () => {
 	const dir = await tmpDir();
 	const goldenPath = path.join(dir, "golden.png");
 	await fsp.writeFile(goldenPath, await png(labelSvg(900, 1300)));
-	const { run, doneErrors } = makeNode({ ...NODE_CFG, goldenPath });
+	const { run, errors, doneErrors } = makeNode({ ...NODE_CFG, goldenPath });
 	await run({ payload: dir }); // a directory opens, but is not a regular file
 	assert.strictEqual(doneErrors.length, 1, doneErrors.join("\n"));
 	assert.match(doneErrors[0], /not a regular file/);
+	assert.strictEqual(errors.length, 0, "done(err) must be the only report");
 });
 
 test("a missing file payload keeps the does-not-exist error", async () => {
@@ -587,13 +578,6 @@ test("a missing file payload keeps the does-not-exist error", async () => {
 	await run({ payload: path.join(dir, "absent.png") });
 	assert.strictEqual(doneErrors.length, 1, doneErrors.join("\n"));
 	assert.match(doneErrors[0], /does not exist on disk/);
-});
-
-test("a failure is reported through done once, not through node.error as well", async () => {
-	const { run, errors, doneErrors } = makeNode(NODE_CFG);
-	await run({ payload: new Uint8Array(4) }); // no golden configured
-	assert.strictEqual(doneErrors.length, 1);
-	assert.strictEqual(errors.length, 0, "done(err) must be the only report");
 });
 
 test("golden debug stages are only rendered when debugStages is on", async () => {
@@ -684,10 +668,21 @@ test("a bare-buffer golden decodes raw via msg.goldenRawInfo", async () => {
 	assert.strictEqual(errors.length, 0, errors.join("\n"));
 	assert.strictEqual(doneErrors.length, 0, doneErrors.join("\n"));
 	assert.strictEqual(sent.length, 1);
+	// raw pixels decode only with the geometry from msg.goldenRawInfo
 	assert.strictEqual(sent[0].payload, true);
-	assert.ok(
-		node.goldenCache.key.includes(`${info.width}x${info.height}x1`),
-		`raw geometry was not baked into the cache key: ${node.goldenCache.key}`,
+	// the same bytes declared with other geometry are another golden: a
+	// cache keyed on the bytes alone would hand back the 900x1300 one
+	await run({
+		golden: data,
+		goldenRawInfo: { width: info.height, height: info.width, channels: 1 },
+		payload: encoded,
+	});
+	assert.strictEqual(doneErrors.length, 0, doneErrors.join("\n"));
+	const meta = await node.goldenCache.promise;
+	assert.deepStrictEqual(
+		[meta.nativeWidth, meta.nativeHeight],
+		[info.height, info.width],
+		"the re-declared geometry must re-prepare the golden",
 	);
 });
 

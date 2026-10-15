@@ -38,13 +38,13 @@ test("a spare is handed out again, zeroed when asked, and bounded", { skip: !HAS
 	const e = takeShared(Uint8Array, 4096);
 	giveShared(e);
 	assert.strictEqual(takeShared(Uint32Array, 1024).buffer, e.buffer);
-	// only so many kept per size
+	// SPARE_PER_SIZE (lib/shared.js) kept per size
 	const many = Array.from({ length: 40 }, () => takeShared(Uint8Array, 333));
 	for (const m of many) giveShared(m);
 	const buffers = new Set(many.map((m) => m.buffer));
 	let reused = 0;
 	for (let i = 0; i < 40; i++) if (buffers.has(takeShared(Uint8Array, 333).buffer)) reused++;
-	assert.ok(reused > 0 && reused < 40, `${reused} of 40 kept`);
+	assert.strictEqual(reused, 16, `${reused} of 40 kept`);
 });
 
 test("the spares of many sizes stay under one cap, the oldest size given up first", { skip: !HAS_SAB }, () => {

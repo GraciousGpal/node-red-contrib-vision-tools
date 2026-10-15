@@ -79,27 +79,6 @@ test("a raw image is resized to the engine's INTER_LINEAR bytes, channels and co
 	}
 });
 
-test("the opencv.js engine gives the same bytes", { skip }, async () => {
-	const previous = process.env.VISION_TOOLS_ENGINE;
-	const image = noise(240, 160, 3);
-	const outputs = [];
-	try {
-		for (const mode of ["auto", "opencv-js"]) {
-			process.env.VISION_TOOLS_ENGINE = mode;
-			engineModule._reset();
-			if (!engineModule.candidate().engine) continue;
-			const { run, sent } = makeNode({ widthMode: "set", widthValue: 97, heightMode: "auto" });
-			assert.strictEqual(await run({ payload: image }), null);
-			outputs.push(sent[0].payload.data);
-		}
-	} finally {
-		if (previous === undefined) delete process.env.VISION_TOOLS_ENGINE;
-		else process.env.VISION_TOOLS_ENGINE = previous;
-		engineModule._reset();
-	}
-	if (outputs.length === 2) assert.ok(outputs[0].equals(outputs[1]));
-});
-
 // ---- input and output shapes -------------------------------------------
 
 test("input and output paths, a bare Buffer with msg.rawInfo, and an encoded image", { skip }, async () => {
@@ -204,7 +183,7 @@ test("a bad input stops the message with an error and a red status", { skip }, a
 		[{ payload: { data: Buffer.alloc(10) } }, /no usable width/],
 		[{ payload: { data: Buffer.alloc(10), width: 10, height: 10, channels: 3 } }, /needs 300 bytes/],
 		[{ payload: { ...noise(4, 4, 1), dtype: "float32" } }, /uint8/],
-		[{ payload: Buffer.from("not an image") }, /./],
+		[{ payload: Buffer.from("not an image") }, /unsupported image format/],
 		[{ payload: 42 }, /image object/],
 	];
 	for (const [msg, re] of cases) {

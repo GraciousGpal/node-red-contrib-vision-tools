@@ -18,7 +18,6 @@ const test = require("node:test");
 const assert = require("node:assert");
 const sharp = require("sharp");
 const { prepareGolden } = require("../lib/compare.js");
-const { HAS_SAB } = require("../lib/shared.js");
 
 const svg = (w, h) =>
 	Buffer.from(
@@ -54,7 +53,7 @@ const pixelFields = (golden) =>
 		([, v]) => v instanceof Uint8Array || v instanceof Float32Array,
 	);
 
-test("every pixel buffer on a prepared golden is shared", { skip: !HAS_SAB }, async () => {
+test("every pixel buffer on a prepared golden is shared", async () => {
 	const golden = await prepareGolden(await sharp(svg(400, 600)).png().toBuffer(), cfg());
 	const fields = pixelFields(golden);
 	assert.ok(fields.length >= 4, `expected several pixel buffers, saw ${fields.length}`);
@@ -75,10 +74,8 @@ test("inkMargin 0 leaves fgAmbiguous null rather than throwing", async () => {
 	);
 	assert.strictEqual(golden.fgAmbiguous, null);
 	// and the rest is still shared
-	if (HAS_SAB) {
-		assert.ok(golden.fg.buffer instanceof SharedArrayBuffer);
-		assert.ok(golden.gray.buffer instanceof SharedArrayBuffer);
-	}
+	assert.ok(golden.fg.buffer instanceof SharedArrayBuffer);
+	assert.ok(golden.gray.buffer instanceof SharedArrayBuffer);
 });
 
 test("an ambiguity band is still produced when inkMargin is set", async () => {

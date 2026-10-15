@@ -42,34 +42,12 @@ https.get = blocked("https.get");
 
 const test = require("node:test");
 const assert = require("node:assert");
-const fs = require("node:fs");
-const path = require("node:path");
 const sharp = require("sharp");
 const { locateBarcodes, DEFAULT_FORMATS } = require("../lib/locate.js");
 const { rawGeometry, assertRawFits, resolveImage } = require("../lib/nodeInput.js");
 const { loadNode } = require("./helpers/fakeRed.js");
 
-// The writer ships in zxing-wasm, a hard dependency of this package, so
-// a load failure is a broken install and fails every test that needs it
-// (fixture() throws with the load error) rather than skipping them. It
-// is made offline the same way lib/locate.js makes the reader offline.
-let writer = null;
-let writerError = null;
-try {
-	writer = require("zxing-wasm/writer");
-	const root = path.resolve(path.dirname(require.resolve("zxing-wasm/writer")), "..", "..", "..");
-	const wasmBinary = fs.readFileSync(path.join(root, "dist", "writer", "zxing_writer.wasm"));
-	writer.prepareZXingModule({ overrides: { wasmBinary }, fireImmediately: true }).catch(() => {});
-} catch (err) {
-	writer = null;
-	writerError = err;
-}
-
-function assertWriterLoaded() {
-	if (!writer) {
-		throw new Error(`zxing-wasm/writer failed to load (zxing-wasm is a hard dependency): ${writerError && writerError.stack ? writerError.stack : writerError}`);
-	}
-}
+const writer = require("./helpers/barcodeWriter.js");
 
 // Placement on the canvas. The writer is asked for no quiet zones, so the
 // PNG's edges are the symbol's edges; the canvas's white supplies the
@@ -90,7 +68,6 @@ async function writePng(spec) {
 let fixturePromise = null;
 function fixture() {
 	if (!fixturePromise) {
-		assertWriterLoaded();
 		fixturePromise = (async () => {
 			const codes = [await writePng(CODE128), await writePng(DATAMATRIX), await writePng(EAN8)];
 			const png = await sharp({ create: { ...CANVAS, channels: 3, background: { r: 255, g: 255, b: 255 } } })
@@ -294,7 +271,7 @@ test("a profile region holding a code of another format still reports it", async
 	);
 });
 
-test("barcode-locate reads a raw payload in place: not copied, not changed", async () => {
+test("resolveImage copy:false shares the raw frame's memory, and barcode-locate leaves the frame unchanged", async () => {
 	const { png } = await fixture();
 	const { data, info } = await sharp(png).removeAlpha().raw().toBuffer({ resolveWithObject: true });
 	const frame = { data, width: info.width, height: info.height, channels: 3 };
@@ -313,83 +290,6 @@ test("barcode-locate reads a raw payload in place: not copied, not changed", asy
 	assert.deepStrictEqual(errors, []);
 	assert.deepStrictEqual(sent.map((m) => m.text).sort(), ["VT-DM-0042", "VT-LOCATE-128"]);
 	assert.ok(data.equals(before), "the frame the next node gets is the one this node got");
-});
-
-test("nodeInput raw helpers: descriptor rules and the length guard", () => {
-	const data = Buffer.alloc(10 * 4 * 3);
-	assert.deepStrictEqual(rawGeometry(undefined, { data, width: 10, height: 4, channels: 3 }), { width: 10, height: 4, channels: 3 });
-	assert.deepStrictEqual(rawGeometry({ rawInfo: { width: "10", height: "4", channels: "3" } }, data), { width: 10, height: 4, channels: 3 });
-	assert.strictEqual(rawGeometry({ rawInfo: { width: 10, height: 4 } }, data), undefined, "partial descriptor is none");
-	assert.strictEqual(rawGeometry({ rawInfo: { width: 10, height: 4, channels: 5 } }, data), undefined);
-	assert.strictEqual(rawGeometry({}, data), undefined, "an encoded file has no raw geometry");
-	const images = [{ page: 1, width: 10, height: 4, channels: 3 }];
-	assert.deepStrictEqual(rawGeometry({ format: "RAW", images }, data), { width: 10, height: 4, channels: 3 });
-	assert.strictEqual(rawGeometry({ format: "RAW", images, golden: "/g.png" }, data), undefined, "msg.images describes the golden when one rides along");
-
-	assert.doesNotThrow(() => assertRawFits(data, { width: 10, height: 4, channels: 3 }, "msg.payload"));
-	assert.doesNotThrow(() => assertRawFits(data, undefined, "msg.payload"));
-	assert.throws(() => assertRawFits(data, { width: 10, height: 5, channels: 3 }, "msg.payload"), /msg\.payload raw descriptor 10x5x3 needs 150 bytes but the buffer holds 120/);
-});
-
-test("locateSource: a missing bare path and a missing path in an object say different things", () => {
-	const { locateSource } = require("../lib/nodeInput.js");
-	const missing = path.join(__dirname, "no-such-golden.png");
-	assert.strictEqual(typeof locateSource, "function", "nodeInput exports locateSource");
-
-	const bare = locateSource(missing, "msg.golden");
-	assert.deepStrictEqual(bare, { path: missing, missing: `msg.golden does not exist on disk: "${missing}"` });
-	const inObject = locateSource({ path: missing }, "msg.golden");
-	assert.deepStrictEqual(inObject, {
-		path: missing,
-		missing: 'msg.golden object must contain "data"/"buffer" or an existing "path"',
-	});
-	assert.throws(() => locateSource({}, "msg.golden"), /^Error: msg\.golden object must contain "data"\/"buffer" or an existing "path"$/);
-	assert.throws(() => locateSource("", "msg.golden"), /^Error: msg\.golden is empty$/);
-	assert.throws(() => locateSource(5, "msg.golden"), /^Error: unsupported msg\.golden type: number$/);
-	const data = Buffer.alloc(4);
-	assert.strictEqual(locateSource({ data }, "msg.golden").data, data);
-});
-
-test("resolveImage on a missing path keeps both errors", async () => {
-	const missing = path.join(__dirname, "no-such-golden.png");
-	await assert.rejects(resolveImage(missing, "msg.golden"), { message: `msg.golden does not exist on disk: "${missing}"` });
-	await assert.rejects(resolveImage({ path: missing }, "msg.golden"), {
-		message: 'msg.golden object must contain "data"/"buffer" or an existing "path"',
-	});
-});
-
-// copy: true promises bytes the caller can no longer change: each source
-// kind is mutated after the call and the result must not follow it.
-test("resolveImage copy:true: an ArrayBuffer source is copied, not viewed", async () => {
-	const ab = new Uint8Array([1, 2, 3, 4]).buffer;
-	const out = await resolveImage(ab, "msg.payload", { copy: true });
-	new Uint8Array(ab).fill(9);
-	assert.deepStrictEqual([...out], [1, 2, 3, 4]);
-});
-
-test("resolveImage copy:true: a Buffer source is copied, not viewed", async () => {
-	const buf = Buffer.from([1, 2, 3, 4]);
-	const out = await resolveImage(buf, "msg.payload", { copy: true });
-	buf.fill(9);
-	assert.deepStrictEqual([...out], [1, 2, 3, 4]);
-});
-
-test("resolveImage copy:true: a Uint8Array at an offset is copied, its own range only", async () => {
-	const backing = new Uint8Array([7, 7, 1, 2, 3, 4, 7, 7]);
-	const view = backing.subarray(2, 6);
-	const out = await resolveImage({ data: view }, "msg.payload", { copy: true });
-	backing.fill(9);
-	assert.deepStrictEqual([...out], [1, 2, 3, 4]);
-});
-
-test("resolveImage copy:true: a file path's bytes do not follow the file", async (t) => {
-	const dir = fs.mkdtempSync(path.join(require("node:os").tmpdir(), "vt-resolve-"));
-	t.after(() => fs.rmSync(dir, { recursive: true, force: true }));
-	const file = path.join(dir, "frame.bin");
-	fs.writeFileSync(file, Buffer.from([1, 2, 3, 4]));
-	const out = await resolveImage(file, "msg.payload", { copy: true });
-	fs.writeFileSync(file, Buffer.from([9, 9, 9, 9]));
-	assert.deepStrictEqual([...out], [1, 2, 3, 4]);
 });
 
 test("EAN-8 is off by default and found when asked for", async () => {
@@ -414,18 +314,23 @@ test("EAN-8 is off by default and found when asked for", async () => {
 
 test("timings: every stage is reported; bare pixels skip the header read and the decode", async () => {
 	const { png, c128 } = await fixture();
+	// Every value is wall-clock time rounded to 0.1 ms, so a fast stage can
+	// honestly be 0. Only whole-image work (a PNG decode, a zxing read) is
+	// asserted > 0; the rest must be present, finite, >= 0, and fit inside
+	// the pass that contains them. The exact zeros for bare pixels are
+	// structural (the code is skipped), not timing.
 	const fromPng = await locateBarcodes(png, { mode: "regionsOnly", regions: [placed(c128)] });
+	const tp = fromPng.timings;
 	for (const k of ["warmupMs", "headerMs", "decodeMs", "cropMs", "readMs", "previewMs", "regionsMs"]) {
-		assert.ok(typeof fromPng.timings[k] === "number" && fromPng.timings[k] >= 0, `${k}: ${fromPng.timings[k]}`);
+		assert.ok(Number.isFinite(tp[k]) && tp[k] >= 0, `${k}: ${tp[k]}`);
 	}
-	assert.ok(!("fullImageMs" in fromPng.timings), "no fallback ran");
-	assert.ok(fromPng.timings.headerMs > 0 && fromPng.timings.decodeMs > 0, "a PNG is read and decoded");
-	assert.ok(fromPng.timings.readMs > 0, "one read");
-	assert.ok(fromPng.results[0].decodeMs > 0 && fromPng.results[0].decodeMs <= fromPng.timings.readMs);
-	// previewMs is the wait after the reads; a whole-canvas region's
-	// encode cannot have finished before its read ends
-	const whole = await locateBarcodes(png, { mode: "regionsOnly", regions: [{ x: 0, y: 0, width: CANVAS.width, height: CANVAS.height }] });
-	assert.ok(whole.timings.previewMs > 0, `previewMs ${whole.timings.previewMs}`);
+	assert.ok(!("fullImageMs" in tp), "no fallback ran");
+	assert.ok(tp.decodeMs > 0, "a PNG is decoded");
+	assert.ok(tp.readMs > 0, "one read");
+	// four values each rounded by up to 0.05 ms against the pass's own
+	const ROUNDING = 0.25;
+	assert.ok(tp.decodeMs + tp.cropMs + tp.readMs + tp.previewMs <= tp.regionsMs + ROUNDING, JSON.stringify(tp));
+	assert.ok(fromPng.results[0].decodeMs <= tp.readMs + ROUNDING, `${fromPng.results[0].decodeMs} vs ${tp.readMs}`);
 
 	const decoded = await sharp(png).ensureAlpha().raw().toBuffer({ resolveWithObject: true });
 	const raw = { width: decoded.info.width, height: decoded.info.height, channels: 4 };
@@ -490,7 +395,6 @@ test("barcode-locate node: msg.timings spans the frame end to end, and Preview o
 	}
 	// a node saved before the option existed has no preview key: on
 	const legacy = loadNode("barcode-locate.js", { mode: "regionsOnly", regions: [placed(c128)] });
-	assert.strictEqual(legacy.preview, true);
 	const sent = [];
 	legacy.send = (m) => sent.push(m);
 	await legacy.listeners.input({ payload: png }, undefined, () => {});

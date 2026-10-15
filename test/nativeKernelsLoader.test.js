@@ -188,31 +188,12 @@ test("withKernels runs the addon, falls back on a refused dispatch only, and ret
 	assert.deepEqual(calls, ["native localField", "js localApply", "native diff 2", "js histogram"]);
 });
 
-test("the addon is handed each buffer as the typed view it holds", () => {
-	const ctx = {
-		fx: new SharedArrayBuffer(8),
-		lo: new SharedArrayBuffer(4),
-		counts: new SharedArrayBuffer(8),
-		gray: new SharedArrayBuffer(3),
-		darkest: [new SharedArrayBuffer(2)],
-		width: 7,
-		golden: null,
-	};
-	const v = nativeKernels.views(ctx);
-	assert.ok(v.fx instanceof Float32Array && v.fx.length === 2);
-	assert.ok(v.lo instanceof Int16Array && v.lo.length === 2);
-	assert.ok(v.counts instanceof Uint32Array && v.counts.length === 2);
-	assert.ok(v.gray instanceof Uint8Array && v.gray.length === 3);
-	assert.ok(v.darkest[0] instanceof Uint8Array);
-	assert.equal(v.width, 7);
-	assert.equal(v.golden, null);
-});
-
 test("golden-compare says once which kernels it runs", () => {
 	const lines = [];
 	const log = { info: (m) => lines.push(["info", m]), warn: (m) => lines.push(["warn", m]) };
 	loadNode("golden-compare.js", {}, { log });
-	// the kernels' line; the OpenCV engine's is lib/engine.js's (engine.test.js)
+	// the kernels' line; engine.test.js checks the OpenCV engine line's
+	// wording, this only that golden-compare logs it at load
 	const kernelLines = lines.filter(([, m]) => /pool kernels/.test(m));
 	assert.equal(kernelLines.length, 1, JSON.stringify(lines));
 	assert.ok(lines.some(([, m]) => /golden-compare: (OpenCV engine|no OpenCV engine)/.test(m)), JSON.stringify(lines));

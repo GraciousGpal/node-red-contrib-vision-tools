@@ -61,6 +61,8 @@ test("defect counts stay exact with a pool larger than 64 workers", {
 	for (let y = 492; y < 500; y++) {
 		for (let x = 0; x < 10; x++) a[y * width + x] = 1;
 	}
+	// a pool capped below 65 would never reach worker index 64
+	assert.strictEqual(poolSize(65), 65, "precondition: an explicit 65 workers is not capped");
 	const par = await defectParallel(a, b, null, null, width, height, 65);
 	assert.ok(par, "precondition: the image must be big enough to split");
 	assert.strictEqual(par.count, 80, "the last worker's rows must be counted");
@@ -70,8 +72,6 @@ test("defect counts stay exact with a pool larger than 64 workers", {
 });
 
 test("poolSize reports the worker count getPool will create", () => {
-	assert.strictEqual(poolSize(4), 4);
-	assert.strictEqual(poolSize(65), 65);
 	assert.strictEqual(poolSize(1), 0); // one worker means "no pool"
 	// auto = cores-based, capped at 16. The cap was 8 until the alignment
 	// polish was measured against it: unlike the defect scan it is a run of

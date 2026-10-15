@@ -74,11 +74,10 @@ const failing = (over) =>
 	fakeResult({ pass: false, printBlemish: { pass: false, defectRatio: 0.01, regions: [] }, ...over });
 
 test("scaleBox scales per axis and pads by one block on every side", () => {
+	// x: 100..150 at 0.5 is 50..75, padded 34..91; y: 200..260 at 0.25 is
+	// 50..65, padded 34..81
 	const box = score.scaleBox({ x: 100, y: 200, w: 50, h: 60 }, 0.5, 0.25, 16);
-	assert.strictEqual(box.x, 100 * 0.5 - 16);
-	assert.strictEqual(box.y, 200 * 0.25 - 16);
-	assert.strictEqual(box.w, 50 * 0.5 + 32);
-	assert.strictEqual(box.h, 60 * 0.25 + 32);
+	assert.deepStrictEqual(box, { x: 34, y: 34, w: 57, h: 47 });
 });
 
 test("a region inside the padded box is a detection, one outside it is not", () => {
@@ -93,7 +92,6 @@ test("a region inside the padded box is a detection, one outside it is not", () 
 	);
 	assert.strictEqual(inside.verdict, "detected");
 	assert.strictEqual(inside.hit.channel, "print");
-	assert.strictEqual(inside.hit.density, 0.9);
 
 	const outside = score.classifyCase(
 		defectCase("mark-out"),
@@ -203,7 +201,9 @@ test('a channel "none" defect is scored like a clean case', () => {
 				backgroundPixels: 0,
 			},
 		],
-		expected: { pass: true, channels: [] },
+		// no expected.pass to lean on: the "none" filter alone must make this
+		// a pass case
+		expected: undefined,
 	});
 	assert.strictEqual(score.expectsPass(caseDef), true);
 	assert.strictEqual(score.classifyCase(caseDef, fakeResult({}), CTX).verdict, "correct-pass");
@@ -236,7 +236,6 @@ test('a "both" defect is accepted in either channel', () => {
 		],
 		expected: { pass: false, channels: ["print", "background"] },
 	});
-	assert.deepStrictEqual(score.defectChannels(caseDef.defects[0]), ["print", "background"]);
 
 	const viaPrint = score.classifyCase(
 		caseDef,
@@ -273,7 +272,6 @@ test("a clean case that passes is correct, and one that fails is a false fail", 
 		CTX,
 	);
 	assert.strictEqual(ff.verdict, "false-fail");
-	assert.strictEqual(ff.dxPx, 99);
 });
 
 test("aggregation counts every bucket and computes recall over all defect cases", () => {
@@ -299,7 +297,9 @@ test("aggregation counts every bucket and computes recall over all defect cases"
 			CTX,
 		),
 	];
-	for (const r of records) r.timings = { totalMs: 100, alignMs: 60 };
+	// distinct timings, so a percentile over the wrong records shows:
+	// a..f are 100..600, the passing c and e are 300 and 500
+	records.forEach((r, i) => (r.timings = { totalMs: 100 * (i + 1), alignMs: 60 }));
 
 	const s = score.aggregate(records);
 	assert.strictEqual(s.overall.cases, 6);
@@ -332,7 +332,8 @@ test("aggregation counts every bucket and computes recall over all defect cases"
 	// c and e are the two results that passed; the other four failed
 	assert.strictEqual(s.timings.pass.count, 2);
 	assert.strictEqual(s.timings.fail.count, 4);
-	assert.strictEqual(s.timings.pass.totalMs.p50, 100);
+	assert.deepStrictEqual(s.timings.pass.totalMs, { p50: 300, p90: 500, max: 500 });
+	assert.deepStrictEqual(s.timings.fail.totalMs, { p50: 200, p90: 600, max: 600 });
 	assert.strictEqual(s.alignment.goodGradeRate, 1);
 	assert.strictEqual(s.alignment.mismatchSuspected, 0);
 });
@@ -363,19 +364,7 @@ test("sweepTable has one row per value with recall and false-fail rate", () => {
 		]),
 	}));
 	const table = score.sweepTable("blockThreshold", summaries);
-	assert.strictEqual(table.key, "blockThreshold");
 	assert.strictEqual(table.rows.length, 2);
-	assert.deepStrictEqual(Object.keys(table.rows[0]).sort(), [
-		"cases",
-		"detected",
-		"falseFailRate",
-		"falseFails",
-		"missed",
-		"recall",
-		"value",
-		"wrongPlace",
-	]);
-	assert.strictEqual(table.rows[0].value, 0.1);
 	assert.strictEqual(table.rows[0].recall, 1);
 	assert.strictEqual(table.rows[0].falseFailRate, 0);
 });

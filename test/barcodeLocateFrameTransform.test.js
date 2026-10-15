@@ -29,30 +29,7 @@ const sharp = require("sharp");
 const profileStore = require("../lib/profileStore.js");
 const { loadNode } = require("./helpers/fakeRed.js");
 
-// The writer is a test-only dependency, made offline as in test/locate.test.js
-let writer = null;
-let writerError = null;
-try {
-	writer = require("zxing-wasm/writer");
-	const root = path.resolve(
-		path.dirname(require.resolve("zxing-wasm/writer")),
-		"..",
-		"..",
-		"..",
-	);
-	const wasmBinary = fs.readFileSync(
-		path.join(root, "dist", "writer", "zxing_writer.wasm"),
-	);
-	writer
-		.prepareZXingModule({ overrides: { wasmBinary }, fireImmediately: true })
-		.catch(() => {});
-} catch (err) {
-	writer = null;
-	writerError = err;
-}
-const skip = writer
-	? false
-	: `zxing-wasm/writer did not load: ${writerError && writerError.message}`;
+const writer = require("./helpers/barcodeWriter.js");
 
 const TEXT = "VT-FRAME-128";
 const W = 900;
@@ -141,7 +118,6 @@ async function yellowBox(buf) {
 
 test(
 	"a rotated, anisotropically scaled frame: the region is where the code is, from golden-compare's transform",
-	{ skip },
 	async () => {
 		const code = await yellowCode();
 		const golden = await sharp(labelSvg())

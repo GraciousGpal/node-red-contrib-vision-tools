@@ -125,28 +125,18 @@ test("shared buffers from finished frames are released while the pool runs", { s
 // Every worker is shown the same new buffers, so workers that start their
 // collection intervals together collect in the same frame, and twelve
 // collections at once stalled a frame in eight on the rig to twice its
-// time. Each worker's count, as lib/poolWorker.js keeps it, over a run
-// of frames that each bring every worker 9 MB of new buffers.
+// time. Each worker starts its count at gcPhase(index) of the interval
+// (half GC_EVERY_BYTES, lib/poolWorker.js), and a frame brings every
+// worker 9 MB of new buffers, a step of `step` of the interval: the
+// workers that collect in one frame are the phases inside one step of the
+// circle, so no step may hold many more than its share of them.
 test("pool workers spread their collections over the frames", () => {
-	const interval = GC_EVERY_BYTES / 2;
-	const perFrame = 9 * 1024 * 1024;
+	const step = (9 * 1024 * 1024) / (GC_EVERY_BYTES / 2);
 	for (const workers of [4, 12, 15]) {
-		const count = Array.from({ length: workers }, (_, i) => gcPhase(i) * interval);
-		const collected = new Set();
-		let most = 0;
-		for (let frame = 0; frame < 200; frame++) {
-			let now = 0;
-			for (let i = 0; i < workers; i++) {
-				count[i] += perFrame;
-				if (count[i] < interval) continue;
-				count[i] = 0;
-				now++;
-				collected.add(i);
-			}
-			most = Math.max(most, now);
-		}
-		assert.equal(collected.size, workers, `${workers} workers: one never collected`);
-		assert.ok(most <= Math.ceil((workers * perFrame) / interval) + 1, `${workers} workers: ${most} collected in one frame`);
+		const phases = Array.from({ length: workers }, (_, i) => gcPhase(i));
+		assert.ok(phases.every((p) => p >= 0 && p < 1), `${workers} workers: a phase outside the interval`);
+		const most = Math.max(...phases.map((from) => phases.filter((p) => (p - from + 1) % 1 < step).length));
+		assert.ok(most <= Math.ceil(workers * step) + 1, `${workers} workers: ${most} collect in one frame`);
 	}
 });
 
@@ -169,8 +159,7 @@ test("the allocators collect by volume on their own thread", { skip: !HAS_SAB &&
 		for (let turn = 0; turn < 2; turn++) {
 			// enough young garbage to make the scavenger run while the batch
 			// is still referenced, which promotes it
-			const junk = new Array(20000).fill(0).map((_, i) => ({ i }));
-			if (junk.length < 0) throw new Error("unreachable");
+			new Array(20000).fill(0).map((_, i) => ({ i }));
 			await sleep(1);
 		}
 		held.length = 0;

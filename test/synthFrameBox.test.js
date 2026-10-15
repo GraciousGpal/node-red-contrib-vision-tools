@@ -15,7 +15,7 @@ const test = require("node:test");
 const assert = require("node:assert/strict");
 const sharp = require("sharp");
 const { makePrng } = require("../lib/synth/prng.js");
-const { capture, frameBox, toFrame } = require("../lib/synth/capture.js");
+const { capture, frameBox } = require("../lib/synth/capture.js");
 
 // a preset whose every range is a single value, so the only randomness
 // left is the sign of the few-pixel offset, which the params report
@@ -78,9 +78,4 @@ test("a box mapped through frameBox sits on the ink in the frame", async () => {
 	assert.ok(Math.min(...ys) <= minY + 1.5 && Math.max(...ys) >= maxY - 1.5, `y extent ${Math.min(...ys)}..${Math.max(...ys)} vs ink ${minY}..${maxY}`);
 	// and it is rotated the way the frame is, not an upright box
 	assert.ok(Math.abs(corners[1].y - corners[0].y) > 0.5, "top edge should slope at 6 degrees");
-});
-
-test("toFrame is the identity plus the placement when nothing is scaled or turned", () => {
-	const out = toFrame([{ x: 10, y: 20 }], { mx: 1, my: 1, angleDeg: 0, dx: 5, dy: 7 }, { width: 100, height: 100 });
-	assert.deepEqual(out, [{ x: 15, y: 27 }]);
 });

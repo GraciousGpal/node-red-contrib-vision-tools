@@ -243,6 +243,29 @@ test("grids from block counts are buildHeatmapGrid's, the missing-ink fraction i
 	}
 });
 
+// The edge geometries the test above does not reach: a 1x1 image, a
+// block bigger than the whole image, an empty and a full mask, and the
+// deployed canvas. No pool involved, so this runs without SharedArrayBuffer.
+test("buildHeatmapGrid is the per-pixel grid at the edges: 1x1, a block past the image, empty and full", () => {
+	for (const [width, height, blocks] of [
+		[1, 1, [4, 16]],
+		[3, 7, [4, 8, 256]],
+		[67, 51, [4, 16, 96]],
+		[1475, 2125, [16]],
+	]) {
+		for (const blockSize of blocks) {
+			for (const mode of ["empty", "full", "pattern"]) {
+				const defect = mode === "pattern" ? mask(width, height, 3, 0.17) : new Uint8Array(width * height).fill(mode === "full" ? 1 : 0);
+				assert.deepEqual(
+					buildHeatmapGrid(defect, width, height, blockSize),
+					gridPerPixel(defect, width, height, blockSize, null),
+					`${width}x${height}, block ${blockSize}, ${mode}`,
+				);
+			}
+		}
+	}
+});
+
 test("binarize counts the golden's ink, its coverage and the disagreement", { skip: !HAS_SAB }, async () => {
 	const width = 777;
 	const height = 611;

@@ -55,30 +55,91 @@ async function viaFile(rec, expect) {
 	return nuisance.readNuisanceMap(file, expect);
 }
 
-test("validate agrees with read on accepted and refused maps", async () => {
-	const cases = [
-		[record(), EXPECT],
-		[record({ blockSize: 16 }), EXPECT],
-		[record({ workingSize: 2656 }), EXPECT],
-		[record(), { ...EXPECT, gridW: 185, gridH: 266 }],
-		[record({ goldenKey: "key:b", goldenContentKey: "sha1:bbbb" }), EXPECT],
-		[record({ goldenKey: "buf:1" }), { ...EXPECT, goldenKey: "path:/x:1:2" }],
-		[record({ version: 99 }), EXPECT],
-		[record({ baseline: "AAAA" }), EXPECT],
-		[record(), undefined],
-		[
-			record(),
-			{ ...EXPECT, goldenContentKey: "sha1:other", strictContentKey: true },
-		],
-	];
-	for (const [rec, expect] of cases) {
-		const fromFile = await viaFile(rec, expect);
-		const direct = await nuisance.validateNuisanceRecord(
-			JSON.parse(JSON.stringify(rec)),
-			expect,
-		);
-		assert.deepEqual(direct, fromFile);
+// One table for both entry points: readNuisanceMap is a JSON read in front
+// of validateNuisanceRecord, so every row must give the same answer through
+// each, and that answer is checked here once. `error: null` means accepted
+// with a full baseline.
+const CASES = [
+	{ name: "matching map", rec: record(), expect: EXPECT, error: null },
+	{ name: "no expectation at all", rec: record(), expect: undefined, error: null },
+	{
+		name: "trained at another blockSize",
+		rec: record({ blockSize: 16 }),
+		expect: EXPECT,
+		error: /trained at blockSize 16, now running at 8/,
+	},
+	{
+		name: "trained at another workingSize",
+		rec: record({ workingSize: 2656 }),
+		expect: EXPECT,
+		error: /trained at workingSize 2656, now running at 2125/,
+	},
+	{
+		name: "grid does not fit this comparison",
+		rec: record(),
+		expect: { ...EXPECT, gridW: 185, gridH: 266 },
+		error: /grid is 6x4, this comparison needs 185x266/,
+	},
+	{
+		name: "trained against a different golden",
+		rec: record({ goldenKey: "key:b", goldenContentKey: "sha1:bbbb" }),
+		expect: EXPECT,
+		error: /different golden \(key:b vs key:demo\)/,
+	},
+	// cheap keys disagree - one arrived as a buffer, one as a path - but
+	// the content hash settles it, exactly as the trained transform does
+	{
+		name: "same golden delivered another way",
+		rec: record({ goldenKey: "buf:1" }),
+		expect: {
+			...EXPECT,
+			goldenKey: "path:/x:1:2",
+			goldenContentKey: async () => "sha1:aaaa",
+		},
+		error: null,
+	},
+	{
+		name: "future map version",
+		rec: record({ version: 99 }),
+		expect: EXPECT,
+		error: /version 99/,
+	},
+	{
+		name: "truncated baseline",
+		rec: record({ baseline: "AAAA" }),
+		expect: EXPECT,
+		error: /baseline is truncated or corrupt/,
+	},
+	{
+		name: "strict mode, same cheap key, other content",
+		rec: record(),
+		expect: { ...EXPECT, goldenContentKey: "sha1:other", strictContentKey: true },
+		error: /different golden content \(sha1:aaaa vs sha1:other\)/,
+	},
+];
+
+test("read and validate give the same, expected answer for every map", async () => {
+	const failures = [];
+	for (const { name, rec, expect, error } of CASES) {
+		try {
+			const fromFile = await viaFile(rec, expect);
+			const direct = await nuisance.validateNuisanceRecord(
+				JSON.parse(JSON.stringify(rec)),
+				expect,
+			);
+			assert.deepEqual(direct, fromFile, "read and validate disagree");
+			if (error) {
+				assert.match(String(direct.error), error);
+				assert.equal(direct.baseline, undefined, "refused but returned a baseline");
+			} else {
+				assert.equal(direct.error, undefined);
+				assert.equal(direct.baseline.length, GW * GH);
+			}
+		} catch (err) {
+			failures.push(`${name}: ${err.message.split("\n")[0]}`);
+		}
 	}
+	assert.deepEqual(failures, []);
 });
 
 test("a non-object record is refused, not thrown on", async () => {

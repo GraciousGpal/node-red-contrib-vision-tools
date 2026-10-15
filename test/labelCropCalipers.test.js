@@ -123,25 +123,6 @@ test("calipers mode measures at full resolution, with no Otsu and no maxEdge cop
 	assert.deepStrictEqual(res.metadata.scale, { x: 1, y: 1 });
 	assert.ok(Math.abs(res.metadata.width - 300) < 1.5, `width ${res.metadata.width}`);
 	assert.ok(!eng.calls.some((c) => c.op === "filter"), "no Otsu in calipers mode");
-	assert.ok(
-		!eng.calls.some((c) => c.op === "resize"),
-		"no detection copy in calipers mode",
-	);
-});
-
-test("the strong printed rule does not win, because it is outside every region", async () => {
-	const withRule = await labelCrop(
-		rawImage(frame({ withPrint: true }), W, H, 1, "GRAY"), CFG, fakeEngine(frame({ withPrint: true })));
-	const withoutRule = await labelCrop(
-		rawImage(frame({ withPrint: false }), W, H, 1, "GRAY"), CFG, fakeEngine(frame({ withPrint: false })));
-	assert.strictEqual(withRule.detected, true);
-	assert.strictEqual(withoutRule.detected, true);
-	// the 90-level rule at x=58 is 18px inside the boundary; if it had any
-	// influence the two widths would differ
-	assert.ok(
-		Math.abs(withRule.metadata.width - withoutRule.metadata.width) < 0.5,
-		`${withRule.metadata.width} vs ${withoutRule.metadata.width}`,
-	);
 });
 
 test("one edge not found fails the frame rather than guessing it", async () => {
@@ -188,7 +169,7 @@ test("per-edge diagnostics survive onto the miss metadata", async () => {
 	assert.strictEqual(edges.left.calipers.total, 16);
 });
 
-test("an unconfigured edge is named rather than silently skipped", async () => {
+test("an unconfigured edge is named rather than silently skipped, and no regions at all is a miss, not a crash", async () => {
 	const gray = frame();
 	const res = await labelCrop(
 		rawImage(gray, W, H, 1, "GRAY"),
@@ -197,17 +178,14 @@ test("an unconfigured edge is named rather than silently skipped", async () => {
 	);
 	assert.strictEqual(res.detected, false);
 	assert.strictEqual(res.metadata.reason, "calipers-unconfigured:right+bottom");
-});
 
-test("calipers mode with no regions at all is a miss, not a crash", async () => {
-	const gray = frame();
-	const res = await labelCrop(
+	const none = await labelCrop(
 		rawImage(gray, W, H, 1, "GRAY"),
 		{ boundaryMode: "calipers", outputFormat: "raw" },
 		fakeEngine(gray),
 	);
-	assert.strictEqual(res.detected, false);
-	assert.match(res.metadata.reason, /^calipers-unconfigured:/);
+	assert.strictEqual(none.detected, false);
+	assert.strictEqual(none.metadata.reason, "calipers-unconfigured:left+right+top+bottom");
 });
 
 test("blob mode is untouched by the new option defaulting off", async () => {

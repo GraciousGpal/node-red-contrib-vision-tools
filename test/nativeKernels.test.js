@@ -59,7 +59,11 @@ for (const name of KERNELS) {
 	});
 }
 
-test("the field search's AVX2 and baseline builds give the same field", { skip: SKIP }, () => {
+// elsewhere "auto" is the baseline too, and this would compare it to itself
+// (native/kernels.cc builds the AVX2 path for x86_64 Linux alone)
+const NO_AVX2 = `${process.platform}-${process.arch}` !== "linux-x64" && "AVX2 build is linux-x64 only";
+
+test("the field search's AVX2 and baseline builds give the same field", { skip: SKIP || NO_AVX2 }, () => {
 	const was = addon.setIsa("auto");
 	try {
 		for (let seed = 100; seed < 120; seed++) {
@@ -83,6 +87,8 @@ test("a dispatch the addon cannot index is refused before it claims or writes an
 		["diff", (c) => ({ ...c, radius: 1.5 })],
 		["diff", (c) => ({ ...c, printBlocks: new SharedArrayBuffer(4) })],
 		["localField", (c) => ({ ...c, searchable: null })],
+		// a search box past the offset cap
+		["localField", (c) => ({ ...c, maxOffset: 65 })],
 		["localApply", (c) => ({ ...c, fx: new SharedArrayBuffer(8) })],
 		["binarize", (c) => ({ ...c, width: c.width + 1 })],
 		["toneCompare", (c) => ({ ...c, tileLevel: withLevel(c, 9) })],
@@ -181,13 +187,6 @@ test("a chunk that splits a row of blocks is refused, by the addon and by the JS
 	const split = { ...c, chunk: c.blockSize + 1 };
 	assert.throws(() => addon.toneCompare(nativeKernels.views(copyCtx(split)), 0, c.total, 0), { code: "ERR_VT_KERNEL_CTX" });
 	assert.throws(() => kernels.toneCompare(copyCtx(split), 0, c.total, 0), /splits the/);
-});
-
-test("a search box past the offset cap is refused", { skip: SKIP }, () => {
-	const c = kernelCase("localField", 3);
-	assert.throws(() => addon.localField(nativeKernels.views(copyCtx({ ...c, maxOffset: 65 })), 0, c.total, 0), {
-		code: "ERR_VT_KERNEL_CTX",
-	});
 });
 
 test("a getter that frees or shrinks a buffer read before it cannot leave the addon a dangling pointer", { skip: SKIP }, () => {

@@ -37,6 +37,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   read's time; the preview encodes still overlap the following reads.
   A region's RGB pixels are expanded to RGBA by a loop per channel
   count, about a quarter faster than the branch per pixel.
+- **The test suite is tighter**: vacuous and duplicate tests removed, validator tests tabled, shared test harnesses extracted.
 
 ### Fixed
 

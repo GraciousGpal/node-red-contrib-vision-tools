@@ -280,7 +280,7 @@ These need a separate defect/ground-truth investigation before treating the curr
 ## Verification and reproduction
 
 - Container suite: `node --test --test-concurrency=2`: **325 passed, 0 failed, 2 skipped** (engine-absent cases skipped because the engine was present).
-- `test/heatmapGrid.test.js`: densities exactly match the previous integral implementation for empty/full/pattern masks, clipped blocks, block sizes 4–256 and dimensions through 1475×2125. Passed before and after the replacement.
+- `test/heatmapGrid.test.js` (since folded into `test/diffRows.test.js` as "buildHeatmapGrid is the per-pixel grid at the edges", which now checks against a per-pixel grid): densities exactly matched the previous integral implementation for empty/full/pattern masks, clipped blocks, block sizes 4–256 and dimensions through 1475×2125. Passed before and after the replacement.
 - Primary LSP diagnostics and syntax checks passed for the changed code and benchmark/test files.
 - Local raw evidence: `.pi/golden-bench/{baseline,wasm,pin,full-baseline,full-code,full-tuned}.json`. These include local fixture paths/results; no image bytes are included.
 

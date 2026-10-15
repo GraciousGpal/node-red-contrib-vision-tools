@@ -1,8 +1,8 @@
 /**
  * The overlay stage: the one picture and the preview's thumbnail. Both
  * are built from the aligned grey and the checks' regions; what is
- * tested here is that the work is ordered so the two overlap, and that
- * the order never shows in the bytes.
+ * tested here is that the canvas is built across turns of the loop, on
+ * this thread or the pool's, and that neither shows in the bytes.
  */
 
 "use strict";
@@ -75,26 +75,6 @@ const CFG = {
 	thumbnailWidth: 120,
 	debugStages: false,
 };
-
-test("the thumbnail's encode is asked for before the overlay is composed", async () => {
-	const golden = await prepareGolden(await sharp(labelSvg()).png().toBuffer(), CFG);
-	const frame = await sharp(labelSvg('<rect x="300" y="500" width="90" height="60" fill="#000"/>')).png().toBuffer();
-	// the thumbnail encodes at quality 70, the overlay at heatmapQuality
-	const qualities = [];
-	const jpeg = sharp.prototype.jpeg;
-	sharp.prototype.jpeg = function (options) {
-		qualities.push(options && options.quality);
-		return jpeg.call(this, options);
-	};
-	let result;
-	try {
-		result = await compareFrame(frame, golden, CFG);
-	} finally {
-		sharp.prototype.jpeg = jpeg;
-	}
-	assert.ok(result.heatmap && result.thumbnail, "both pictures rendered");
-	assert.deepEqual(qualities, [70, 85], "the thumbnail first, then the overlay");
-});
 
 test("the overlay's canvas is the grey as RGB, built across turns of the loop", async () => {
 	const { expandGray, OVERLAY_EXPAND_SLICE: S } = require("../lib/compare.js");

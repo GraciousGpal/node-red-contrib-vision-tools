@@ -30,7 +30,6 @@ process.env.GOLDEN_COMPARE_INLINE = "1";
 
 const test = require("node:test");
 const assert = require("node:assert");
-const fs = require("node:fs");
 const os = require("node:os");
 const path = require("node:path");
 const fsp = require("node:fs/promises");
@@ -107,19 +106,9 @@ async function offsetFrame(goldenBuf, { scale = 1.1, left = 40, top = 150, width
 		.toBuffer();
 }
 
-// ---- barcode writer, offline (as in test/locate.test.js) ---------------
+// ---- barcode writer -----------------------------------------------------
 
-let writer = null;
-let writerError = null;
-try {
-	writer = require("zxing-wasm/writer");
-	const root = path.resolve(path.dirname(require.resolve("zxing-wasm/writer")), "..", "..", "..");
-	const wasmBinary = fs.readFileSync(path.join(root, "dist", "writer", "zxing_writer.wasm"));
-	writer.prepareZXingModule({ overrides: { wasmBinary }, fireImmediately: true }).catch(() => {});
-} catch (err) {
-	writer = null;
-	writerError = err;
-}
+const writer = require("./helpers/barcodeWriter.js");
 
 const BARCODE = { text: "VT-GC-128", left: 200, top: 1040 };
 
@@ -337,9 +326,6 @@ test("a legacy transform file for this golden is imported once; one for another 
 test(
 	"barcode regions are read off the golden once, after the frame, and again when the section is another golden's",
 	async () => {
-		// zxing-wasm is a hard dependency: its writer missing is a failure,
-		// not a skip that reads as a pass
-		assert.ok(writer, `zxing-wasm/writer did not load: ${writerError && writerError.message}`);
 		const dir = await tmpDir();
 		const profileDir = path.join(dir, "profiles");
 		const goldenPath = path.join(dir, "Coded_Label.png");

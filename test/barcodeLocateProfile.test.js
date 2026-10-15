@@ -24,20 +24,7 @@ const sharp = require("sharp");
 const { loadNode } = require("./helpers/fakeRed.js");
 const { mapProfileRegions } = require("../lib/goldenRegions.js");
 
-// The writer is a test-only dependency of the same package, made offline
-// the way lib/locate.js makes the reader offline (see test/locate.test.js).
-let writer = null;
-let writerError = null;
-try {
-	writer = require("zxing-wasm/writer");
-	const root = path.resolve(path.dirname(require.resolve("zxing-wasm/writer")), "..", "..", "..");
-	const wasmBinary = fs.readFileSync(path.join(root, "dist", "writer", "zxing_writer.wasm"));
-	writer.prepareZXingModule({ overrides: { wasmBinary }, fireImmediately: true }).catch(() => {});
-} catch (err) {
-	writer = null;
-	writerError = err;
-}
-const skip = writer ? false : `zxing-wasm/writer did not load: ${writerError && writerError.message}`;
+const writer = require("./helpers/barcodeWriter.js");
 
 const TEXT = "VT-PROFILE-128";
 const KEY = "sha1:" + "a".repeat(40);
@@ -129,7 +116,7 @@ function assertProfileRead(out, mapped) {
 	assert.strictEqual(m.textMatches, true);
 }
 
-test("profilePath: the profile's region decodes and the text matches the artwork", { skip }, async () => {
+test("profilePath: the profile's region decodes and the text matches the artwork", async () => {
 	const { barcodes, mapped, frame } = await fixture();
 	const file = writeProfile("fixed", { barcodes });
 	const { run, warns } = makeNode({ profilePath: file });
@@ -141,7 +128,7 @@ test("profilePath: the profile's region decodes and the text matches the artwork
 	assert.deepStrictEqual(warns, []);
 });
 
-test("msg.result.profile.path wins over the configured profilePath", { skip }, async () => {
+test("msg.result.profile.path wins over the configured profilePath", async () => {
 	const { barcodes, mapped, frame } = await fixture();
 	const file = writeProfile("upstream", { barcodes });
 	const { run, warns } = makeNode({ profilePath: path.join(tmp, "nope.json") });
@@ -149,7 +136,7 @@ test("msg.result.profile.path wins over the configured profilePath", { skip }, a
 	assert.deepStrictEqual(warns, []);
 });
 
-test("msg.profile is a name looked up in profileDir", { skip }, async () => {
+test("msg.profile is a name looked up in profileDir", async () => {
 	const { barcodes, mapped, frame } = await fixture();
 	const dir = path.join(tmp, "dir");
 	writeProfile("line_a", { barcodes }, dir);
@@ -158,7 +145,7 @@ test("msg.profile is a name looked up in profileDir", { skip }, async () => {
 	assert.deepStrictEqual(warns, []);
 });
 
-test("msg.regions overrides the profile", { skip }, async () => {
+test("msg.regions overrides the profile", async () => {
 	const { barcodes, mapped, frame } = await fixture();
 	const file = writeProfile("override", { barcodes });
 	const { run } = makeNode({ profilePath: file });
@@ -171,7 +158,7 @@ test("msg.regions overrides the profile", { skip }, async () => {
 	assert.strictEqual(m.textMatches, null);
 });
 
-test("a missing profile warns once and the full-image fallback still decodes", { skip }, async () => {
+test("a missing profile warns once and the full-image fallback still decodes", async () => {
 	const { frame } = await fixture();
 	const { run, warns } = makeNode({ profilePath: path.join(tmp, "missing.json") });
 	for (let i = 0; i < 2; i++) {
@@ -185,7 +172,7 @@ test("a missing profile warns once and the full-image fallback still decodes", {
 	assert.match(warns[0], /does not exist/);
 });
 
-test("barcodes and transform of different goldens: no regions, one warning", { skip }, async () => {
+test("barcodes and transform of different goldens: no regions, one warning", async () => {
 	const { barcodes, frame } = await fixture();
 	const file = writeProfile("mixed", { barcodes: { ...barcodes, goldenContentKey: OTHER_KEY } });
 	const { run, warns } = makeNode({ profilePath: file });
@@ -198,7 +185,7 @@ test("barcodes and transform of different goldens: no regions, one warning", { s
 	assert.match(warns[0], /barcodes of one golden and a transform of another/);
 });
 
-test("a profile for another golden than the compare's: no regions, one warning", { skip }, async () => {
+test("a profile for another golden than the compare's: no regions, one warning", async () => {
 	const { barcodes, frame } = await fixture();
 	const file = writeProfile("stale", { barcodes });
 	const { run, warns } = makeNode({});
@@ -208,7 +195,7 @@ test("a profile for another golden than the compare's: no regions, one warning",
 	assert.match(warns[0], /another golden/);
 });
 
-test("a payload no larger than the compare's frame warns about resolution", { skip }, async () => {
+test("a payload no larger than the compare's frame warns about resolution", async () => {
 	const { barcodes, code, canvas } = await fixture();
 	const file = writeProfile("small", { barcodes });
 	// the 600x800 frame the compare saw; the code is placed at the
@@ -222,10 +209,10 @@ test("a payload no larger than the compare's frame warns about resolution", { sk
 	assert.strictEqual(resolution.length, 1, warns.join("\n"));
 	// a rig whose compare already gets the native frame trips the same
 	// check, so the warning has to say when it is expected
-	assert.match(resolution[0], /if golden-compare already inspects the native camera frame this is expected/);
+	assert.match(resolution[0], /already inspects the native camera frame/);
 });
 
-test("a raw payload object decodes through the profile like the PNG", { skip }, async () => {
+test("a raw payload object decodes through the profile like the PNG", async () => {
 	const { barcodes, mapped, frame } = await fixture();
 	const file = writeProfile("raw", { barcodes });
 	const { data, info } = await sharp(frame).removeAlpha().raw().toBuffer({ resolveWithObject: true });
@@ -235,7 +222,7 @@ test("a raw payload object decodes through the profile like the PNG", { skip }, 
 	assertProfileRead(await run({ payload: data, rawInfo: { width: info.width, height: info.height, channels: info.channels } }), mapped);
 });
 
-test("a read that differs from the artwork's text: textMatches false, warned once", { skip }, async () => {
+test("a read that differs from the artwork's text: textMatches false, warned once", async () => {
 	const { barcodes, frame } = await fixture();
 	const wrong = { ...barcodes, regions: [{ ...barcodes.regions[0], text: "VT-SOMETHING-ELSE" }] };
 	const file = writeProfile("wrongtext", { barcodes: wrong });
@@ -250,7 +237,7 @@ test("a read that differs from the artwork's text: textMatches false, warned onc
 	assert.match(warns[0], /where the golden's artwork has "VT-SOMETHING-ELSE"/);
 });
 
-test("a calibration on an already rectified payload warns once (un-rectified twice)", { skip }, async () => {
+test("a calibration on an already rectified payload warns once (un-rectified twice)", async () => {
 	const { barcodes, mapped, frame } = await fixture();
 	const file = writeProfile("calibrated", { barcodes });
 	const scaleFilePath = path.join(tmp, "calibration.json");
@@ -269,7 +256,7 @@ test("a calibration on an already rectified payload warns once (un-rectified twi
 	assert.match(warns[0], /un-rectified twice/);
 });
 
-test("the none-found message carries null symbol, expectedText and textMatches", { skip }, async () => {
+test("the none-found message carries null symbol, expectedText and textMatches", async () => {
 	const { barcodes, canvas } = await fixture();
 	const file = writeProfile("blank", { barcodes });
 	const blank = await canvas(PAYLOAD).png().toBuffer();
@@ -282,7 +269,7 @@ test("the none-found message carries null symbol, expectedText and textMatches",
 	assert.strictEqual(m.textMatches, null);
 });
 
-test("overlapping padded regions: each code gets its own region's text", { skip }, async () => {
+test("overlapping padded regions: each code gets its own region's text", async () => {
 	// The demo label's case: two Code128s close together, so a padded
 	// region holds the centre of both codes. Stacked here, 60 px apart;
 	// with regionPadMinPx 100 (200 payload px) region 1 reaches 200 px
@@ -335,7 +322,7 @@ test("overlapping padded regions: each code gets its own region's text", { skip 
 	assert.deepStrictEqual(warns, []);
 });
 
-test("the identity checked against golden-compare is the barcodes section's, not golden.contentKey", { skip }, async () => {
+test("the identity checked against golden-compare is the barcodes section's, not golden.contentKey", async () => {
 	// writeProfileSection merges the golden record on every write: a
 	// nuisance training for revised artwork B leaves transform A and
 	// barcodes A in the file under golden.contentKey B
@@ -352,7 +339,7 @@ test("the identity checked against golden-compare is the barcodes section's, not
 	assert.match(warns[0], /another golden/);
 });
 
-test("a profile path that cannot even be stat'ed warns once and does not fail the message", { skip }, async () => {
+test("a profile path that cannot even be stat'ed warns once and does not fail the message", async () => {
 	const { frame } = await fixture();
 	const { run, warns } = makeNode({});
 	const bad = path.join(tmp, "bad\0name.json"); // fs refuses it: ERR_INVALID_ARG_VALUE
@@ -366,7 +353,7 @@ test("a profile path that cannot even be stat'ed warns once and does not fail th
 	assert.match(warns[0], /cannot be used/);
 });
 
-test("a profile fixed and then broken again is warned again", { skip }, async () => {
+test("a profile fixed and then broken again is warned again", async () => {
 	const { barcodes, frame } = await fixture();
 	const broken = { ...barcodes, goldenContentKey: OTHER_KEY };
 	const file = writeProfile("flaky", { barcodes: broken });
@@ -386,7 +373,7 @@ test("a profile fixed and then broken again is warned again", { skip }, async ()
 	assert.match(warns[1], /barcodes of one golden and a transform of another/);
 });
 
-test("a text mismatch is warned once per (expected, read) pair", { skip }, async () => {
+test("a text mismatch is warned once per (expected, read) pair", async () => {
 	const { barcodes, frame } = await fixture();
 	const withText = (text) => ({ ...barcodes, regions: [{ ...barcodes.regions[0], text }] });
 	const file = writeProfile("pairs", { barcodes: withText("VT-EXPECTED-ONE") });
@@ -419,61 +406,74 @@ function upstreamResult(
 // px, well past the 128 px pad, so a region placed by it misses the code
 const WRONG = { ox: TRANSFORM.placement.ox + 150, oy: TRANSFORM.placement.oy + 150, angleDeg: 0 };
 
-test("no trained transform: golden-compare's transform for the frame places the regions", { skip }, async () => {
+// Which placement puts the regions. The frame's own (golden-compare's
+// transform for this frame) wins whenever it is trustworthy; otherwise the
+// trained one. Every row places the losing candidate at WRONG, so a row
+// that took the wrong branch misses the code instead of reading it. Grade
+// "good" and "marginal" take the same branch (only "poor" is refused), so
+// one row covers both.
+const PLACEMENT_CASES = [
+	{
+		name: "no trained transform: the frame's placement",
+		trained: null,
+		upstream: {},
+		expected: "frame",
+	},
+	{
+		name: "a marginal frame registered: its placement beats a stale trained one",
+		trained: { ...TRANSFORM, placement: WRONG },
+		upstream: { grade: "marginal" },
+		expected: "frame",
+	},
+	{
+		name: "a frame graded poor: the trained placement",
+		trained: TRANSFORM,
+		upstream: { placement: WRONG, grade: "poor" },
+		expected: "trained",
+	},
+	// graded good, yet not a placement of this golden's artwork
+	{
+		name: "a labelMissing frame graded good: the trained placement",
+		trained: TRANSFORM,
+		upstream: { placement: WRONG, labelMissing: true },
+		expected: "trained",
+	},
+	{
+		name: "a mismatchSuspected frame graded good: the trained placement",
+		trained: TRANSFORM,
+		upstream: { placement: WRONG, mismatchSuspected: true },
+		expected: "trained",
+	},
+	{
+		name: "an older golden-compare (no frame sizes): the trained placement",
+		trained: TRANSFORM,
+		upstream: { placement: WRONG },
+		dropFrameSizes: true,
+		expected: "trained",
+	},
+];
+
+test("placement precedence: the frame's own when trustworthy, else the trained one", async () => {
 	const { barcodes, mapped, frame } = await fixture();
-	const file = writeProfile("untrained", { transform: null, barcodes });
-	const { run, warns } = makeNode({});
-	const out = await run({ payload: frame, result: upstreamResult(file) });
-	assertProfileRead(out, mapped);
-	assert.strictEqual(out[0].regionPlacement, "frame");
-	assert.deepStrictEqual(warns, []);
+	const failures = [];
+	for (const [i, { name, trained, upstream, dropFrameSizes, expected }] of PLACEMENT_CASES.entries()) {
+		try {
+			const file = writeProfile(`placement-${i}`, { transform: trained, barcodes });
+			const result = upstreamResult(file, upstream);
+			if (dropFrameSizes) delete result.transform.frameNativeWidth;
+			const { run, warns } = makeNode({ mode: "regionsOnly" });
+			const out = await run({ payload: frame, result });
+			assertProfileRead(out, mapped);
+			assert.strictEqual(out[0].regionPlacement, expected);
+			assert.deepStrictEqual(warns, []);
+		} catch (err) {
+			failures.push(`${name}: ${err.message.split("\n")[0]}`);
+		}
+	}
+	assert.deepStrictEqual(failures, []);
 });
 
-test("the frame's own placement wins over the trained one", { skip }, async () => {
-	const { barcodes, mapped, frame } = await fixture();
-	// trained where the part sat on some other frame
-	const file = writeProfile("stale-placement", { transform: { ...TRANSFORM, placement: WRONG }, barcodes });
-	const { run, warns } = makeNode({ mode: "regionsOnly" });
-	const out = await run({ payload: frame, result: upstreamResult(file) });
-	assertProfileRead(out, mapped);
-	assert.strictEqual(out[0].regionPlacement, "frame");
-	assert.deepStrictEqual(warns, []);
-});
-
-test("a frame that did not register falls back to the trained transform", { skip }, async () => {
-	const { barcodes, mapped, frame } = await fixture();
-	const file = writeProfile("unregistered", { barcodes });
-	const { run, warns } = makeNode({ mode: "regionsOnly" });
-	const out = await run({ payload: frame, result: upstreamResult(file, { placement: WRONG, grade: "poor" }) });
-	assertProfileRead(out, mapped);
-	assert.strictEqual(out[0].regionPlacement, "trained");
-	assert.deepStrictEqual(warns, []);
-});
-
-test("a marginal frame registered: its own placement wins over the trained one", { skip }, async () => {
-	const { barcodes, mapped, frame } = await fixture();
-	const file = writeProfile("marginal", { transform: { ...TRANSFORM, placement: WRONG }, barcodes });
-	const { run, warns } = makeNode({ mode: "regionsOnly" });
-	const out = await run({ payload: frame, result: upstreamResult(file, { grade: "marginal" }) });
-	assertProfileRead(out, mapped);
-	assert.strictEqual(out[0].regionPlacement, "frame");
-	assert.deepStrictEqual(warns, []);
-});
-
-// graded good, yet not a placement of this golden's artwork
-for (const flag of ["labelMissing", "mismatchSuspected"]) {
-	test(`a ${flag} frame falls back to the trained transform, even graded good`, { skip }, async () => {
-		const { barcodes, mapped, frame } = await fixture();
-		const file = writeProfile(`flag-${flag}`, { barcodes });
-		const { run, warns } = makeNode({ mode: "regionsOnly" });
-		const out = await run({ payload: frame, result: upstreamResult(file, { placement: WRONG, [flag]: true }) });
-		assertProfileRead(out, mapped);
-		assert.strictEqual(out[0].regionPlacement, "trained");
-		assert.deepStrictEqual(warns, []);
-	});
-}
-
-test("no trained transform and a frame that did not register: full image, no profile warning", { skip }, async () => {
+test("no trained transform and a frame that did not register: full image, no profile warning", async () => {
 	const { barcodes, frame } = await fixture();
 	const file = writeProfile("nothing-to-place", { transform: null, barcodes });
 	const { run, warns } = makeNode({});
@@ -483,7 +483,7 @@ test("no trained transform and a frame that did not register: full image, no pro
 	assert.deepStrictEqual(warns, [], "golden-compare already reported the registration");
 });
 
-test("no trained transform and no golden-compare upstream: warned once, full image", { skip }, async () => {
+test("no trained transform and no golden-compare upstream: warned once, full image", async () => {
 	const { barcodes, frame } = await fixture();
 	const file = writeProfile("no-upstream", { transform: null, barcodes });
 	const { run, warns } = makeNode({ profilePath: file });
@@ -493,15 +493,4 @@ test("no trained transform and no golden-compare upstream: warned once, full ima
 	}
 	assert.strictEqual(warns.length, 1, warns.join("\n"));
 	assert.match(warns[0], /nothing to place them with/);
-});
-
-test("an upstream transform without the frame's sizes (an older golden-compare) is not used", { skip }, async () => {
-	const { barcodes, mapped, frame } = await fixture();
-	const file = writeProfile("old-upstream", { barcodes });
-	const result = upstreamResult(file, { placement: WRONG });
-	delete result.transform.frameNativeWidth;
-	const { run } = makeNode({ mode: "regionsOnly" });
-	const out = await run({ payload: frame, result });
-	assertProfileRead(out, mapped);
-	assert.strictEqual(out[0].regionPlacement, "trained");
 });

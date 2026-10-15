@@ -28,7 +28,9 @@ const {
 const { buildIntegral } = require("../lib/integral.js");
 const { warpGray, buildGrayTable } = require("../lib/warp.js");
 const { refineLocally } = require("../lib/localAlign.js");
-const { shutdown } = require("../lib/pool.js");
+const { thresholdForeground } = require("../lib/threshold.js");
+const { diffRows } = require("../lib/diffRows.js");
+const { shutdown, shouldParallelise, poolSize } = require("../lib/pool.js");
 const { HAS_SAB } = require("../lib/shared.js");
 
 test.after(() => shutdown());
@@ -127,14 +129,9 @@ test("parallel binarize is byte-identical to serial", {
 	const margin = 9;
 	const par = await binarizeParallel(gray, W, H, level, margin, 4);
 	assert.ok(par, "precondition: the fixture should be big enough to split");
-	for (let i = 0; i < gray.length; i++) {
-		assert.strictEqual(par.fg[i], gray[i] < level ? 1 : 0, `fg differs at ${i}`);
-		assert.strictEqual(
-			par.ambiguous[i],
-			gray[i] >= level - margin && gray[i] <= level + margin ? 1 : 0,
-			`ambiguity differs at ${i}`,
-		);
-	}
+	const serial = thresholdForeground(gray, W, H, { thresholdMode: "fixed", threshold: level, inkMargin: margin });
+	assert.ok(same(serial.fg, par.fg), "the ink mask diverged");
+	assert.ok(same(serial.ambiguous, par.ambiguous), "the ambiguity mask diverged");
 });
 
 test("parallel defect matches, count included", {
@@ -142,22 +139,44 @@ test("parallel defect matches, count included", {
 }, async () => {
 	const a = binary(noisy(W, H, 3), 120);
 	const b = binary(noisy(W, H, 4), 120);
-	const amb = binary(noisy(W, H, 5), 20);
-	const par = await defectParallel(a, b, amb, null, W, H, 4);
+	const ambA = binary(noisy(W, H, 5), 20);
+	const ambB = binary(noisy(W, H, 6), 20);
+	const par = await defectParallel(a, b, ambA, ambB, W, H, 4);
 	assert.ok(par, "precondition: should have run in parallel");
 
-	let count = 0;
-	for (let i = 0; i < a.length; i++) {
-		let d = a[i] & ~b[i] & 1;
-		if (d && amb[i]) d = 0;
-		assert.strictEqual(par.defect[i], d, `defect differs at ${i}`);
-		count += d;
-	}
-	assert.strictEqual(
-		par.count,
-		count,
-		"the count must match the mask it describes",
+	// the serial reference: lib/diffRows.js's background channel is the
+	// same "a AND NOT b, cleared where either side is ambiguous", here with
+	// no dilation, no edge margin and no print channel (goldenFg all zero)
+	const blockSize = 8;
+	const cells = Math.ceil(W / blockSize) * Math.ceil(H / blockSize);
+	const serial = new Uint8Array(W * H);
+	const tally = [0, 0];
+	diffRows(
+		{
+			targetFg: a,
+			goldenFg: new Uint8Array(W * H),
+			goldenFgDilatedBackground: b,
+			targetAmbiguous: ambA,
+			goldenAmbiguous: ambB,
+			dilated: null,
+			printDefect: new Uint8Array(W * H),
+			backgroundDefect: serial,
+			printBlocks: new Uint32Array(cells),
+			backgroundBlocks: new Uint32Array(cells),
+			width: W,
+			height: H,
+			blockSize,
+			radius: 0,
+			margin: 0,
+		},
+		0,
+		Math.ceil(H / blockSize),
+		tally,
+		{ rows: new Uint8Array(0), cols: new Int32Array(0) },
 	);
+	assert.ok(tally[1] > 0, "precondition: the fixture has defects to find");
+	assert.ok(same(serial, par.defect), "the defect mask diverged");
+	assert.strictEqual(par.count, tally[1], "the count must match the mask it describes");
 });
 
 // The end-to-end frame test below never exercises the area-average warp
@@ -212,53 +231,18 @@ test("parallel area-average warp is byte-identical to serial", {
 	);
 });
 
-// Without a summed-area table warpParallel either falls back to warpGray
-// (magnifying: the area-average path needs the table, and warpGray builds
-// its own) or splits the bilinear path, which reads the source alone.
-// Neither is a different resampling, so assert both byte for byte.
+// Magnifying without a summed-area table, warpParallel falls back to
+// warpGray, which builds its own. The bilinear path without a table is
+// split and held to the byte in test/alignPool.test.js ("a warp that is
+// not magnifying splits across the pool").
 test("parallel warp without a summed-area table matches serial", {
 	skip: !HAS_SAB,
 }, async () => {
-	const srcW = 900;
-	const srcH = 800;
-	const src = noisy(srcW, srcH, 10);
-	const outW = 700;
-	const outH = 600;
-	for (const [mx, my] of [
-		[2.5, 1.75], // m > 1: serial takes the area-average path, building its own table
-		[0.8, 0.9], // m <= 1: the bilinear path, split across the pool
-	]) {
-		const serial = warpGray(
-			src,
-			srcW,
-			srcH,
-			mx,
-			my,
-			0.01,
-			3.5,
-			-2.25,
-			outW,
-			outH,
-			255,
-			null,
-		);
-		const par = await warpParallel(
-			src,
-			srcW,
-			srcH,
-			mx,
-			my,
-			0.01,
-			3.5,
-			-2.25,
-			outW,
-			outH,
-			255,
-			null, // no table
-			4,
-		);
-		assert.ok(same(serial, par), `the no-table warp diverged at m=(${mx},${my})`);
-	}
+	// m > 1: serial takes the area-average path, building its own table
+	const args = [noisy(900, 800, 10), 900, 800, 2.5, 1.75, 0.01, 3.5, -2.25, 700, 600, 255, null];
+	const serial = warpGray(...args);
+	const par = await warpParallel(...args, 4);
+	assert.ok(same(serial, par), "the no-table warp diverged");
 });
 
 // The end-to-end frame test below also never exercises the parallel local
@@ -417,21 +401,9 @@ test("a frame compares identically with and without workers", {
 		serial.backgroundBlemish.regions.length > 0,
 		"precondition: the blob is found",
 	);
-	assert.strictEqual(
-		parallel.printBlemish.defectRatio,
-		serial.printBlemish.defectRatio,
-	);
-	assert.strictEqual(
-		parallel.backgroundBlemish.defectRatio,
-		serial.backgroundBlemish.defectRatio,
-	);
-	assert.strictEqual(
-		parallel.backgroundBlemish.regions.length,
-		serial.backgroundBlemish.regions.length,
-	);
-	assert.strictEqual(parallel.position.dxPx, serial.position.dxPx);
-	assert.strictEqual(parallel.position.dyPx, serial.position.dyPx);
-	assert.strictEqual(parallel.pass, serial.pass);
+	// every field of the result, timings aside
+	const verdict = (r) => JSON.stringify({ ...r, timings: null });
+	assert.strictEqual(verdict(parallel), verdict(serial));
 
 	// With the tone and speck checks on, the pool's local alignment counts
 	// their histograms and Otsu's as it resamples, where one worker runs
@@ -448,17 +420,22 @@ test("a frame compares identically with and without workers", {
 	const tonePool = await compareFrame(targetBuf, await prepareGolden(goldenBuf, toned(4)), toned(4));
 	assert.ok(toneSerial.toneBlemish.enabled, "precondition: the tone check runs");
 	assert.ok(toneSerial.toneBlemish.regions.length > 0, "precondition: the tone check finds the blob");
-	const verdict = (r) => JSON.stringify({ ...r, timings: null });
 	assert.strictEqual(verdict(tonePool), verdict(toneSerial));
 });
 
 // ---- rectify -------------------------------------------------------------
 
-test("rectifyParallel is byte-identical to the serial warpPerspective", async () => {
+test("rectifyParallel is byte-identical to the serial warpPerspective", {
+	skip: !HAS_SAB,
+}, async () => {
 	const { rectifyParallel } = require("../lib/parallel.js");
 	const { warpPerspective } = require("../lib/rectify.js");
 	const width = 900;
-	const height = 700; // 630k px, above MIN_PIXELS_TO_SPLIT
+	const height = 700;
+	assert.ok(
+		shouldParallelise(width * height, 4) && poolSize(4) >= 2,
+		"precondition: the frame must be big enough to split",
+	);
 	for (const channels of [1, 3]) {
 		const data = new Uint8Array(width * height * channels);
 		let seed = 3;
@@ -470,7 +447,6 @@ test("rectifyParallel is byte-identical to the serial warpPerspective", async ()
 		const H = [1.02, 0.004, -3.5, -0.003, 0.98, 6.25, 2e-6, -3e-6, 1];
 		const serial = warpPerspective(src, H);
 		const pooled = await rectifyParallel(src, H, 4);
-		assert.notStrictEqual(pooled, serial);
 		assert.strictEqual(Buffer.compare(Buffer.from(pooled.data), Buffer.from(serial.data)), 0, `${channels}ch differs`);
 	}
 });

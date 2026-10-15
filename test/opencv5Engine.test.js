@@ -174,17 +174,17 @@ test("crop gives the opencv.js engine's bytes; rotate its canvas, within one gre
 	}
 });
 
-test("label-crop deskews a rotated label on the opencv5 engine", { skip }, async () => {
-	const frame = labelFrame(800, 600, 12, 360, 220, 3);
-	const result = await labelCrop(frame, { maxEdge: 400, polarity: "light", outputFormat: "raw" }, own);
-	assert.strictEqual(result.detected, true, result.metadata.reason);
-	assert.ok(Math.abs(result.metadata.angleDeg - 12) < 2, `angle ${result.metadata.angleDeg}`);
-});
-
-test("label-crop takes an encoded Buffer through sharp on the opencv5 engine", { skip }, async () => {
+test("label-crop decodes an encoded PNG Buffer and crops its label on the opencv5 engine", { skip }, async () => {
 	const sharp = require("sharp");
 	const frame = labelFrame(800, 600, 0, 400, 200, 3);
 	const png = await sharp(frame.data, { raw: { width: 800, height: 600, channels: 3 } }).png().toBuffer();
 	const result = await labelCrop(png, { maxEdge: 400, polarity: "light", outputFormat: "raw" }, own);
 	assert.strictEqual(result.detected, true, result.metadata.reason);
+	assert.ok(Math.abs(result.metadata.angleDeg) < 2, `angle ${result.metadata.angleDeg}`);
+	assert.ok(
+		Math.abs(result.image.width / result.image.height - 400 / 200) < 0.1,
+		`crop ${result.image.width}x${result.image.height}`,
+	);
+	assert.ok(Math.abs(result.metadata.center.x - 400) <= 3, `center.x ${result.metadata.center.x}`);
+	assert.ok(Math.abs(result.metadata.center.y - 300) <= 3, `center.y ${result.metadata.center.y}`);
 });

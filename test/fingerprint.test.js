@@ -168,9 +168,8 @@ test("an overwritten golden is still noticed, and re-read exactly once", async (
 	const { run } = makeNode({ ...CFG, goldenPath });
 	await run({ payload: frame });
 
-	// a different golden, and a different size so mtime granularity cannot
-	// hide it
-	await new Promise((r) => setTimeout(r, 12));
+	// a different golden, and a different file size, so the (mtime, size)
+	// key moves even when mtime granularity hides the rewrite
 	await fsp.writeFile(goldenPath, await png(labelSvg(620, 920)));
 
 	reset();
@@ -268,25 +267,5 @@ test("a golden deleted under a named key is still an error", async () => {
 		run({ payload: frame, goldenKey: "named" }),
 		/does not exist on disk/,
 	);
-	await fsp.rm(dir, { recursive: true, force: true });
-});
-
-test("a Buffer payload survives repeated frames unchanged", async () => {
-	// This began as "passed to sharp without a copy", which was true until
-	// the pipeline moved into the inspector: the frame now has to reach
-	// shared memory, so a Buffer payload pays one ~12ms copy at dispatch.
-	// A Uint8Array or ArrayBuffer pays exactly one too - it goes straight
-	// to shared rather than to a Buffer and then to shared.
-	const dir = await tmpDir();
-	const goldenPath = path.join(dir, "golden.png");
-	await fsp.writeFile(goldenPath, await png(labelSvg(600, 900)));
-	const frame = await png(labelSvg(600, 900));
-
-	const { run } = makeNode({ ...CFG, goldenPath });
-	// a Buffer whose contents would be corrupted by a copy-then-mutate is
-	// hard to observe directly, so assert the cheap observable instead: the
-	// frame still compares successfully and byte-identically twice
-	await run({ payload: frame });
-	await run({ payload: frame });
 	await fsp.rm(dir, { recursive: true, force: true });
 });

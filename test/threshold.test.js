@@ -34,17 +34,46 @@ test("the level lands mid-gap whatever the two levels are", () => {
 	assert.ok(level >= 100 && level <= 140, `level ${level}`);
 });
 
-test("a photograph-like histogram is unchanged: one level, between the modes", () => {
-	// two broad modes, no empty gap between them
+// Classic Otsu: the first level of maximum between-class variance, the
+// rule before the plateau midpoint was added
+function classicOtsu(gray) {
+	const hist = new Array(256).fill(0);
+	for (const v of gray) hist[v]++;
+	let sumAll = 0;
+	for (let t = 0; t < 256; t++) sumAll += t * hist[t];
+	let sumB = 0;
+	let weightB = 0;
+	let best = 0;
+	let level = 0;
+	for (let t = 0; t < 256; t++) {
+		weightB += hist[t];
+		if (weightB === 0) continue;
+		const weightF = gray.length - weightB;
+		if (weightF === 0) break;
+		sumB += t * hist[t];
+		const d = sumB / weightB - (sumAll - sumB) / weightF;
+		const variance = weightB * weightF * d * d;
+		if (variance > best) {
+			best = variance;
+			level = t;
+		}
+	}
+	return level;
+}
+
+test("a photograph-like histogram is unchanged: classic Otsu's level, between the modes", () => {
+	// two broad modes, no empty bin between them: at a spread of 40 the
+	// modes left 106..152 empty, a gap the plateau midpoint does move
 	const gray = new Uint8Array(400 * 400);
 	let seed = 7;
 	const rnd = () => ((seed = (seed * 1103515245 + 12345) & 0x7fffffff) / 0x7fffffff);
 	for (let i = 0; i < gray.length; i++) {
 		const ink = i % 7 === 0;
-		const g = (ink ? 50 : 210) + Math.round((rnd() + rnd() + rnd() - 1.5) * 40);
+		const g = (ink ? 50 : 210) + Math.round((rnd() + rnd() + rnd() - 1.5) * 60);
 		gray[i] = Math.max(0, Math.min(255, g));
 	}
 	const level = otsuThreshold(gray);
+	assert.strictEqual(level, classicOtsu(gray), "the plateau midpoint must not move a photograph's level");
 	assert.ok(level > 90 && level < 170, `level ${level}`);
 });
 

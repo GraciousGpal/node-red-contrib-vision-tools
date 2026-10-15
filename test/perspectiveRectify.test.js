@@ -36,7 +36,15 @@ function makeNode(config = {}) {
 	return { node, run, sent, errors, doneErrors };
 }
 
-const tmpDir = () => fsp.mkdtemp(path.join(os.tmpdir(), "gc-rectify-"));
+const made = [];
+test.after(() =>
+	Promise.all(made.map((d) => fsp.rm(d, { recursive: true, force: true }))),
+);
+const tmpDir = async () => {
+	const dir = await fsp.mkdtemp(path.join(os.tmpdir(), "gc-rectify-"));
+	made.push(dir);
+	return dir;
+};
 
 // shift right by 3, down by 2: a homography whose effect is easy to read
 // off a pixel
@@ -87,7 +95,6 @@ test("a raw frame is warped through the stored homography and comes back raw", a
 	assert.strictEqual(meta.reason, "ok");
 	assert.deepStrictEqual(meta.homography, SHIFT);
 	assert.strictEqual(meta.rescaledFrom, null);
-	assert.strictEqual(typeof meta.timings.warpMs, "number");
 });
 
 test("an identity homography passes the frame through and says so", async () => {

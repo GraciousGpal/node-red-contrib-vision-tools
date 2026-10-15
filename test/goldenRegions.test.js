@@ -113,7 +113,7 @@ test("no recorded placement: the nominal one, with a warning", () => {
 	assert.deepStrictEqual(only(result), pinned, "the fallback is exactly the nominal placement");
 });
 
-test("goldenToFrameAffine is the compare's model", () => {
+test("goldenToFrameAffine at 90 degrees sends golden (gx, gy) to (ox - my*gy, oy + mx*gx)", () => {
 	const A = goldenToFrameAffine(TRANSFORM, { ox: 10, oy: 20, angleDeg: 90 });
 	// 90 degrees: tx = ox - my*gy, ty = oy + mx*gx
 	const gx = 100;
@@ -156,10 +156,7 @@ test("a payload of another aspect warns", () => {
 test("a calibration of another aspect warns and gives no regions, without throwing", () => {
 	// 3000x3000 against a 3000x3700 payload is far past rescaleHomography's 0.5 %
 	const calibration = { homography: [1, 0, 0, 0, 1, 0, 0, 0, 1], nativeWidth: 3000, nativeHeight: 3000 };
-	let result;
-	assert.doesNotThrow(() => {
-		result = mapProfileRegions(profile(), PAYLOAD, calibration, {});
-	});
+	const result = mapProfileRegions(profile(), PAYLOAD, calibration, {});
 	assert.deepStrictEqual(result.regions, []);
 	assert.strictEqual(result.warnings.length, 1);
 	assert.match(result.warnings[0], /cannot undo the rectification: .*aspect ratio/);

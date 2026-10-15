@@ -130,104 +130,31 @@ test("a truncated baseline is refused, not silently padded", () => {
 	assert.equal(nuisance.decodeBaseline("AAAA", cells), null);
 });
 
-// ---- identity guards ----------------------------------------------------
+// ---- the map file -------------------------------------------------------
+// The identity guards (blockSize, workingSize, grid, golden, version) are
+// one table in test/nuisanceValidate.test.js, run through both
+// readNuisanceMap and validateNuisanceRecord. What only the file read does
+// stays here.
 
-function tmpFile() {
-	const dir = fs.mkdtempSync(path.join(os.tmpdir(), "nuisance-"));
-	return path.join(dir, "map.json");
-}
-
-async function writeMap(overrides = {}) {
-	const file = tmpFile();
-	const acc = nuisance.createAccumulator(GW, GH);
-	nuisance.accumulate(acc, withArtifact(5, 0.25));
-	const baseline = nuisance.finalize(acc);
-	const record = {
-		...nuisance.buildRecord(baseline, acc, {
-			blockSize: 8,
-			workingSize: 2125,
-			goldenKey: "key:a",
-			goldenContentKey: "sha:aaa",
-		}),
-		...overrides,
-	};
-	await nuisance.writeNuisanceMap(file, record);
-	return file;
-}
-
-const EXPECT = {
-	goldenKey: "key:a",
-	goldenContentKey: "sha:aaa",
-	workingSize: 2125,
-	blockSize: 8,
-};
-
-test("a matching map loads", async () => {
-	const file = await writeMap();
-	const got = await nuisance.readNuisanceMap(file, EXPECT);
-	assert.ok(got && !got.error, got && got.error);
-	assert.equal(got.baseline.length, cells);
+const made = [];
+test.after(() => {
+	for (const d of made) fs.rmSync(d, { recursive: true, force: true });
 });
 
 test("no file at all is simply absent, not an error", async () => {
 	assert.equal(
-		await nuisance.readNuisanceMap(path.join(os.tmpdir(), "nope-xyz.json"), EXPECT),
+		await nuisance.readNuisanceMap(path.join(os.tmpdir(), "nope-xyz.json"), {}),
 		null,
 	);
-	assert.equal(await nuisance.readNuisanceMap("", EXPECT), null);
-});
-
-test("a map trained at another blockSize is refused", async () => {
-	const file = await writeMap({ blockSize: 16 });
-	const got = await nuisance.readNuisanceMap(file, EXPECT);
-	assert.match(got.error, /trained at blockSize 16/);
-});
-
-test("a map trained at another workingSize is refused", async () => {
-	const file = await writeMap({ workingSize: 2656 });
-	const got = await nuisance.readNuisanceMap(file, EXPECT);
-	assert.match(got.error, /trained at workingSize 2656/);
-});
-
-test("a map whose grid does not fit this comparison is refused", async () => {
-	const file = await writeMap();
-	const got = await nuisance.readNuisanceMap(file, {
-		...EXPECT,
-		gridW: 185,
-		gridH: 266,
-	});
-	assert.match(got.error, /grid is 6x4/);
-});
-
-test("a map trained against a different golden is refused", async () => {
-	const file = await writeMap({ goldenKey: "key:b", goldenContentKey: "sha:bbb" });
-	const got = await nuisance.readNuisanceMap(file, EXPECT);
-	assert.match(got.error, /different golden/);
-});
-
-test("the same golden delivered another way is recognised by content", async () => {
-	// cheap keys disagree - one arrived as a buffer, one as a path - but the
-	// content hash settles it, exactly as the trained transform does
-	const file = await writeMap({ goldenKey: "buf:1", goldenContentKey: "sha:aaa" });
-	const got = await nuisance.readNuisanceMap(file, {
-		...EXPECT,
-		goldenKey: "path:/x:1:2",
-		goldenContentKey: async () => "sha:aaa",
-	});
-	assert.ok(got && !got.error, got && got.error);
-});
-
-test("a future map version is refused rather than misread", async () => {
-	const file = await writeMap({ version: 99 });
-	const got = await nuisance.readNuisanceMap(file, EXPECT);
-	assert.match(got.error, /version 99/);
+	assert.equal(await nuisance.readNuisanceMap("", {}), null);
 });
 
 test("corrupt JSON is reported, not thrown", async () => {
-	const file = tmpFile();
-	fs.mkdirSync(path.dirname(file), { recursive: true });
+	const dir = fs.mkdtempSync(path.join(os.tmpdir(), "nuisance-"));
+	made.push(dir);
+	const file = path.join(dir, "map.json");
 	fs.writeFileSync(file, "{not json");
-	const got = await nuisance.readNuisanceMap(file, EXPECT);
+	const got = await nuisance.readNuisanceMap(file, {});
 	assert.match(got.error, /not readable JSON/);
 });
 

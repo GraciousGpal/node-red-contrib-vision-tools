@@ -110,42 +110,31 @@ function spread(truth, n) {
 	return out;
 }
 
-test("the objective kernel scores exactly as the serial scorer", { skip: !HAS_SAB }, async () => {
-	const frame = frameFixture();
+// Built once: every test only reads it.
+const FRAME = frameFixture();
+
+// Exact, in order, however the batch was split: each worker count must
+// hand back the serial score in each candidate's own slot.
+test("the objective kernel scores exactly as the serial scorer, in order, at any worker count", { skip: !HAS_SAB }, async () => {
+	const frame = FRAME;
 	const cands = spread(frame.truth, 14);
-	const batched = await objectiveBatchParallel(cands, frame, 4);
-	assert.ok(batched !== null, "precondition: the batch should have run in parallel");
-	for (let i = 0; i < cands.length; i++) {
-		// strictEqual, not a tolerance: these numbers are compared with each
-		// other to choose a transform
-		assert.strictEqual(batched[i], serialScore(frame, cands[i]), `candidate ${i} diverged`);
-	}
-});
-
-test("scores do not depend on how the batch was split", { skip: !HAS_SAB }, async () => {
-	const frame = frameFixture();
-	const cands = spread(frame.truth, 11);
-	const a = await objectiveBatchParallel(cands, frame, 2);
-	const b = await objectiveBatchParallel(cands, frame, 8);
-	assert.ok(a !== null && b !== null, "precondition: both should have run in parallel");
-	assert.deepStrictEqual(a, b, "two worker counts, two answers");
-});
-
-test("a batch is scored in the order it was given", { skip: !HAS_SAB }, async () => {
-	const frame = frameFixture();
 	// deliberately unequal at the ends so a transposition cannot hide
-	const cands = spread(frame.truth, 9);
 	cands[0].ox += 25;
-	cands[8].oy -= 25;
-	const got = await objectiveBatchParallel(cands, frame, 4);
-	assert.ok(got !== null, "precondition: the batch should have run in parallel");
-	for (let i = 0; i < cands.length; i++) {
-		assert.strictEqual(got[i], serialScore(frame, cands[i]), `slot ${i} holds the wrong candidate`);
+	cands[13].oy -= 25;
+	const serial = cands.map((c) => serialScore(frame, c));
+	for (const workers of [2, 4, 8]) {
+		const batched = await objectiveBatchParallel(cands, frame, workers);
+		assert.ok(batched !== null, `precondition: the batch should have run in parallel on ${workers} workers`);
+		for (let i = 0; i < cands.length; i++) {
+			// strictEqual, not a tolerance: these numbers are compared with each
+			// other to choose a transform
+			assert.strictEqual(batched[i], serial[i], `candidate ${i} diverged on ${workers} workers`);
+		}
 	}
 });
 
 test("a single candidate falls back rather than paying a dispatch", async () => {
-	const frame = frameFixture();
+	const frame = FRAME;
 	const got = await objectiveBatchParallel([{ ...frame.truth }], frame, 8);
 	assert.strictEqual(got, null, "a one-candidate batch should not be split");
 });
@@ -197,7 +186,7 @@ function greedyWalk(score, start, gW, gH, maxAngleDeg, lockScale) {
 }
 
 test("the pattern search converges at least as well as the walk it replaced", async () => {
-	const frame = frameFixture();
+	const frame = FRAME;
 	const gW = OW * 4;
 	const gH = OH * 4;
 	const score = (c) => serialScore(frame, c);
@@ -223,24 +212,8 @@ test("the pattern search converges at least as well as the walk it replaced", as
 	assert.ok(polled.score < score(start), "the polish should improve on its start");
 });
 
-test("the polish is deterministic", async () => {
-	const frame = frameFixture();
-	const score = (c) => serialScore(frame, c);
-	const start = {
-		mx: frame.truth.mx * 1.004,
-		my: frame.truth.my * 0.997,
-		theta: frame.truth.theta,
-		ox: frame.truth.ox + 3,
-		oy: frame.truth.oy - 3,
-		score: Infinity,
-	};
-	const a = await polish(async (c) => c.map(score), start, OW * 4, OH * 4, 2, false);
-	const b = await polish(async (c) => c.map(score), start, OW * 4, OH * 4, 2, false);
-	assert.deepStrictEqual(a, b, "the same start gave two different answers");
-});
-
 test("polling stops when nothing improves", async () => {
-	const frame = frameFixture();
+	const frame = FRAME;
 	let calls = 0;
 	const score = (c) => {
 		calls++;
@@ -297,21 +270,28 @@ test("a locked scale polls translation and angle only", () => {
 	}
 });
 
-test("findTransform still accepts a plain scalar objective", async () => {
+test("findTransform recovers a known offset through a plain scalar objective", async () => {
 	// the batch form is preferred, but the scalar one stays documented and
 	// is what any caller outside this package would have been written to
 	const W = 800;
 	const H = 600;
-	const svg = Buffer.from(
-		`<svg xmlns="http://www.w3.org/2000/svg" width="${W}" height="${H}">` +
-			`<rect width="100%" height="100%" fill="#fff"/>` +
-			`<rect x="120" y="80" width="300" height="180" fill="#111"/>` +
-			`<circle cx="600" cy="400" r="90" fill="#111"/></svg>`,
-	);
-	const png = await sharp(svg).greyscale().raw().toBuffer({ resolveWithObject: true });
-	const gray = new Uint8Array(png.data);
-	const fg = new Uint8Array(gray.length);
-	for (let i = 0; i < gray.length; i++) fg[i] = gray[i] < 128 ? 1 : 0;
+	const render = async (dx, dy) => {
+		const svg = Buffer.from(
+			`<svg xmlns="http://www.w3.org/2000/svg" width="${W}" height="${H}">` +
+				`<rect width="100%" height="100%" fill="#fff"/>` +
+				`<rect x="${120 + dx}" y="${80 + dy}" width="300" height="180" fill="#111"/>` +
+				`<circle cx="${600 + dx}" cy="${400 + dy}" r="90" fill="#111"/></svg>`,
+		);
+		const png = await sharp(svg).greyscale().raw().toBuffer({ resolveWithObject: true });
+		const gray = new Uint8Array(png.data);
+		const fg = new Uint8Array(gray.length);
+		for (let i = 0; i < gray.length; i++) fg[i] = gray[i] < 128 ? 1 : 0;
+		return { gray, fg };
+	};
+	const { fg } = await render(0, 0);
+	// the frame: the same artwork 13 px right and 9 px down
+	const frame = await render(13, 9);
+	const table = buildGrayTable(frame.gray, W, H);
 
 	// the three lattices lib/compare.js builds, at their own long edges
 	const lattice = (longEdge) => {
@@ -324,8 +304,19 @@ test("findTransform still accepts a plain scalar objective", async () => {
 	};
 	const signatures = { coarse: lattice(24), medium: lattice(48), fine: lattice(96) };
 
+	// a real pixel objective: the frame resampled under the candidate,
+	// thresholded, disagreeing with the golden's ink
 	let calls = 0;
-	const out = await findTransform(W, H, fg, W, H, signatures, {
+	const objective = (mx, my, theta, ox, oy) => {
+		calls++;
+		const g = warpGray(frame.gray, W, H, mx, my, theta, ox, oy, W, H, 255, table);
+		let mismatch = 0;
+		for (let i = 0; i < g.length; i++) {
+			if ((g[i] < 128 ? 1 : 0) !== fg[i]) mismatch++;
+		}
+		return mismatch / g.length;
+	};
+	const out = await findTransform(W, H, frame.fg, W, H, signatures, {
 		scaleMin: 0.9,
 		scaleMax: 1.1,
 		scaleSteps: 3,
@@ -334,12 +325,13 @@ test("findTransform still accepts a plain scalar objective", async () => {
 		rankedCandidates: 2,
 		maxAngleDeg: 0,
 		angleSteps: 1,
-		slackPx: 8,
-		objective: () => {
-			calls++;
-			return 0.5;
-		},
+		slackPx: 24,
+		objective,
 	});
 	assert.ok(calls > 0, "the scalar objective was never called");
-	assert.ok(Number.isFinite(out.mx) && Number.isFinite(out.ox));
+	assert.ok(Math.abs(out.mx - 1) < 0.01 && Math.abs(out.my - 1) < 0.01, `scale ${out.mx} ${out.my}`);
+	assert.ok(Math.abs(out.ox - 13) <= 1 && Math.abs(out.oy - 9) <= 1, `offset ${out.ox} ${out.oy}`);
+	// the score handed back is the objective's own, at the transform returned
+	assert.strictEqual(out.score, objective(out.mx, out.my, out.theta, out.ox, out.oy));
+	assert.ok(out.score < 0.002, `score ${out.score}`);
 });

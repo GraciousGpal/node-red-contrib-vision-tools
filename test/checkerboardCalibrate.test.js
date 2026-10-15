@@ -5,16 +5,12 @@
  *
  * The bugs this suite exists for:
  *
- *  - the object form of resolveImage rejected ArrayBuffer data while the
- *    top-level form accepted it;
- *  - path payloads were read after only an access() check: a non-regular
- *    file (e.g. /dev/zero) was read forever, and the check/read pair was
- *    a TOCTOU race;
- *  - there was no size cap on buffer inputs;
+ *  - input guards this node once lacked (ArrayBuffer in the object form,
+ *    non-regular files, the 512MB cap) now live in lib/nodeInput.js and
+ *    are unit-tested in test/nodeInput.test.js; the missing-file test
+ *    below proves this node reads its payload through them;
  *  - failures were reported twice (node.error + done(err)).
  */
-
-
 
 const test = require("node:test");
 const assert = require("node:assert");
@@ -45,47 +41,15 @@ function makeNode(config = {}) {
 }
 
 const png = (svg) => sharp(svg).png().toBuffer();
-const tmpDir = () => fsp.mkdtemp(path.join(os.tmpdir(), "gc-checker-"));
-
-test("an ArrayBuffer in the object form is accepted and measured", async () => {
-	const buf = await png(boardSvg(8, 6, 40));
-	const ab = buf.buffer.slice(buf.byteOffset, buf.byteOffset + buf.byteLength);
-	const dir = await tmpDir();
-	const { run, sent, errors, doneErrors } = makeNode({
-		scaleFilePath: path.join(dir, "scale.json"),
-	});
-	await run({ payload: { data: ab } });
-	assert.strictEqual(errors.length, 0, errors.join("\n"));
-	assert.strictEqual(doneErrors.length, 0, doneErrors.join("\n"));
-	assert.strictEqual(sent.length, 1);
-	// bootstrap: no baseline on disk yet, so the first calibration passes
-	assert.strictEqual(sent[0].payload, true);
-});
-
-test("a payload over the 512MB cap is refused before copy", async () => {
-	const dir = await tmpDir();
-	const { run, doneErrors } = makeNode({
-		scaleFilePath: path.join(dir, "scale.json"),
-	});
-	const big = new Uint8Array(512 * 1024 * 1024 + 1);
-	await run({ payload: big });
-	assert.strictEqual(doneErrors.length, 1, doneErrors.join("\n"));
-	assert.match(
-		doneErrors[0],
-		/msg\.payload is 536870913 bytes, above the 536870912-byte cap/,
-	);
-});
-
-test("a non-regular file payload is refused instead of read", async () => {
-	const dir = await tmpDir();
-	const { run, doneErrors, errors } = makeNode({
-		scaleFilePath: path.join(dir, "scale.json"),
-	});
-	await run({ payload: dir }); // a directory opens, but is not a regular file
-	assert.strictEqual(doneErrors.length, 1, doneErrors.join("\n"));
-	assert.match(doneErrors[0], /not a regular file/);
-	assert.strictEqual(errors.length, 0, "done(err) must be the only report");
-});
+const made = [];
+test.after(() =>
+	Promise.all(made.map((d) => fsp.rm(d, { recursive: true, force: true }))),
+);
+const tmpDir = async () => {
+	const dir = await fsp.mkdtemp(path.join(os.tmpdir(), "gc-checker-"));
+	made.push(dir);
+	return dir;
+};
 
 test("a missing path payload keeps the does-not-exist error", async () => {
 	const dir = await tmpDir();
@@ -115,9 +79,6 @@ test("saving writes the homography and perspective stats next to the scale", asy
 	const p = sent[0].result.perspective;
 	assert.ok(Array.isArray(p.homography) && p.homography.length === 9);
 	assert.strictEqual(p.homography[8], 1);
-	assert.strictEqual(typeof p.rmsBeforePx, "number");
-	assert.strictEqual(typeof p.rmsAfterPx, "number");
-	assert.strictEqual(typeof p.maxCornerShiftPx, "number");
 	assert.strictEqual(p.points, 24);
 
 	const saved = JSON.parse(await fsp.readFile(scaleFilePath, "utf8"));

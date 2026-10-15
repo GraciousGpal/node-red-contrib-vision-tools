@@ -23,7 +23,6 @@ const {
 	isAxisAligned,
 	regionFrame,
 	normalizeRegion,
-	findLine,
 } = require("../lib/lineFinder.js");
 
 const W = 320;
@@ -130,34 +129,11 @@ test("a rotated region keeps the general path", () => {
 	assert.strictEqual(isAxisAligned(frame), true);
 });
 
-test("findLine gives the same answer either way", () => {
-	// the profiles are equal, so the edge, the fit and the score must be too;
-	// this checks the wiring rather than the arithmetic
-	const region = { x: 120, y: 40, width: 70, height: 160 };
-	for (const scan of ["right", "left"]) {
-		const result = findLine(GRAY, W, H, region, {
-			scanDirection: scan,
-			polarity: "either",
-			calipers: 8,
-			contrastThreshold: 1,
-		});
-		assert.strictEqual(result.found, true, result.reason);
-		// the step is at x > 150, and both paths must place it identically
-		assert.ok(
-			Math.abs(result.line.x - 150.5) < 2,
-			`${scan}: edge at ${result.line.x}`,
-		);
-	}
-});
-
-test("a region entirely outside the image finds nothing, either way", () => {
+test("a region entirely outside the image samples nothing, either way", () => {
 	const region = { x: 400, y: 300, width: 40, height: 40 };
 	const { frame, geom } = geometryFor({ ...region, angleDeg: 0 }, "right", 4);
 	const slow = profilesGeneral(GRAY, W, H, frame, geom);
 	const fast = profilesAxisAligned(GRAY, W, H, frame, geom);
 	assert.deepStrictEqual(slow, [null, null, null, null]);
 	assert.deepStrictEqual(fast, [null, null, null, null]);
-	const result = findLine(GRAY, W, H, region, { scanDirection: "right", calipers: 4 });
-	assert.strictEqual(result.found, false);
-	assert.strictEqual(result.reason, "no-edge");
 });

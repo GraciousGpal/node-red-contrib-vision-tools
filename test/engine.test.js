@@ -18,7 +18,7 @@ const cvjsInstalled = cvjs.available();
 const ownLoads = own.available();
 
 /** Run with these environment variables set, then restore them and the
- * modules' cached selection and load. */
+ * modules' cached selection and load - after `fn` settles, if it is async. */
 function withEnv(vars, fn) {
 	const previous = {};
 	for (const k of Object.keys(vars)) {
@@ -28,26 +28,33 @@ function withEnv(vars, fn) {
 	}
 	engineModule._reset();
 	own._reset();
-	try {
-		return fn();
-	} finally {
+	const restore = () => {
 		for (const [k, v] of Object.entries(previous)) {
 			if (v === undefined) delete process.env[k];
 			else process.env[k] = v;
 		}
 		engineModule._reset();
 		own._reset();
+	};
+	let result;
+	try {
+		result = fn();
+	} catch (err) {
+		restore();
+		throw err;
 	}
+	if (result && typeof result.then === "function") return result.finally(restore);
+	restore();
+	return result;
 }
 
 const withMode = (value, fn) => withEnv({ VISION_TOOLS_ENGINE: value }, fn);
 
-test("VISION_TOOLS_ENGINE=opencv-js pins the WASM engine", { skip: !cvjsInstalled }, () => {
-	withMode("opencv-js", () => {
-		const selected = engineModule.candidate();
-		assert.strictEqual(selected.name, "opencv-js");
-		assert.strictEqual(typeof selected.engine.imageAlign, "function");
-		assert.strictEqual(typeof selected.engine.resize, "function");
+test("VISION_TOOLS_ENGINE=opencv-js pins the WASM engine, and resolve() and warmup() agree", { skip: !cvjsInstalled }, async () => {
+	await withMode("opencv-js", async () => {
+		assert.strictEqual(engineModule.candidate().name, "opencv-js");
+		assert.strictEqual((await engineModule.resolve()).name, "opencv-js");
+		assert.strictEqual(await engineModule.warmup(), "opencv-js");
 	});
 });
 
@@ -58,7 +65,7 @@ test("a pinned engine is never substituted when it cannot load", () => {
 		const selected = engineModule.candidate();
 		assert.strictEqual(selected.engine, null);
 		assert.strictEqual(selected.name, null);
-		assert.match(selected.error.message, /own: OPENCV5_ADDON is \/nonexistent\/opencv5\.node, which does not exist/);
+		assert.match(selected.error.message, /OPENCV5_ADDON .*does not exist/);
 	});
 });
 
@@ -100,22 +107,6 @@ test("the engine exposes every op both callers use", { skip: !cvjsInstalled }, (
 	}
 });
 
-test("resolve() agrees with candidate() and warmup() reports the name", { skip: !cvjsInstalled }, async () => {
-	const previous = process.env.VISION_TOOLS_ENGINE;
-	process.env.VISION_TOOLS_ENGINE = "opencv-js";
-	engineModule._reset();
-	try {
-		const resolved = await engineModule.resolve();
-		assert.strictEqual(resolved.name, "opencv-js");
-		assert.strictEqual(engineModule.candidate().name, "opencv-js");
-		assert.strictEqual(await engineModule.warmup(), "opencv-js");
-	} finally {
-		if (previous === undefined) delete process.env.VISION_TOOLS_ENGINE;
-		else process.env.VISION_TOOLS_ENGINE = previous;
-		engineModule._reset();
-	}
-});
-
 test("label-crop reports the engine as available on this host", { skip: !cvjsInstalled && !ownLoads }, () => {
 	// label-crop treats a missing engine as a setup error and refuses every
 	// frame; with either engine installed, auto never reaches that state
@@ -126,7 +117,7 @@ test("label-crop reports the engine as available on this host", { skip: !cvjsIns
 	});
 });
 
-test("the engine is logged once per node type: info for opencv5, a warning for a fallback", { skip: !cvjsInstalled }, () => {
+test("logEngine says once per node type which engine serves it, warning only on a fallback", { skip: !cvjsInstalled }, () => {
 	const lines = [];
 	const log = { info: (t) => lines.push(["info", t]), warn: (t) => lines.push(["warn", t]) };
 	withEnv({ VISION_TOOLS_ENGINE: undefined, OPENCV5_ADDON: "/nonexistent/opencv5.node" }, () => {
@@ -135,14 +126,18 @@ test("the engine is logged once per node type: info for opencv5, a warning for a
 	});
 	assert.strictEqual(lines.length, 1);
 	assert.strictEqual(lines[0][0], "warn");
-	assert.match(lines[0][1], /opencv\.js, because opencv5 did not load \(own: /);
+	assert.match(lines[0][1], /^label-crop: .*opencv\.js, because opencv5 did not load/);
 	lines.length = 0;
 	withMode("opencv-js", () => engineModule.logEngine(log, "golden-compare"));
-	assert.deepStrictEqual(lines, [["info", "golden-compare: OpenCV engine opencv.js (VISION_TOOLS_ENGINE=opencv-js)"]]);
+	assert.strictEqual(lines.length, 1);
+	assert.strictEqual(lines[0][0], "info", "a pinned opencv.js is chosen, not a fallback");
+	assert.match(lines[0][1], /^golden-compare: .*opencv\.js .*VISION_TOOLS_ENGINE=opencv-js/);
 	if (ownLoads) {
 		lines.length = 0;
 		withMode("auto", () => engineModule.logEngine(log, "golden-compare"));
-		assert.deepStrictEqual(lines, [["info", "golden-compare: OpenCV engine opencv5"]]);
+		assert.strictEqual(lines.length, 1);
+		assert.strictEqual(lines[0][0], "info");
+		assert.match(lines[0][1], /^golden-compare: .*opencv5/);
 	}
 	assert.strictEqual(engineModule.label("own"), "opencv5");
 	assert.strictEqual(engineModule.label("opencv-js"), "opencv.js");

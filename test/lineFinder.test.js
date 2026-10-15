@@ -286,34 +286,6 @@ test("ignoreCount steps past a known first edge", () => {
 	assert.ok(Math.abs(rising.line.x - 120) < 2, `rising edge ${rising.line.x}`);
 });
 
-test("a caliper that lands on dirt is dropped as an outlier", () => {
-	const img = canvas(200, 400, 60);
-	vStep(img, 90, 200);
-	// a bright speck well off the edge, covering one caliper band
-	for (let y = 200; y < 230; y++) {
-		for (let x = 60; x < 68; x++) img.gray[y * img.width + x] = 255;
-	}
-	const res = findLine(img.gray, img.width, img.height,
-		{ x: 40, y: 0, width: 80, height: 400 },
-		{ scanDirection: "right", polarity: "darkToLight", calipers: 10, edgeSelect: "first" });
-	assert.strictEqual(res.found, true, res.reason);
-	assert.ok(res.calipers.used < res.calipers.found, "the speck caliper should be trimmed");
-	assert.ok(Math.abs(res.line.x - 90) < 1, `edge held at ${res.line.x}`);
-	assert.ok(res.points.some((p) => !p.used), "the outlier is reported, not hidden");
-});
-
-test("a region with no qualifying edge is a clean miss, not a guess", () => {
-	const img = canvas(200, 200, 100);
-	addNoise(img, 1, 3);
-	const res = findLine(img.gray, img.width, img.height,
-		{ x: 40, y: 40, width: 100, height: 100 },
-		{ scanDirection: "right", contrastThreshold: 20, calipers: 8 });
-	assert.strictEqual(res.found, false);
-	assert.strictEqual(res.reason, "no-edge");
-	assert.strictEqual(res.line, null);
-	assert.strictEqual(res.score, 0);
-});
-
 test("an edge that leans too far from the region's orientation is rejected", () => {
 	const img = canvas(400, 400, 50);
 	// a 45-degree edge, searched by a region that expects a vertical one
@@ -352,9 +324,11 @@ test("a miss over flat grey reports a peak contrast below the threshold, and whe
 	const region = { x: 20, y: 20, width: 100, height: 100 };
 	const res = findLine(img.gray, img.width, img.height, region,
 		{ scanDirection: "right", calipers: 10, contrastThreshold: 2 });
+	// a clean miss, not a guess
 	assert.strictEqual(res.found, false);
 	assert.strictEqual(res.reason, "no-edge");
-	assert.ok(res.diagnostics.peakContrast < 2, `peak ${res.diagnostics.peakContrast}`);
+	assert.strictEqual(res.line, null);
+	assert.strictEqual(res.score, 0);
 	assert.strictEqual(res.diagnostics.peakContrast, 0, "nothing at all steps on flat grey");
 	assert.strictEqual(res.diagnostics.medianPeakContrast, 0);
 	assert.strictEqual(res.diagnostics.peakPolarity, null);
@@ -372,6 +346,17 @@ test("a miss over flat grey reports a peak contrast below the threshold, and whe
 	// right, through the centre of its 10px band
 	assert.ok(Math.abs(first.p0.x - 20) < 1e-9 && Math.abs(first.p0.y - 25) < 1e-9, JSON.stringify(first.p0));
 	assert.ok(Math.abs(first.p1.x - 120) < 1e-9 && Math.abs(first.p1.y - 25) < 1e-9, JSON.stringify(first.p1));
+
+	// noise that never steps as far as the threshold is still no edge
+	const noisy = canvas(200, 200, 100);
+	addNoise(noisy, 1, 3);
+	const quiet = findLine(noisy.gray, noisy.width, noisy.height,
+		{ x: 40, y: 40, width: 100, height: 100 },
+		{ scanDirection: "right", contrastThreshold: 20, calipers: 8 });
+	assert.strictEqual(quiet.found, false);
+	assert.strictEqual(quiet.reason, "no-edge");
+	assert.strictEqual(quiet.line, null);
+	assert.strictEqual(quiet.score, 0);
 });
 
 test("the reported peak contrast is the threshold that would have found the edge", () => {
@@ -411,6 +396,7 @@ test("caliperLines carry the chosen edge and mirror the outlier trim", () => {
 		{ x: 40, y: 30, width: 80, height: 240 },
 		{ scanDirection: "right", polarity: "darkToLight", calipers: 8, edgeSelect: "first" });
 	assert.strictEqual(res.found, true, res.reason);
+	assert.ok(Math.abs(res.line.x - 80) < 1, `edge held at ${res.line.x}`);
 	const dropped = res.caliperLines.filter((c) => c.edge && !c.used);
 	assert.strictEqual(dropped.length, 1, "the speck's caliper is dropped");
 	assert.ok(dropped[0].edge.x < 60, `the dropped edge sits on the speck, at ${dropped[0].edge.x}`);

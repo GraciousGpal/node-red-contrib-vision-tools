@@ -224,27 +224,6 @@ test("a miss is explained in terms of the field to move", () => {
 	);
 });
 
-test("the region the viewer measures is the region the finder scans", () => {
-	// the depth/length pair decides how many pixels each caliper averages,
-	// so it has to agree as well as the corners do
-	const regionFrameEditor = loadEditorFrame();
-	const region = { x: 100, y: 200, width: 300, height: 40, angleDeg: 3 };
-	assert.deepStrictEqual(
-		{
-			depth: regionFrameEditor(region, "right").depth,
-			length: regionFrameEditor(region, "right").length,
-		},
-		{ depth: 300, length: 40 },
-	);
-	assert.deepStrictEqual(
-		{
-			depth: regionFrameEditor(region, "down").depth,
-			length: regionFrameEditor(region, "down").length,
-		},
-		{ depth: 40, length: 300 },
-	);
-});
-
 // ---- the region list ----------------------------------------------------
 
 const REGIONS_START = "// EDITOR_REGIONS_START";

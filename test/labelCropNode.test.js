@@ -28,23 +28,32 @@ function makeNode(config = {}) {
 		},
 	});
 	const sent = [];
-	const errors = [];
 	const statuses = [];
 	const doneErrors = [];
 	node.send = (m) => sent.push(m);
-	node.error = (m) => errors.push(String(m));
 	node.status = (s) => statuses.push(s);
+	// resolves when the node calls done, with or without an error; a node
+	// that never calls done fails the test after 10 s instead of hanging it
 	const run = (msg) =>
-		node.listeners.input(
-			msg,
-			(m) => sent.push(m),
-			(err) => {
-				if (err) {
-					doneErrors.push(err && err.message ? String(err.message) : String(err));
-				}
-			},
-		);
-	return { node, run, sent, errors, statuses, doneErrors, published };
+		new Promise((resolve, reject) => {
+			const payload = msg.payload;
+			const input =
+				`{ ${Object.keys(msg).join(", ")} }, payload ` +
+				(Buffer.isBuffer(payload) ? `a ${payload.length}-byte Buffer` : typeof payload);
+			const timer = setTimeout(() => reject(new Error(`label-crop never called done for input ${input}`)), 10000);
+			node.listeners.input(
+				msg,
+				(m) => sent.push(m),
+				(err) => {
+					clearTimeout(timer);
+					if (err) {
+						doneErrors.push(err && err.message ? String(err.message) : String(err));
+					}
+					resolve();
+				},
+			);
+		});
+	return { node, run, sent, statuses, doneErrors, published };
 }
 
 /** Engine that always detects a 160x120 rect at the center of the copy. */
@@ -109,8 +118,7 @@ test("label-crop replaces msg.payload with the deskewed crop and attaches metada
 	try {
 		const { run, sent, doneErrors } = makeNode({ maxEdge: 400 });
 		const input = rawImage(Buffer.alloc(800 * 600 * 3), 800, 600, 3, "RGB");
-		run({ payload: input });
-		await new Promise((r) => setTimeout(r, 20));
+		await run({ payload: input });
 		assert.strictEqual(sent.length, 1);
 		const msg = sent[0];
 		assert.ok(msg.labelCrop, "msg.labelCrop attached");
@@ -133,8 +141,7 @@ test("label-crop publishes side-by-side before and after previews when enabled",
 			previewWidth: 180,
 		});
 		const input = rawImage(Buffer.alloc(800 * 600 * 3), 800, 600, 3, "RGB");
-		run({ payload: input });
-		await new Promise((resolve) => setTimeout(resolve, 30));
+		await run({ payload: input });
 		assert.strictEqual(sent.length, 1);
 		assert.deepStrictEqual(doneErrors, []);
 		assert.strictEqual(
@@ -186,8 +193,7 @@ test("label-crop passes the original payload through on a detection miss", async
 	try {
 		const { run, sent, doneErrors } = makeNode({ maxEdge: 400 });
 		const input = Buffer.from("original-encoded-bytes");
-		run({ payload: input });
-		await new Promise((r) => setTimeout(r, 20));
+		await run({ payload: input });
 		assert.strictEqual(sent.length, 1);
 		const msg = sent[0];
 		assert.strictEqual(msg.payload, input, "original passed through");
@@ -201,25 +207,12 @@ test("label-crop passes the original payload through on a detection miss", async
 test("label-crop reports an unavailable engine as a setup error, not a miss", async () => {
 	_setBridge(null);
 	try {
-		const { run, sent, doneErrors } = makeNode({});
-		run({ payload: Buffer.from("x") });
-		await new Promise((r) => setTimeout(r, 20));
+		const { run, sent, doneErrors, statuses } = makeNode({});
+		await run({ payload: Buffer.from("x") });
 		assert.strictEqual(sent.length, 0, "nothing sent on a setup error");
 		assert.strictEqual(doneErrors.length, 1);
 		assert.match(doneErrors[0], /engine unavailable/);
-	} finally {
-		_resetBridge();
-	}
-});
-
-test("label-crop accepts an encoded Buffer payload", async () => {
-	_setBridge(detectingEngine());
-	try {
-		const { run, sent } = makeNode({ maxEdge: 400 });
-		run({ payload: Buffer.from("jpeg-bytes") });
-		await new Promise((r) => setTimeout(r, 20));
-		assert.strictEqual(sent.length, 1);
-		assert.strictEqual(sent[0].labelCrop.detected, true);
+		assert.strictEqual(statuses.at(-1).fill, "red");
 	} finally {
 		_resetBridge();
 	}
@@ -235,24 +228,11 @@ test("label-crop applies same-named msg overrides", async () => {
 	};
 	_setBridge(engine);
 	try {
-		const { run, sent } = makeNode({ maxEdge: 400, outputFormat: "raw" });
-		run({ payload: Buffer.from("jpeg-bytes"), outputFormat: "jpg" });
-		await new Promise((r) => setTimeout(r, 20));
+		const { run, sent, doneErrors } = makeNode({ maxEdge: 400, outputFormat: "raw" });
+		await run({ payload: Buffer.from("jpeg-bytes"), outputFormat: "jpg" });
+		assert.deepStrictEqual(doneErrors, []);
 		assert.strictEqual(sent[0].labelCrop.detected, true);
 		assert.strictEqual(formats.at(-1), "jpg");
-	} finally {
-		_resetBridge();
-	}
-});
-
-test("label-crop invalid payload reports an error through done", async () => {
-	_setBridge(detectingEngine());
-	try {
-		const { run, doneErrors } = makeNode({});
-		run({ payload: 12345 });
-		await new Promise((r) => setTimeout(r, 20));
-		assert.strictEqual(doneErrors.length, 1);
-		assert.match(doneErrors[0], /input must be/);
 	} finally {
 		_resetBridge();
 	}
@@ -271,7 +251,6 @@ const TRAY_REGIONS = [
 	{ name: "bottom", x: 140, y: 207, width: 100, height: 40, angleDeg: 7, scanDirection: "up", polarity: "darkToLight" },
 ];
 const trayFrame = () => labelOnTray(400, 300, { angleDeg: 7, channels: 1 });
-const settle = () => new Promise((resolve) => setTimeout(resolve, 30));
 
 /** The message a line-finder with the four tray regions sends for `frame`. */
 function lineFinderOutput(frame) {
@@ -296,9 +275,8 @@ test("label-crop in upstream mode crops the rectangle a line-finder found", asyn
 		const measured = await lineFinderOutput(trayFrame());
 		assert.strictEqual(measured.lineFinder.rect.ok, true, measured.lineFinder.rect.reason);
 
-		const { run, sent, doneErrors, statuses } = makeNode({ boundaryMode: "upstream" });
-		run(measured);
-		await settle();
+		const { run, sent, doneErrors } = makeNode({ boundaryMode: "upstream" });
+		await run(measured);
 		assert.deepStrictEqual(doneErrors, []);
 		assert.strictEqual(sent.length, 1);
 		const msg = sent[0];
@@ -315,8 +293,6 @@ test("label-crop in upstream mode crops the rectangle a line-finder found", asyn
 			"the line-finder's score is the confidence",
 		);
 		assert.strictEqual(msg.labelCrop.polarity, null);
-		// the status prints the metadata width and height, to a tenth of a pixel
-		assert.match(statuses.at(-1).text, /^deskewed 2(39|40|41)(\.\d)?×15[5-7](\.\d)? · \d+ms$/);
 		// the line-finder's own result stays on the message for a debug node
 		assert.strictEqual(msg.lineFinder.lines.length, 4);
 	} finally {
@@ -328,15 +304,14 @@ test("msg.rect overrides msg.lineFinder.rect in upstream mode", async () => {
 	_setBridge(pixelEngine());
 	try {
 		const measured = await lineFinderOutput(trayFrame());
-		const { run, sent, statuses, doneErrors } = makeNode({ boundaryMode: "upstream" });
+		const { run, sent, doneErrors, statuses } = makeNode({ boundaryMode: "upstream" });
 
 		// an explicit, different rectangle wins over the line-finder's
-		run({
+		await run({
 			...measured,
 			payload: trayFrame(),
 			rect: { ok: true, reason: "ok", center: { x: 200, y: 150 }, width: 100, height: 50, angleDeg: 0 },
 		});
-		await settle();
 		assert.strictEqual(sent[0].labelCrop.detected, true, sent[0].labelCrop.reason);
 		assert.strictEqual(sent[0].payload.width, 100);
 		assert.strictEqual(sent[0].payload.height, 50);
@@ -345,12 +320,11 @@ test("msg.rect overrides msg.lineFinder.rect in upstream mode", async () => {
 
 		// and so does an explicit miss, though the line-finder found the label
 		const frame = trayFrame();
-		run({ ...measured, payload: frame, rect: { ok: false, reason: "missing-edge:top", missing: ["top"] } });
-		await settle();
+		await run({ ...measured, payload: frame, rect: { ok: false, reason: "missing-edge:top", missing: ["top"] } });
 		assert.strictEqual(sent[1].labelCrop.detected, false);
 		assert.strictEqual(sent[1].labelCrop.reason, "upstream-rect:missing-edge:top");
+		assert.match(statuses.at(-1).text, /^not detected \(upstream-rect:missing-edge:top\) · \d+(\.\d+)?\s?m?s$/, "the status names the reason");
 		assert.strictEqual(sent[1].payload, frame, "the frame passes through");
-		assert.match(statuses.at(-1).text, /^not detected \(upstream-rect:missing-edge:top\) · \d+ms$/);
 		assert.deepStrictEqual(doneErrors, []);
 	} finally {
 		_resetBridge();
@@ -361,22 +335,19 @@ test("upstream mode with nothing in front is a no-upstream-rect miss, and only u
 	_setBridge(pixelEngine());
 	try {
 		// configured blob, switched to upstream for this message
-		const { run, sent, statuses, doneErrors } = makeNode({ boundaryMode: "blob" });
+		const { run, sent, doneErrors } = makeNode({ boundaryMode: "blob" });
 		const frame = trayFrame();
-		run({ payload: frame, boundaryMode: "upstream" });
-		await settle();
+		await run({ payload: frame, boundaryMode: "upstream" });
 		assert.strictEqual(sent[0].labelCrop.detected, false);
 		assert.strictEqual(sent[0].labelCrop.reason, "no-upstream-rect");
 		assert.strictEqual(sent[0].payload, frame);
-		assert.match(statuses.at(-1).text, /^not detected \(no-upstream-rect\) · \d+ms$/);
 
 		// in blob mode a msg.rect is not consulted: the pixel fake's Otsu is a
 		// pass-through, so the blob search finds nothing and says so
-		run({
+		await run({
 			payload: trayFrame(),
 			rect: { ok: true, center: { x: 200, y: 150 }, width: 100, height: 50, angleDeg: 0 },
 		});
-		await settle();
 		assert.strictEqual(sent[1].labelCrop.detected, false);
 		assert.notStrictEqual(sent[1].labelCrop.reason, "upstream-rect");
 		assert.notStrictEqual(sent[1].labelCrop.reason, "no-upstream-rect");

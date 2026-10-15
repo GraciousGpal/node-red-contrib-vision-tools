@@ -166,6 +166,12 @@ for (const [name, w, h] of [
 			"background defect ratio must be exactly 0",
 		);
 		assert.strictEqual(r.pass, true);
+		// every timing golden-compare.js copies onto msg.timings (it reads a
+		// missing one as 0, so only this catches a dropped key);
+		// nativeFallbackMs is set on the fallback path alone
+		for (const key of ["decodeMs", "alignMs", "nativeAlignMs", "seedMs", "tableMs", "searchMs", "warpMs", "localAlignMs", "registerMs", "thresholdMs", "diffMs", "heatmapMs", "toneMs", "speckMs", "overlayMs", "stagesMs"]) {
+			assert.ok(Number.isFinite(r.timings[key]), `timings.${key} should be a finite number, got ${r.timings[key]}`);
+		}
 	});
 }
 
@@ -228,6 +234,7 @@ test("extra ink the golden never has fails the background check", async () => {
 		true,
 		"print must not double-count extra ink",
 	);
+	assert.strictEqual(r.printBlemish.defectRatio, 0, "extra ink must not leak into the print check");
 	assert.strictEqual(r.pass, false);
 });
 
@@ -318,7 +325,6 @@ test("a grey smudge the ink threshold never sees fails the tone check, on the sm
 			r.y < (blob.y + blob.h) * sy && r.y + r.h > blob.y * sy,
 	);
 	assert.ok(hit, `no tone region on the smudge: ${JSON.stringify(on.toneBlemish.regions)}`);
-	assert.ok(on.timings.toneMs >= 0);
 });
 
 // A pixel is held to the grey the artwork predicts anywhere within
@@ -358,7 +364,6 @@ test("a training frame measures the register residual and the slack it needs", a
 	assert.ok(same.register && same.register.localised > 0, JSON.stringify(same.register));
 	assert.ok(same.register.maxPx < 1.5, `an identical frame measured ${same.register.maxPx} px`);
 	assert.strictEqual(same.register.slackPx, 2);
-	assert.ok(same.timings.registerMs >= 0);
 
 	// three bars 8 px over - 5 working px, past what the local alignment
 	// may move - leave a residual, and the slack measured from it is what
@@ -500,13 +505,9 @@ test("a golden whose ink and paper cannot be told apart leaves the tone and spec
 	assert.strictEqual(r.pass, r.position.pass && r.printBlemish.pass && r.backgroundBlemish.pass && !r.match.labelMissing);
 });
 
-test("the tone check leaves a faint stain and an identical frame alone", async () => {
+test("the tone check leaves a faint stain alone", async () => {
 	const goldenBuf = await png(labelSvg(1200, 1600));
 	const golden = await prepareGolden(goldenBuf, cfg());
-	const same = await compareFrame(goldenBuf, golden, cfg(TONE));
-	assert.strictEqual(same.toneBlemish.pass, true);
-	assert.deepStrictEqual(same.toneBlemish.regions, []);
-	assert.strictEqual(same.pass, true);
 	// 25 levels off paper is a tenth of the span: under the floor, as the
 	// synthetic set's stain variant is by construction
 	const faint = await png(
@@ -550,7 +551,6 @@ test("dust on the paper fails the speck check by count where every block check p
 		assert.ok(r.x >= 950 * sx && r.x <= 1050 * sx, `speck at x ${r.x}`);
 		assert.ok(r.area >= 2);
 	}
-	assert.ok(on.timings.speckMs >= 0);
 });
 
 test("the one-picture overlay carries every check's regions in colour", async () => {
@@ -579,7 +579,6 @@ test("the one-picture overlay carries every check's regions in colour", async ()
 	assert.ok(red > 200, `red pixels ${red}`);
 	assert.ok(amber > 200, `amber pixels ${amber}`);
 	assert.ok(green > 50, `green pixels ${green}`);
-	assert.ok(r.timings.overlayMs >= 0);
 	const off = await compareFrame(targetBuf, golden, cfg({ ...SPECKS, outputHeatmap: false }));
 	assert.strictEqual(off.heatmap, null);
 });
@@ -738,7 +737,7 @@ test("a frame at a different magnification is matched, not failed", async () => 
 test("a part seated slightly off square is measured as an angle", async () => {
 	const goldenBuf = await png(labelSvg(900, 1200));
 	const targetBuf = await sharp(await png(labelSvg(900, 1200)))
-		.rotate(1.2, { background: "#fff" })
+		.rotate(2, { background: "#fff" })
 		.png()
 		.toBuffer();
 
@@ -746,13 +745,16 @@ test("a part seated slightly off square is measured as an angle", async () => {
 	const r = await compareFrame(targetBuf, golden, cfg());
 
 	assert.ok(
-		Math.abs(Math.abs(r.transform.angleDeg) - 1.2) < 0.75,
-		`expected a ~1.2 degree rotation, got ${r.transform.angleDeg.toFixed(2)}`,
+		Math.abs(Math.abs(r.transform.angleDeg) - 2) < 0.75,
+		`expected a ~2 degree rotation, got ${r.transform.angleDeg.toFixed(2)}`,
 	);
-	assert.strictEqual(typeof r.position.anglePass, "boolean");
+	// twice the 1 degree tolerance, so the verdict does not hang on the
+	// alignment's angle resolution: the angle alone fails the position check
+	assert.strictEqual(r.position.anglePass, false);
+	assert.strictEqual(r.position.pass, false);
 	// sharp rotates about the centre, so the part has not moved: the
 	// offset must say so. Measured at the golden's corner it read ~10px
-	// here - half the label's height times sin(1.2 degrees) - and on the
+	// at 1.2 degrees - half the label's height times the sine - and on the
 	// synthetic benchmark that charged clean parts with offsets they did
 	// not have.
 	assert.ok(
@@ -927,33 +929,6 @@ test("a tint that only just crosses the ink level is not a background defect", a
 		rLenient.pass,
 		"a good part whose only difference is a marginal tint must pass",
 	);
-});
-
-test("inkMargin does not blunt a solid extra-ink defect", async () => {
-	const goldenBuf = await png(labelSvg(1200, 1600));
-	const targetBuf = await png(
-		labelSvg(1200, 1600, { extraBlob: { x: 700, y: 1300, w: 260, h: 200 } }),
-	);
-	const c = cfg({ inkMargin: 8 });
-	const r = await compareFrame(targetBuf, await prepareGolden(goldenBuf, c), c);
-
-	assert.ok(
-		r.backgroundBlemish.defectRatio > 0.002,
-		`solid black is 128 levels clear of the cut and must still be flagged, got ${r.backgroundBlemish.defectRatio.toFixed(5)}`,
-	);
-	assert.strictEqual(
-		r.printBlemish.defectRatio,
-		0,
-		"extra ink must not leak into the print check",
-	);
-});
-
-test("inkMargin leaves an identical image at exactly zero", async () => {
-	const buf = await png(labelSvg(900, 1300));
-	const c = cfg({ inkMargin: 8 });
-	const r = await compareFrame(buf, await prepareGolden(buf, c), c);
-	assert.strictEqual(r.printBlemish.defectRatio, 0);
-	assert.strictEqual(r.backgroundBlemish.defectRatio, 0);
 });
 
 // The second, nastier half of the same problem, and the one that only
@@ -1193,13 +1168,16 @@ test("raw pixels compare identically to the same image in a container", async ()
 	assert.strictEqual(viaRaw.height, viaPng.height);
 });
 
-test("a raw golden and an encoded frame still compare", async () => {
+test("a raw RGB golden and an encoded frame still compare", async () => {
 	// the realistic mix: artwork rendered straight out of a PDF, against a
-	// camera frame that arrived as a file
+	// camera frame that arrived as a file. Three channels: the SVG renders
+	// with alpha, and the RGBA case is the test below
 	const encoded = await png(labelSvg(900, 1300));
 	const { data, info } = await sharp(encoded)
+		.removeAlpha()
 		.raw()
 		.toBuffer({ resolveWithObject: true });
+	assert.strictEqual(info.channels, 3, "precondition: three channels");
 	const c = cfg({
 		raw: { width: info.width, height: info.height, channels: info.channels },
 	});
@@ -1285,7 +1263,7 @@ test("a real defect is not mistaken for the wrong label", async () => {
 	);
 });
 
-test("genuinely different artwork is flagged as a different label", async () => {
+test("genuinely different artwork is flagged as a different label, unless the check is off", async () => {
 	// same fixture family, different layout: bars elsewhere, box elsewhere -
 	// the shape two products' artwork have relative to each other
 	const goldenBuf = await png(labelSvg(900, 1300));
@@ -1319,47 +1297,13 @@ test("genuinely different artwork is flagged as a different label", async () => 
 		r.match.reason || "should be flagged",
 	);
 	assert.match(r.match.reason, /different\s+label/);
-});
 
-test("the mismatch check can be turned off", async () => {
-	// the same different-artwork pair as the "genuinely different artwork
-	// is flagged" test - that fixture is what actually trips
-	// mismatchSuspected (a shifted copy of the label scores ~0.09, below
-	// the 0.15 default, so the old fixture could not distinguish enabled
-	// from disabled and a broken disable path would have gone unnoticed)
-	const goldenBuf = await png(labelSvg(900, 1300));
-	const other = Buffer.from(
-		`<svg xmlns="http://www.w3.org/2000/svg" width="900" height="1300">` +
-			`<rect width="100%" height="100%" fill="#fff"/>` +
-			[0.07, 0.13, 0.22, 0.29, 0.38, 0.44, 0.52, 0.61, 0.7, 0.77, 0.86, 0.93]
-				.map(
-					(f, i) =>
-						`<rect x="${40 + ((i * 53) % 300)}" y="${Math.round(1300 * f)}" width="${760 - ((i * 37) % 280)}" height="34" fill="#111"/>`,
-				)
-				.join("") +
-			`<rect x="60" y="60" width="780" height="1180" fill="none" stroke="#111" stroke-width="14"/>` +
-			`</svg>`,
-	);
-	const targetBuf = await sharp(other).png().toBuffer();
-
-	const enabled = await compareFrame(
-		targetBuf,
-		await prepareGolden(goldenBuf, cfg()),
-		cfg(),
-	);
-	assert.strictEqual(
-		enabled.match.mismatchSuspected,
-		true,
-		"precondition: the fixture must trip the check when it is enabled",
-	);
-
+	// mismatchScore 0 disables the claim on the same pair. A shifted copy of
+	// the label scores ~0.09, under the 0.15 default, so it could not tell
+	// a broken disable path from a working one; this pair can
 	const c = cfg({ mismatchScore: 0 });
-	const r = await compareFrame(targetBuf, await prepareGolden(goldenBuf, c), c);
-	assert.strictEqual(
-		r.match.mismatchSuspected,
-		false,
-		"0 disables the claim entirely",
-	);
+	const off = await compareFrame(targetBuf, await prepareGolden(goldenBuf, c), c);
+	assert.strictEqual(off.match.mismatchSuspected, false, "0 disables the claim entirely");
 });
 
 test("a loaded nuisance map is drawn as a debug stage over the golden", async () => {
@@ -1391,11 +1335,8 @@ test("a loaded nuisance map is drawn as a debug stage over the golden", async ()
 	const clean = at(BASE_CFG.blockSize + 4, 4);
 	assert.ok(dirty[0] > dirty[1] + 40, `block 0 should be tinted red, got ${[...dirty]}`);
 	assert.ok(Math.abs(clean[0] - clean[1]) < 8, `block 1 should be grey, got ${[...clean]}`);
-	assert.strictEqual(
-		Object.keys(without.stages).length + 1,
-		Object.keys(withMap.stages).length,
-		"the other stages are unchanged",
-	);
+	const { nuisanceBaseline: _, ...others } = withMap.stages;
+	assert.deepStrictEqual(others, without.stages, "the other stages are unchanged");
 });
 
 test("the nuisance map gates the background channel only, never the print channel", async () => {

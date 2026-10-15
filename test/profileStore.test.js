@@ -154,13 +154,6 @@ test("nothing usable at all throws", () => {
 	);
 });
 
-test("profilePath joins the directory and the id", () => {
-	assert.equal(
-		store.profilePath("/data/p", "line_a"),
-		path.join("/data/p", "line_a.json"),
-	);
-});
-
 test("a section round-trips with the golden record and a matching stat", async () => {
 	const file = store.profilePath(
 		path.join(await tmpDir(), "nested", "dir"),
@@ -276,7 +269,7 @@ test("a failed write removes its temporary file and does not wedge the next", as
 	await store.writeProfileSection(file, "transform", { ok: true });
 	// fail the rename, after the tmp file has been written: a code that is
 	// not retried, so the failure is final on every platform
-	const fsPromises = require("node:fs").promises;
+	const fsPromises = fs.promises;
 	const realRename = fsPromises.rename;
 	let tmpSeen = null;
 	fsPromises.rename = async (from) => {

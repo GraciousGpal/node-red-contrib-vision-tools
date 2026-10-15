@@ -15,7 +15,6 @@
 
 const test = require("node:test");
 const assert = require("node:assert/strict");
-const path = require("node:path");
 
 const pkg = require("../package.json");
 const lock = require("../package-lock.json");
@@ -59,5 +58,4 @@ test("allowScripts does not name a package that is not a dependency", () => {
 			`allowScripts names ${name}, which is not a declared dependency`,
 		);
 	}
-	void path;
 });

@@ -58,10 +58,12 @@ for (const file of HTML_FILES) {
 		for (const m of script.matchAll(/\$\((["'])#([\w-]+)\1\)/g)) {
 			looked.add(m[2]);
 		}
-		if (looked.size === 0) {
-			// golden-compare and checkerboard-calibrate have no oneditprepare at
-			// all - their editors are pure markup, so there is nothing to check
-			return;
+		// checkerboard-calibrate and perspective-rectify have no oneditprepare,
+		// so nothing to look up; image-resize's only lookups are built
+		// ("#node-input-" + side + "Mode"). Any other script that finds none
+		// has moved to an idiom these patterns miss, and would pass unchecked.
+		if (/oneditprepare\s*:/.test(script) && file !== "image-resize.html") {
+			assert.ok(looked.size > 0, `${file} has an oneditprepare but no lookup was found in it`);
 		}
 
 		const missing = [...looked].filter(

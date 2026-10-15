@@ -16,16 +16,19 @@
 
 const test = require("node:test");
 const assert = require("node:assert");
-const fs = require("node:fs");
-const path = require("node:path");
 
-const HTML = path.join(__dirname, "..", "golden-compare.html");
-const html = fs.readFileSync(HTML, "utf8");
-const SCRIPT = (() => {
-	const m = html.match(/<script type="text\/javascript">\n([\s\S]*)\n<\/script>\s*$/);
-	assert.ok(m, "could not find the editor script in golden-compare.html");
-	return m[1];
-})();
+// a "#rgb" or "#rrggbb" colour as [r, g, b]: a fail must read red and a
+// pass green, not only differ, or swapping the two would pass
+const rgb = (hex) => {
+	const m = /^#(?:([0-9a-f])([0-9a-f])([0-9a-f])|([0-9a-f]{2})([0-9a-f]{2})([0-9a-f]{2}))$/i.exec(hex);
+	assert.ok(m, `not a #rgb or #rrggbb colour: ${hex}`);
+	return m[1] ? m.slice(1, 4).map((h) => parseInt(h + h, 16)) : m.slice(4).map((h) => parseInt(h, 16));
+};
+const redDominant = (hex) => rgb(hex)[0] > rgb(hex)[1];
+const greenDominant = (hex) => rgb(hex)[1] > rgb(hex)[0];
+const { editorScript, El, bootPreview } = require("./helpers/previewDom.js");
+
+const SCRIPT = editorScript("golden-compare.html");
 
 // Pixel values a stub canvas reports for an image, by stage key: two
 // pixels wide, one high. goldenFg has ink on the left, targetFgAligned on
@@ -39,43 +42,8 @@ const PIXELS = {
 const sizeOf = (src) => (/stage\/targetGray\b/.test(src) ? [3, 1] : [2, 1]);
 const keyOf = (src) => (src.match(/stage\/([A-Za-z]+)/) || [])[1];
 
-class El {
-	constructor(tag) {
-		this.tag = tag;
-		this.id = "";
-		this.attrs = {};
-		this.style = {};
-		this.children = [];
-		this.parent = null;
-		this.textContent = "";
-	}
-	setAttribute(name, value) {
-		this.attrs[name] = value;
-	}
-	appendChild(child) {
-		child.parent = this;
-		this.children.push(child);
-		return child;
-	}
-	remove() {
-		if (this.parent) {
-			this.parent.children = this.parent.children.filter((c) => c !== this);
-			this.parent = null;
-		}
-	}
-	find(pred) {
-		if (pred(this)) return this;
-		for (const c of this.children) {
-			const hit = c.find(pred);
-			if (hit) return hit;
-		}
-		return null;
-	}
-	findAll(pred, out = []) {
-		if (pred(this)) out.push(this);
-		for (const c of this.children) c.findAll(pred, out);
-		return out;
-	}
+// the preview's elements, plus a canvas context that reports PIXELS
+class PixelEl extends El {
 	getContext() {
 		const canvas = this;
 		let drawn = null;
@@ -103,10 +71,7 @@ class El {
 }
 
 function boot(node, { meta, fail, holdFail } = {}) {
-	const group = new El("g");
-	group.id = node.id;
-	const bodyEl = new El("body");
-	const subscriptions = {};
+	const bodyEl = new PixelEl("body");
 	const listeners = {};
 	const requests = [];
 	const images = [];
@@ -119,12 +84,6 @@ function boot(node, { meta, fail, holdFail } = {}) {
 	}
 	const document = {
 		body: bodyEl,
-		getElementById(id) {
-			return group.find((e) => e.id === id) || bodyEl.find((e) => e.id === id);
-		},
-		createElementNS(_ns, tag) {
-			return new El(tag);
-		},
 		addEventListener(type, fn) {
 			listeners[type] = fn;
 		},
@@ -134,18 +93,6 @@ function boot(node, { meta, fail, holdFail } = {}) {
 	};
 	const notices = [];
 	const RED = {
-		validators: { number: () => () => true },
-		comms: {
-			subscribe(topic, fn) {
-				subscriptions[topic] = fn;
-			},
-		},
-		nodes: {
-			registerType() {},
-			node(id) {
-				return id === node.id ? node : undefined;
-			},
-		},
 		notify(text, kind) {
 			notices.push({ text, kind });
 		},
@@ -189,15 +136,12 @@ function boot(node, { meta, fail, holdFail } = {}) {
 			return chain;
 		},
 	};
-	new Function("RED", "document", "window", "Image", "$", SCRIPT)(
-		RED,
+	const { group, publish, panel } = bootPreview(SCRIPT, "golden-compare-preview", node, {
+		globals: { Image: StubImage, $ },
 		document,
-		{},
-		StubImage,
-		$,
-	);
-	const publish = (data) => subscriptions["golden-compare-preview"](null, data);
-	const panel = () => group.find((e) => e.tag === "foreignObject");
+		RED,
+		El: PixelEl,
+	});
 	const viewer = () => bodyEl.find((e) => e.id === "golden-compare-stage-viewer");
 	const open = () => panel().find((e) => e.tag === "div").onclick();
 	const key = (k) => listeners.keydown({ key: k, preventDefault() {} });
@@ -286,10 +230,23 @@ test("the thumbnail panel is centred under the node, not over it", () => {
 	assert.strictEqual(img.src, "data:image/jpeg;base64,QUJD");
 	assert.strictEqual(img.style.width, "200px");
 	assert.strictEqual(img.style.height, "150px");
-	// and the verdict, coloured as a fail
+	// and the verdict, coloured by its state: fail, pass, and a missing
+	// label each read differently
 	const caption = fo.find((e) => e.textContent === EVENT.text);
 	assert.ok(caption, "the verdict text is shown");
-	assert.strictEqual(caption.style.color, "#ef9a9a");
+	const colourOf = (event) => {
+		publish(event);
+		return panel().find((e) => e.textContent === event.text).style.color;
+	};
+	const fail = colourOf(EVENT);
+	const pass = colourOf({ ...EVENT, pass: true, text: "pass · align 0.020 · 380ms" });
+	const missing = colourOf({ ...EVENT, labelMissing: true, text: "fail (label missing)" });
+	assert.ok(fail && pass && missing, "every state has a colour");
+	assert.notStrictEqual(fail, pass);
+	assert.notStrictEqual(missing, fail);
+	assert.notStrictEqual(missing, pass);
+	assert.ok(redDominant(fail), `a fail reads red: ${fail}`);
+	assert.ok(greenDominant(pass), `a pass reads green: ${pass}`);
 });
 
 test("a clear event removes the panel, a repeat replaces it, the × hides it", () => {
@@ -330,7 +287,8 @@ test("clicking the panel fetches the last inspection and opens the viewer on sta
 		entries.map((e) => e.textContent),
 		["1. Golden, grey", "2. Frame, grey", "3. Background heat map"],
 	);
-	assert.strictEqual(entries[0].style.background, "#1976d2");
+	assert.notStrictEqual(entries[0].style.background, entries[1].style.background);
+	assert.strictEqual(entries[1].style.background, entries[2].style.background);
 	assert.ok(v.find((e) => e.textContent === "the reference"), "the stage's description is shown");
 	assert.ok(v.find((e) => e.textContent === "1 / 3 · Golden, grey"));
 	// the numbers behind the verdict, with the failing channel marked
@@ -339,7 +297,13 @@ test("clicking the panel fetches the last inspection and opens the viewer on sta
 	const bg = v.find((e) => /^FAIL · ratio 0.00300/.test(e.textContent));
 	assert.ok(bg, "the background row reads as a fail");
 	assert.ok(/excess 0.350 FAIL/.test(bg.textContent), "and names the novelty gate");
-	assert.strictEqual(bg.style.color, "#ef9a9a");
+	// coloured unlike every passing row
+	const values = v.find((e) => e.id === "golden-compare-stage-results").children.map((line) => line.children[1]);
+	const passing = values.filter((cell) => !/FAIL/.test(cell.textContent));
+	assert.ok(passing.length > 0, "the table has passing rows to compare with");
+	for (const cell of passing) assert.notStrictEqual(bg.style.color, cell.style.color, cell.textContent);
+	assert.ok(redDominant(bg.style.color), `the failing row reads red: ${bg.style.color}`);
+	for (const cell of passing) assert.ok(!redDominant(cell.style.color), `a passing row is not red: ${cell.textContent}`);
 	assert.ok(v.find((e) => e.textContent === "91% of golden ink"));
 	// the verdict table is pinned at the top of the side panel; the rest scrolls under it
 	const side = v.find((e) => e.id === "golden-compare-stage-side");
@@ -374,8 +338,8 @@ test("arrow keys step through the stages and wrap, Esc closes and unhooks the ke
 	assert.match(img.src, /stage\/goldenGray\?/);
 	// the list entries follow
 	const entries = v.findAll((e) => /^\d+\. /.test(e.textContent));
-	assert.strictEqual(entries[0].style.background, "#1976d2");
-	assert.strictEqual(entries[2].style.background, "transparent");
+	assert.notStrictEqual(entries[0].style.background, entries[2].style.background, "the highlight moved back to 1");
+	assert.strictEqual(entries[1].style.background, entries[2].style.background);
 	h.key("Escape");
 	assert.strictEqual(h.viewer(), null, "closed");
 	assert.strictEqual(h.listeners.keydown, undefined, "the key handler is gone with it");

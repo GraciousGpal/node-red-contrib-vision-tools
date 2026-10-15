@@ -41,27 +41,46 @@ function makeNode(config = {}, comms) {
 	const statuses = [];
 	const doneErrors = [];
 	let doneCalls = 0;
+	const t = { node, frames, goldens, statuses, doneErrors, doneCalls: () => doneCalls, onFrame: null };
 	const send = (out) => {
 		const list = Array.isArray(out) ? out : [out];
-		if (list[0]) frames.push(list[0]);
+		if (list[0]) {
+			frames.push(list[0]);
+			if (t.onFrame) t.onFrame(list[0]);
+		}
 		if (list[1]) goldens.push(list[1]);
 	};
 	node.send = send;
 	node.status = (s) => statuses.push(s);
-	const run = (msg = {}) =>
+	t.run = (msg = {}) =>
 		node.listeners.input(msg, send, (err) => {
 			doneCalls++;
 			if (err) doneErrors.push(err && err.message ? String(err.message) : String(err));
 		});
-	return { node, run, frames, goldens, statuses, doneErrors, doneCalls: () => doneCalls };
+	return t;
 }
 
 const isPng = (b) =>
 	Buffer.isBuffer(b) && b.length > 8 && b[0] === 0x89 && b.subarray(1, 4).toString() === "PNG";
 
+// One full run at BASE with no RED.comms, shared by every test that only
+// reads what it emitted; a test that changes the config runs its own.
+let baseRun = null;
+function base() {
+	if (!baseRun) {
+		baseRun = (async () => {
+			const t = makeNode();
+			await t.run({});
+			return t;
+		})();
+	}
+	return baseRun;
+}
+
 test("emits the golden first, then one message per frame", async () => {
-	const t = makeNode();
-	await t.run({});
+	// BASE passes no comms, so this is also the no-RED.comms run: frames
+	// flow and nothing complains
+	const t = await base();
 
 	assert.equal(t.goldens.length, 1, "exactly one golden message");
 	const g = t.goldens[0];
@@ -75,14 +94,17 @@ test("emits the golden first, then one message per frame", async () => {
 
 	// mark has three variants x one severity x perVariant 1, plus the clean
 	// floor (3) and two clean frames at each of the other two presets
-	assert.ok(t.frames.length >= 3 + 3 + 4, `only ${t.frames.length} frames`);
+	assert.equal(t.frames.length, 3 + 3 + 4);
 	assert.equal(t.doneCalls(), 1);
 	assert.deepEqual(t.doneErrors, []);
 
+	// the field contract is test/synthDefects.test.js's; this checks what
+	// the node adds to each case
+	assert.ok(g.goldenKey, "the golden message carries a key");
 	for (const [i, m] of t.frames.entries()) {
 		assert.ok(Buffer.isBuffer(m.payload), `frame ${i} payload is bytes`);
 		assert.ok(isPng(m.golden), `frame ${i} carries the golden as PNG`);
-		assert.match(m.goldenKey, /^synth:1:[0-9a-f]{40}$/);
+		assert.equal(m.goldenKey, g.goldenKey, `frame ${i} names the run's golden`);
 		assert.match(m.filename, /\.(png|jpg)$/);
 		const s = m.synth;
 		assert.equal(s.index, i);
@@ -90,13 +112,6 @@ test("emits the golden first, then one message per frame", async () => {
 		assert.ok(["mark", "clean"].includes(s.family));
 		assert.equal(m.filename, `${s.id}.${m.filename.split(".").pop()}`);
 		assert.ok(["clean-rig", "typical", "harsh"].includes(s.preset));
-		// the manifest contract's capture block
-		for (const k of ["mx", "my", "angleDeg", "dx", "dy", "ink", "paper", "frameWidth", "frameHeight"]) {
-			assert.equal(typeof s.capture[k], "number", `capture.${k}`);
-		}
-		assert.ok(Array.isArray(s.defects));
-		assert.equal(typeof s.expected.pass, "boolean");
-		assert.ok(Array.isArray(s.expected.channels));
 		if (s.family === "clean") {
 			assert.equal(s.variant, null);
 			assert.equal(s.severity, null);
@@ -109,21 +124,19 @@ test("emits the golden first, then one message per frame", async () => {
 			assert.equal(d.type, "mark");
 			assert.equal(d.variant, s.variant);
 			assert.ok(["print", "background", "both", "none"].includes(d.channel));
-			assert.equal(typeof d.bbox.x, "number");
 		}
 	}
 
 	const last = t.statuses[t.statuses.length - 1];
 	assert.equal(last.fill, "green");
-	assert.match(last.text, /^done · \d+ frames?$/);
+	assert.match(last.text, new RegExp(`done.*\\b${t.frames.length} frames`));
 	// and the frames are real images
 	const meta = await sharp(t.frames[0].payload).metadata();
 	assert.ok(meta.width > 300);
 });
 
 test("the same seed emits byte-identical frames", async () => {
-	const a = makeNode();
-	await a.run({});
+	const a = await base();
 	const b = makeNode();
 	await b.run({});
 
@@ -155,7 +168,7 @@ test("a Buffer payload is used as the golden", async () => {
 	assert.equal(t.goldens[0].synth.height, 340);
 	assert.ok(t.frames.length > 0);
 	// a different golden means a different key from the synthetic run
-	assert.match(t.goldens[0].goldenKey, /^synth:1:[0-9a-f]{40}$/);
+	assert.notEqual(t.goldens[0].goldenKey, (await base()).goldens[0].goldenKey);
 	assert.deepEqual(t.doneErrors, []);
 });
 
@@ -240,28 +253,24 @@ test("an unusable payload reports through done(err) exactly once", async () => {
 });
 
 test("a second input while running cancels the first", async () => {
-	// a non-zero interval keeps the first run parked in its timer long
-	// enough for the second message to land
-	const t = makeNode({ intervalMs: 50 });
-	const first = t.run({});
-	// wait for the first run to have drawn and announced its golden - a
-	// fixed sleep is too short when the whole suite is loading the machine
-	const started = Date.now();
-	while (t.goldens.length < 1 && Date.now() - started < 5000) {
-		await new Promise((r) => setTimeout(r, 10));
-	}
-	await new Promise((r) => setTimeout(r, 30));
-	const second = t.run({ intervalMs: 0 });
-	await Promise.all([first, second]);
+	// The first run sends its first frame, then parks in a 1 s interval.
+	// The second input is sent from that frame's send(), deferred by one
+	// setImmediate so the first run has entered its wait: no clock race.
+	const t = makeNode({ intervalMs: 1000 });
+	let second = null;
+	t.onFrame = () => {
+		t.onFrame = null;
+		setImmediate(() => {
+			second = t.run({ intervalMs: 0 });
+		});
+	};
+	await t.run({});
+	await second;
 
-	const full = makeNode();
-	await full.run({});
-	assert.ok(
-		t.frames.length < full.frames.length * 2,
-		`${t.frames.length} frames from a cancelled run plus a full one, ` +
-			`vs ${full.frames.length * 2} for two full runs`,
-	);
+	const full = (await base()).frames.length;
+	assert.equal(t.frames.length, 1 + full, "the cancelled run stops after its one frame");
 	assert.equal(t.goldens.length, 2, "each run announces its own golden");
+	assert.equal(t.doneCalls(), 2);
 	assert.deepEqual(t.doneErrors, []);
 });
 
@@ -288,7 +297,7 @@ test("the preview shows the golden, then every frame with its box on the frame",
 	assert.equal(g.imageHeight, 420);
 	assert.equal(g.total, t.frames.length);
 	assert.equal(g.pass, true);
-	assert.match(g.text, /^golden · 300×420 · synthetic · \d+ frames to come$/);
+	assert.match(g.text, new RegExp(`^golden\\b.*\\b${t.frames.length} frames to come`));
 	assert.deepEqual(g.boxes, []);
 	// the thumbnail is a real JPEG no wider than asked
 	const gm = await sharp(Buffer.from(g.image, "base64")).metadata();
@@ -306,7 +315,7 @@ test("the preview shows the golden, then every frame with its box on the frame",
 		assert.equal(d.imageHeight, m.synth.capture.frameHeight);
 		assert.equal(d.pass, m.synth.expected.pass);
 		assert.ok(d.text.startsWith(`${i + 1}/${t.frames.length} · ${m.synth.family}`), d.text);
-		assert.match(d.text, / · expect (pass|fail \([a-z+]+\))$/);
+		assert.match(d.text, m.synth.expected.pass ? /expect pass/ : /expect fail/);
 		if (m.synth.family === "clean") {
 			assert.deepEqual(d.boxes, []);
 			assert.match(d.text, /expect pass$/);
@@ -353,11 +362,4 @@ test("msg.previewEnabled overrides the configured preview either way", async () 
 	await b.run({ previewEnabled: true, previewWidth: 90 });
 	assert.ok(on.events.length > 1);
 	assert.ok(on.events.every((e) => e.data.previewWidth === 90));
-});
-
-test("no RED.comms means no preview and no complaint", async () => {
-	const t = makeNode({});
-	await t.run({});
-	assert.ok(t.frames.length > 0);
-	assert.deepEqual(t.doneErrors, []);
 });

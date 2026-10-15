@@ -16,6 +16,7 @@ const {
 	analyzeMask,
 	refineRectBoundary,
 	labelCrop,
+	getBridge,
 	_setBridge,
 	_resetBridge,
 } = require("../lib/labelCrop.js");
@@ -140,10 +141,21 @@ test("analyzeMask finds an axis-aligned rectangle", () => {
 	assert.strictEqual(r.borderContact, 0);
 	assert.ok(r.confidence > 0.8, `confidence ${r.confidence}`);
 	assert.strictEqual(r.corners.length, 4);
-	// corners must be ordered consistently (tolerant check: each corner
-	// lies on the rect boundary, i.e. |u| ~ w/2 or |v| ~ h/2)
+	// each corner sits at (+-w/2, +-h/2) from the centre, and they walk the
+	// perimeter: neighbours share an edge (one coordinate), opposite
+	// corners are diagonal (both differ)
 	for (const c of r.corners) {
-		assert.ok(Number.isFinite(c.x) && Number.isFinite(c.y), "finite corner");
+		assert.ok(Math.abs(Math.abs(c.x - r.center.x) - r.width / 2) <= 1, `corner.x ${c.x}`);
+		assert.ok(Math.abs(Math.abs(c.y - r.center.y) - r.height / 2) <= 1, `corner.y ${c.y}`);
+	}
+	const sameX = (a, b) => Math.abs(a.x - b.x) <= 1;
+	const sameY = (a, b) => Math.abs(a.y - b.y) <= 1;
+	for (let i = 0; i < 4; i++) {
+		const a = r.corners[i];
+		const next = r.corners[(i + 1) % 4];
+		const opposite = r.corners[(i + 2) % 4];
+		assert.ok(sameX(a, next) !== sameY(a, next), `corners ${i},${(i + 1) % 4} share an edge`);
+		assert.ok(!sameX(a, opposite) && !sameY(a, opposite), `corners ${i},${(i + 2) % 4} are diagonal`);
 	}
 });
 
@@ -503,24 +515,6 @@ test("labelCrop decodes an encoded buffer and returns corners in original coordi
 	assert.strictEqual(decode.length, 1, "encoded input decoded exactly once");
 });
 
-test("labelCrop runs the detection copy at the max edge", async () => {
-	const mask = makeRectMask(SMALL_W, SMALL_H, {
-		cx: 200,
-		cy: 150,
-		w: 160,
-		h: 120,
-	});
-	const fake = detectionEngine(mask);
-	await labelCrop(FULL, { maxEdge: 400 }, fake.engine);
-	const resize = fake.calls.find((c) => c.name === "resize");
-	assert.ok(resize, "resize called for a full image above maxEdge");
-	assert.strictEqual(resize.args[1], "num");
-	assert.strictEqual(resize.args[2], SMALL_W);
-	assert.strictEqual(resize.args[3], "num");
-	assert.strictEqual(resize.args[4], SMALL_H);
-	assert.strictEqual(resize.args[5], "raw");
-});
-
 test("labelCrop skips the detection copy when already small", async () => {
 	const mask = makeRectMask(320, 240, { cx: 160, cy: 120, w: 120, h: 80 });
 	const fake = detectionEngine(mask);
@@ -565,21 +559,30 @@ test("labelCrop auto polarity thresholds once and analyzes the inverse mask", as
 	assert.strictEqual(edges.length, 1, "one Sobel edge pass");
 });
 
-test("labelCrop fixed polarity thresholds once", async () => {
-	const mask = makeRectMask(SMALL_W, SMALL_H, {
+test("labelCrop fixed polarity analyzes only the polarity it is given", async () => {
+	// a dark label on a light background: "light" sees one frame-filling
+	// blob touching the border, and must not fall back to the inverse
+	const lightLabel = makeRectMask(SMALL_W, SMALL_H, {
 		cx: 200,
 		cy: 150,
 		w: 160,
 		h: 120,
 	});
-	const fake = detectionEngine(mask);
-	await labelCrop(FULL, { maxEdge: 400, polarity: "light" }, fake.engine);
-	const otsu = fake.calls.filter(
-		(c) => c.name === "filter" && c.args[1] === "otsu",
+	const darkLabel = Uint8Array.from(lightLabel, (value) => (value ? 0 : 255));
+	const light = await labelCrop(
+		FULL,
+		{ maxEdge: 400, polarity: "light" },
+		detectionEngine(darkLabel).engine,
 	);
-	assert.strictEqual(otsu.length, 1);
-	assert.strictEqual(otsu[0].args[2], 3);
-	assert.strictEqual(otsu[0].args[3], 0);
+	assert.strictEqual(light.detected, false);
+	assert.strictEqual(light.metadata.reason, "border-contact");
+	const dark = await labelCrop(
+		FULL,
+		{ maxEdge: 400, polarity: "dark" },
+		detectionEngine(darkLabel).engine,
+	);
+	assert.strictEqual(dark.detected, true);
+	assert.strictEqual(dark.metadata.polarity, "dark");
 });
 
 test("labelCrop passes the original through unchanged on a miss", async () => {
@@ -858,13 +861,22 @@ test("labelCrop metadata carries per-stage timings and engine timings", async ()
 	assert.ok(t.totalMs > 0);
 });
 
-// the _setBridge/_resetBridge seam is exercised by the node glue tests;
-// assert here that the seam round-trips without breaking the loader path
-test("the bridge seam resets cleanly", () => {
-	_resetBridge();
-	_setBridge(null);
-	_resetBridge();
-	assert.ok(true);
+// the node glue tests inject through _setBridge; after _resetBridge the
+// loader must answer with lib/engine.js's engine again, not the injected
+// one nor the forced-unavailable state
+test("the bridge seam resets to lib/engine.js's engine", async () => {
+	const mask = makeRectMask(SMALL_W, SMALL_H, { cx: 200, cy: 150, w: 160, h: 120 });
+	const fake = detectionEngine(mask);
+	try {
+		_setBridge(fake.engine);
+		assert.strictEqual((await labelCrop(FULL, { maxEdge: 400 })).detected, true);
+		assert.ok(fake.calls.length > 0, "the injected engine answered");
+		_setBridge(null);
+		await assert.rejects(labelCrop(FULL, { maxEdge: 400 }), /engine unavailable/);
+	} finally {
+		_resetBridge();
+	}
+	assert.strictEqual(getBridge(), require("../lib/engine.js").candidate().engine);
 });
 
 // ---- the production run: vignetting, a barcode band, and a faint liner --

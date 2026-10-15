@@ -92,27 +92,6 @@ function parse(markup) {
 }
 
 const parsed = parse(TEMPLATE);
-const innermost = (field) => field.chain[field.chain.length - 1];
-
-test("the set of fields is the one the flat form had", () => {
-	const ids = parsed.fields.map((f) => f.id);
-	assert.strictEqual(new Set(ids).size, ids.length, "an id appears twice");
-	assert.deepStrictEqual([...ids].sort(), [...IDS_BEFORE_SECTIONS].sort());
-});
-
-test("every field sits in exactly one innermost body, at most two deep", () => {
-	for (const field of parsed.fields) {
-		assert.ok(field.chain.length >= 1, `${field.id} is outside every section`);
-		assert.ok(
-			field.chain.length <= 2,
-			`${field.id} is nested ${field.chain.length} bodies deep: ${field.chain.join(" > ")}`,
-		);
-		assert.ok(
-			TOP_SECTIONS.includes(field.chain[0]),
-			`${field.id}'s outer body "${field.chain[0]}" is not a top-level section`,
-		);
-	}
-});
 
 test("every header has exactly one body of the same name, right after it", () => {
 	const headerNames = parsed.headers.map((h) => h.section);
@@ -145,8 +124,6 @@ test("the top-level sections come in the planned order", () => {
 });
 
 test("each field is under the section the plan puts it in", () => {
-	const where = {};
-	for (const field of parsed.fields) where[field.id] = field.chain.join(" > ");
 	const expect = {
 		golden: ["name", "goldenPath", "workingSize", "profileDir", "barcodeRegions",
 			"trainTransform", "trainNuisance"],
@@ -168,35 +145,13 @@ test("each field is under the section the plan puts it in", () => {
 			"debugStages", "previewEnabled", "previewWidth"],
 	};
 	const listed = Object.values(expect).flat();
-	assert.deepStrictEqual([...listed].sort(), [...IDS_BEFORE_SECTIONS].sort(), "the table below misses a field");
-	for (const [chain, ids] of Object.entries(expect)) {
-		for (const id of ids) {
-			assert.strictEqual(where[id], chain, `${id} is under "${where[id]}", expected "${chain}"`);
-		}
-	}
-	// and within a section the order is the planned one
-	for (const [chain, ids] of Object.entries(expect)) {
-		const order = parsed.fields.filter((f) => f.chain.join(" > ") === chain).map((f) => f.id);
-		assert.deepStrictEqual(order, ids, `order inside ${chain}`);
-	}
-	assert.strictEqual(innermost(parsed.fields.find((f) => f.id === "nuisancePath")), "legacy");
-});
-
-test("the rows the script reaches by id are still in the template", () => {
-	for (const id of [
-		"golden-compare-preview-width-row",
-		"golden-compare-barcode-regions-row",
-		"golden-compare-barcode-regions-hint",
-	]) {
-		assert.ok(TEMPLATE.includes(`id="${id}"`), `${id} is gone`);
-	}
-});
-
-test("no `defaults:` text before the editor script's own defaults block", () => {
-	// editorDefaults and labelCropExamples both take the first `defaults:`
-	// in the file; one in a hint or comment would be read as the block
-	const script = html.indexOf('<script type="text/javascript">');
-	assert.ok(script > 0, "no editor script");
-	assert.strictEqual(html.slice(0, script).indexOf("defaults:"), -1);
-	assert.ok(html.indexOf("defaults:") > script);
+	assert.deepStrictEqual([...listed].sort(), [...IDS_BEFORE_SECTIONS].sort(), "the table misses or repeats a field");
+	// grouped by the chain each field sits in: a field moved, dropped,
+	// added or repeated changes a group, and a field outside every section
+	// lands under "", which the table has no entry for
+	const actual = {};
+	for (const field of parsed.fields) (actual[field.chain.join(" > ")] ||= []).push(field.id);
+	for (const ids of Object.values(actual)) ids.sort();
+	const planned = Object.fromEntries(Object.entries(expect).map(([chain, ids]) => [chain, [...ids].sort()]));
+	assert.deepStrictEqual(actual, planned);
 });

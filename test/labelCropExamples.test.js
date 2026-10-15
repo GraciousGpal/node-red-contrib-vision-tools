@@ -5,7 +5,7 @@
  * property renamed or added in a node's `defaults` leaves it behind
  * silently: Node-RED imports the stale node without complaint and the
  * runtime falls back to a default the flow's author never chose. Every
- * line-finder and label-crop node in examples/ is therefore held to the
+ * node in examples/ with an editor in EDITORS is therefore held to the
  * exact key set of its editor's defaults, and the line-finder-to-label-crop
  * example is run end to end on the synthetic frame its function node
  * draws, so "imports and runs" is asserted rather than promised.
@@ -55,7 +55,7 @@ test("there are example flows to check", () => {
 });
 
 for (const file of exampleFiles) {
-	test(`${file}: every line-finder and label-crop node carries exactly its editor's defaults`, () => {
+	test(`${file}: every ${Object.keys(EDITORS).join(", ")} node carries exactly its editor's defaults`, () => {
 		const flow = loadExample(file);
 		const checked = [];
 		for (const node of flow) {
@@ -84,17 +84,30 @@ for (const file of exampleFiles) {
 		}
 	});
 
-	test(`${file}: a calipers label-crop carries four parseable edge regions`, () => {
-		const flow = loadExample(file);
-		for (const node of flow) {
+}
+
+// Only a calipers label-crop reads edgeRegions; an example without one has
+// nothing to check here. At least one example must have one, so this cannot
+// pass by finding none.
+test("every calipers label-crop example carries four parseable edge regions", () => {
+	const checked = [];
+	for (const file of exampleFiles) {
+		for (const node of loadExample(file)) {
 			if (node.type !== "label-crop" || node.boundaryMode !== "calipers") continue;
 			const regions = JSON.parse(node.edgeRegions);
 			for (const side of ["left", "right", "top", "bottom"]) {
-				assert.ok(regions[side], `${node.id}: edgeRegions lacks ${side}`);
+				const r = regions[side];
+				assert.ok(r, `${file} ${node.id}: edgeRegions lacks ${side}`);
+				for (const k of ["x", "y", "width", "height"]) {
+					assert.ok(Number.isFinite(r[k]), `${file} ${node.id}: ${side}.${k} is ${r[k]}`);
+				}
+				assert.ok(r.width > 0 && r.height > 0, `${file} ${node.id}: ${side} is empty`);
 			}
+			checked.push(`${file} ${node.id}`);
 		}
-	});
-}
+	}
+	assert.ok(checked.length > 0, "no example has a calipers label-crop");
+});
 
 // ---- the line-finder-to-label-crop example, run --------------------------
 

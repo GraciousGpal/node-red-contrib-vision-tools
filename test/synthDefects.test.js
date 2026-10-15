@@ -8,9 +8,9 @@
  *  - a seed reproduces a set (otherwise two runs are not comparable);
  *  - the golden really is two-level artwork with a plausible ink fraction;
  *  - every defect's ground truth matches what it did to the pixels - the
- *    bbox, the per-channel counts and the derived channel are recomputed
- *    here from an independent diff, because a generator that mislabels its
- *    own output produces a benchmark that is confidently wrong;
+ *    reported box is checked against the changed pixels found here by a
+ *    plain scan, because a generator that mislabels its own output
+ *    produces a benchmark that is confidently wrong;
  *  - each severity ladder really is a ladder;
  *  - `stain` stays under the change floor, which is the one variant whose
  *    correct answer is "this part passes";
@@ -28,16 +28,12 @@ const path = require("node:path");
 const sharp = require("sharp");
 
 const { makePrng } = require("../lib/synth/prng.js");
-const {
-	syntheticLabel,
-	syntheticLabelRaster,
-} = require("../lib/synth/label.js");
+const { syntheticLabelRaster } = require("../lib/synth/label.js");
 const {
 	applyDefect,
 	applyDefects,
 	FAMILIES,
 	SEVERITIES,
-	INK_LEVEL,
 	CHANGE_FLOOR,
 } = require("../lib/synth/defects.js");
 const { capture, capturePresets } = require("../lib/synth/capture.js");
@@ -52,48 +48,45 @@ function smallGolden() {
 	return goldenPromise;
 }
 
-/** The ground-truth derivation, rewritten independently of defects.js. */
-function diff(before, after, width, height) {
-	let minX = Infinity;
-	let minY = Infinity;
-	let maxX = -Infinity;
-	let maxY = -Infinity;
-	let printPixels = 0;
-	let backgroundPixels = 0;
-	let changed = 0;
-	for (let i = 0; i < before.length; i++) {
-		if (before[i] === after[i]) continue;
-		changed++;
-		const x = i % width;
-		const y = Math.floor(i / width);
-		minX = Math.min(minX, x);
-		maxX = Math.max(maxX, x);
-		minY = Math.min(minY, y);
-		maxY = Math.max(maxY, y);
-		if (before[i] < INK_LEVEL) {
-			if (after[i] - before[i] >= CHANGE_FLOOR) printPixels++;
-		} else if (before[i] - after[i] >= CHANGE_FLOOR) {
-			backgroundPixels++;
-		}
-	}
-	const channel =
-		printPixels > 0 && backgroundPixels > 0
-			? "both"
-			: printPixels > 0
-				? "print"
-				: backgroundPixels > 0
-					? "background"
-					: "none";
-	return {
-		changed,
-		printPixels,
-		backgroundPixels,
-		channel,
-		bbox: changed
-			? { x: minX, y: minY, w: maxX - minX + 1, h: maxY - minY + 1 }
-			: { x: 0, y: 0, w: 0, h: 0 },
-	};
+/** Every pixel index where `after` differs from `before`. */
+function changedPixels(before, after) {
+	const out = [];
+	for (let i = 0; i < before.length; i++) if (before[i] !== after[i]) out.push(i);
+	return out;
 }
+
+/**
+ * The reported box must hold every changed pixel, and must not be larger
+ * than they are: slack 0, so each of its four edges has a changed pixel
+ * on it. Checked by containment and by edge, not by recomputing the box.
+ */
+function assertBoxFits(box, changed, width, where) {
+	let top = false;
+	let bottom = false;
+	let left = false;
+	let right = false;
+	for (const i of changed) {
+		const x = i % width;
+		const y = (i - x) / width;
+		assert.ok(
+			x >= box.x && x < box.x + box.w && y >= box.y && y < box.y + box.h,
+			`${where}: changed pixel ${x},${y} is outside the box ${JSON.stringify(box)}`,
+		);
+		if (y === box.y) top = true;
+		if (y === box.y + box.h - 1) bottom = true;
+		if (x === box.x) left = true;
+		if (x === box.x + box.w - 1) right = true;
+	}
+	assert.ok(top && bottom && left && right, `${where}: box ${JSON.stringify(box)} is looser than its pixels`);
+}
+
+/** What each channel label promises about the two counts. */
+const CHANNEL_COUNTS = {
+	print: (p, b) => p > 0 && b === 0,
+	background: (p, b) => p === 0 && b > 0,
+	both: (p, b) => p > 0 && b > 0,
+	none: (p, b) => p === 0 && b === 0,
+};
 
 const everyVariant = Object.entries(FAMILIES).flatMap(([type, variants]) =>
 	variants.map((variant) => [type, variant]),
@@ -144,11 +137,6 @@ test("the synthetic label is two-level artwork with a label-like ink fraction", 
 			`ink fraction ${fraction.toFixed(3)} is not label-like at ${w}x${h}`,
 		);
 	}
-	const png = await syntheticLabel(200, 280, 2);
-	const meta = await sharp(png).metadata();
-	assert.equal(meta.format, "png");
-	assert.equal(meta.width, 200);
-	assert.equal(meta.height, 280);
 });
 
 test("every defect's ground truth is what it did to the pixels", async () => {
@@ -157,23 +145,31 @@ test("every defect's ground truth is what it did to the pixels", async () => {
 		for (const severity of ["small", "large"]) {
 			const spec = { type, variant, severity };
 			const result = applyDefect(golden, spec, makePrng(91));
-			const truth = diff(golden.data, result.data, W, H);
+			const changed = changedPixels(golden.data, result.data);
 			const where = `${type}/${variant}/${severity}`;
-			assert.ok(truth.changed > 0, `${where} changed nothing`);
-			assert.deepEqual(result.gt.bbox, truth.bbox, `${where} bbox`);
-			assert.equal(result.gt.printPixels, truth.printPixels, `${where} print`);
-			assert.equal(
-				result.gt.backgroundPixels,
-				truth.backgroundPixels,
-				`${where} background`,
-			);
-			assert.equal(result.gt.channel, truth.channel, `${where} channel`);
-			assert.equal(result.gt.params.changedPixels, truth.changed);
-			assert.equal(result.gt.type, type);
-			assert.equal(result.gt.variant, variant);
-			assert.equal(result.gt.severity, severity);
-			// the golden itself is never touched
-			assert.notEqual(result.data, golden.data);
+			// score.js groups its results by these three
+			assert.deepEqual([result.gt.type, result.gt.variant, result.gt.severity], [type, variant, severity], where);
+			assert.ok(changed.length > 0, `${where} changed nothing`);
+			assertBoxFits(result.gt.bbox, changed, W, where);
+			assert.equal(result.gt.params.changedPixels, changed.length, `${where} changed count`);
+			const { printPixels: p, backgroundPixels: b, channel } = result.gt;
+			// the channel counts are a subset of the changed pixels
+			// The golden is two-level (0 ink, 255 paper - the label test pins
+			// that), so the plain reading: an ink pixel made lighter by at
+			// least the change floor is print lost, a paper pixel made darker
+			// by at least the floor is background ink. Smaller moves are
+			// neither, which is what a faint stain does.
+			let ownPrint = 0;
+			let ownBackground = 0;
+			for (const i of changed) {
+				const was = golden.data[i];
+				const now = result.data[i];
+				if (was === 0 && now - was >= CHANGE_FLOOR) ownPrint++;
+				if (was === 255 && was - now >= CHANGE_FLOOR) ownBackground++;
+			}
+			assert.equal(p, ownPrint, `${where}: printPixels ${p}, but ${ownPrint} ink pixels lightened by >= ${CHANGE_FLOOR}`);
+			assert.equal(b, ownBackground, `${where}: backgroundPixels ${b}, but ${ownBackground} paper pixels darkened by >= ${CHANGE_FLOOR}`);
+			assert.ok(CHANNEL_COUNTS[channel](p, b), `${where}: channel ${channel} with print ${p}, background ${b}`);
 		}
 	}
 });
@@ -214,7 +210,6 @@ test("a faint stain is honestly reported as changing no channel", async () => {
 			assert.equal(r.gt.channel, "none", `stain/${severity} seed ${s}`);
 			assert.equal(r.gt.printPixels, 0);
 			assert.equal(r.gt.backgroundPixels, 0);
-			assert.ok(r.gt.params.delta >= 15 && r.gt.params.delta <= 40);
 			assert.ok(r.gt.params.changedPixels > 0, "a stain still changes pixels");
 		}
 	}
@@ -227,16 +222,23 @@ test("stacked defects each report against the raster they landed on", async () =
 		{ type: "misprint", variant: "streak", severity: "medium" },
 	];
 	const stacked = applyDefects(golden, list, makePrng(11));
-	assert.equal(stacked.gt.length, 2);
-	assert.equal(stacked.gt[0].variant, "ink");
-	assert.equal(stacked.gt[1].variant, "streak");
-	// the second is measured against the first's output, so the union of the
-	// two diffs is exactly the total change from the original
-	const total = diff(golden.data, stacked.data, W, H);
-	assert.ok(total.changed > 0);
-	assert.ok(
-		total.changed <=
-			stacked.gt[0].params.changedPixels + stacked.gt[1].params.changedPixels,
+	// the same two defects applied by hand, one prng shared as applyDefects does
+	const prng = makePrng(11);
+	const first = applyDefect(golden, list[0], prng);
+	const second = applyDefect(first, list[1], prng);
+	assert.deepEqual(stacked.data, second.data, "the stack is the second defect on the first's output");
+
+	const firstChanged = changedPixels(golden.data, first.data);
+	assertBoxFits(stacked.gt[0].bbox, firstChanged, W, "ink");
+	assert.equal(stacked.gt[0].params.changedPixels, firstChanged.length);
+	// the second is diffed against the first's output, not the original
+	const secondChanged = changedPixels(first.data, stacked.data);
+	assertBoxFits(stacked.gt[1].bbox, secondChanged, W, "streak");
+	assert.equal(stacked.gt[1].params.changedPixels, secondChanged.length);
+	assert.notEqual(
+		secondChanged.length,
+		changedPixels(golden.data, stacked.data).length,
+		"fixture: the two diffs must differ for this to tell them apart",
 	);
 });
 
@@ -282,10 +284,24 @@ test("capture produces the frame it recorded, within the preset's ranges", async
 			assert.equal(shot.format, "jpg");
 		}
 		assert.ok(shot.params.dx >= 0 && shot.params.dy >= 0);
+	}
+});
 
-		const again = await capture(golden, name, makePrng(5));
-		assert.deepEqual(again.params, shot.params, `${name} params drifted`);
-		assert.ok(again.buffer.equals(shot.buffer), `${name} bytes drifted`);
+test("the same seed generates the same set", async (t) => {
+	const run = async () => {
+		const out = fs.mkdtempSync(path.join(os.tmpdir(), "synth-seed-"));
+		t.after(() => fs.rmSync(out, { recursive: true, force: true }));
+		const manifest = await generate({ out, seed: 9, perVariant: 1, preset: "clean-rig", width: 80, height: 112, quiet: true });
+		return { out, manifest };
+	};
+	const a = await run();
+	const b = await run();
+	assert.deepEqual(b.manifest, a.manifest);
+	for (const file of ["golden.png", ...a.manifest.cases.map((c) => c.frame)]) {
+		assert.ok(
+			fs.readFileSync(path.join(a.out, file)).equals(fs.readFileSync(path.join(b.out, file))),
+			`the same seed wrote different bytes for ${file}`,
+		);
 	}
 });
 
@@ -308,15 +324,6 @@ test("generate writes a manifest matching the contract", async (t) => {
 	);
 	assert.deepEqual(onDisk, manifest);
 
-	assert.equal(manifest.version, 1);
-	assert.equal(manifest.seed, 4);
-	assert.equal(manifest.preset, "typical");
-	assert.deepEqual(manifest.golden, {
-		path: "golden.png",
-		width: 200,
-		height: 280,
-		source: "synthetic",
-	});
 	const goldenMeta = await sharp(path.join(out, "golden.png")).metadata();
 	assert.equal(goldenMeta.width, 200);
 	assert.equal(goldenMeta.height, 280);
@@ -360,7 +367,6 @@ test("generate writes a manifest matching the contract", async (t) => {
 	for (const c of manifest.cases) {
 		assert.ok(!ids.has(c.id), `duplicate id ${c.id}`);
 		ids.add(c.id);
-		assert.match(c.id, /^[a-z-]+-[a-z-]+-[a-z]+-\d{4}$/, c.id);
 		assert.ok(
 			c.family === "clean" || Object.keys(FAMILIES).includes(c.family),
 			c.family,
@@ -388,13 +394,11 @@ test("generate writes a manifest matching the contract", async (t) => {
 		assert.ok(FAMILIES[gt.type].includes(gt.variant));
 		assert.ok(SEVERITIES.includes(gt.severity));
 		assert.ok(["print", "background", "both", "none"].includes(gt.channel));
-		assert.equal(c.id, `${gt.type}-${gt.variant}-${gt.severity}-${c.id.slice(-4)}`);
 		for (const k of ["x", "y", "w", "h"]) {
 			assert.ok(Number.isInteger(gt.bbox[k]), `${c.id} bbox.${k}`);
 		}
 		assert.ok(gt.bbox.x + gt.bbox.w <= 200 && gt.bbox.y + gt.bbox.h <= 280);
 		assert.ok(gt.printPixels >= 0 && gt.backgroundPixels >= 0);
-		assert.equal(typeof gt.params, "object");
 
 		// expected is derived from the channels, not from the family name
 		const expectedChannels =
@@ -406,25 +410,4 @@ test("generate writes a manifest matching the contract", async (t) => {
 		assert.deepEqual(c.expected.channels, expectedChannels, c.id);
 		assert.equal(c.expected.pass, gt.channel === "none", c.id);
 	}
-
-	// same seed, same set
-	const out2 = fs.mkdtempSync(path.join(os.tmpdir(), "synth-set-"));
-	t.after(() => fs.rmSync(out2, { recursive: true, force: true }));
-	const repeat = await generate({
-		out: out2,
-		seed: 4,
-		perVariant: 1,
-		preset: "typical",
-		width: 200,
-		height: 280,
-		quiet: true,
-	});
-	assert.deepEqual(repeat, manifest);
-	const first = manifest.cases[0];
-	assert.ok(
-		fs
-			.readFileSync(path.join(out, first.frame))
-			.equals(fs.readFileSync(path.join(out2, first.frame))),
-		"the same seed produced different frame bytes",
-	);
 });

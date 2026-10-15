@@ -48,38 +48,124 @@ async function viaFile(record, expect) {
 	return readTransformFile(file, expect);
 }
 
-test("validate agrees with read on accepted and refused records", async () => {
-	const cases = [
-		[RECORD, EXPECT],
-		[RECORD, { ...EXPECT, workingSize: 3072 }],
-		[
-			{ ...RECORD, goldenKey: "buf:1" },
-			{ ...EXPECT, goldenKey: "path:/x:1:2" },
-		],
-		[
-			{ ...RECORD, goldenKey: "buf:1" },
-			{
-				...EXPECT,
-				goldenKey: "path:/x:1:2",
-				goldenContentKey: async () => "sha1:bbbb",
+// One table for both entry points: readTransformFile is a JSON read in
+// front of validateTransformRecord, so every row must give the same answer
+// through each, and that answer is checked here once. `error: null` means
+// accepted with the record's own scales.
+const { goldenContentKey: _noContent, ...PRE_CONTENT } = RECORD;
+const CASES = [
+	{ name: "same golden, same working size", record: RECORD, expect: EXPECT, error: null },
+	{ name: "no expectation at all", record: RECORD, expect: undefined, error: null },
+	// Training through msg.golden and then running from goldenPath is the
+	// documented flow; the cheap keys differ, the content settles it.
+	{
+		name: "same golden delivered a different way",
+		record: { ...RECORD, goldenKey: "buf:0d93201f" },
+		expect: {
+			...EXPECT,
+			goldenKey: "path:/data/golden/artwork.png:1788011451282:11070",
+			goldenContentKey: async () => "sha1:aaaa",
+		},
+		error: null,
+	},
+	{
+		name: "different golden, record predates content keys",
+		record: { ...PRE_CONTENT, goldenKey: "buf:1" },
+		expect: { ...EXPECT, goldenKey: "path:/x:1:2" },
+		error: /different golden \(buf:1 vs path:\/x:1:2\).*predates content-keyed training/,
+	},
+	{
+		name: "different golden, content resolver throws",
+		record: { ...RECORD, goldenKey: "buf:1" },
+		expect: {
+			...EXPECT,
+			goldenKey: "path:/x:1:2",
+			goldenContentKey: async () => {
+				throw new Error("golden vanished");
 			},
-		],
-		[{ ...RECORD, scaleX: 1e308 }, EXPECT],
-		[{ ...RECORD, scaleY: 0 }, EXPECT],
-		[RECORD, undefined],
-		[
-			RECORD,
-			{ ...EXPECT, goldenContentKey: "sha1:other", strictContentKey: true },
-		],
-	];
-	for (const [record, expect] of cases) {
-		const fromFile = await viaFile(record, expect);
-		const direct = await validateTransformRecord(
-			JSON.parse(JSON.stringify(record)),
-			expect,
-		);
-		assert.deepEqual(direct, fromFile);
+		},
+		error: /different golden \(buf:1 vs path:\/x:1:2\) - retrain it$/,
+	},
+	{
+		name: "different golden content",
+		record: { ...RECORD, goldenKey: "buf:1" },
+		expect: {
+			...EXPECT,
+			goldenKey: "path:/x:1:2",
+			goldenContentKey: async () => "sha1:bbbb",
+		},
+		error: /different golden content \(sha1:aaaa vs sha1:bbbb\) - retrain/,
+	},
+	{
+		name: "trained at another working size",
+		record: RECORD,
+		expect: { ...EXPECT, workingSize: 3072 },
+		error: /workingSize 2125, now running at 3072/,
+	},
+	{
+		name: "scaleY missing",
+		record: { scaleX: 1.9, goldenKey: "k" },
+		expect: EXPECT,
+		error: /no usable scaleX\/scaleY/,
+	},
+	{
+		name: "zero and negative scales",
+		record: { ...RECORD, scaleX: 0, scaleY: -1 },
+		expect: EXPECT,
+		error: /no usable scaleX\/scaleY/,
+	},
+	// Regression: 1e308 is a finite positive double. It was accepted, then
+	// reached the pinned search as centerX = -Infinity and halfRange =
+	// Infinity - a synchronous infinite loop that froze the whole process.
+	{
+		name: "absurd but finite scale (1e308), the freeze regression",
+		record: { ...RECORD, scaleX: 1e308, scaleY: 1e308 },
+		expect: EXPECT,
+		error: /within 0\.05\.\.100/,
+	},
+	{
+		name: "scale below the physical range",
+		record: { ...RECORD, scaleX: 0.01, scaleY: 2 },
+		expect: EXPECT,
+		error: /within 0\.05\.\.100/,
+	},
+	{
+		name: "scale above the physical range",
+		record: { ...RECORD, scaleX: 2, scaleY: 500 },
+		expect: EXPECT,
+		error: /within 0\.05\.\.100/,
+	},
+	{
+		name: "strict mode, same cheap key, other content",
+		record: RECORD,
+		expect: { ...EXPECT, goldenContentKey: "sha1:other", strictContentKey: true },
+		error: /different golden content \(sha1:aaaa vs sha1:other\)/,
+	},
+];
+
+test("read and validate give the same, expected answer for every record", async () => {
+	const failures = [];
+	for (const { name, record, expect, error } of CASES) {
+		try {
+			const fromFile = await viaFile(record, expect);
+			const direct = await validateTransformRecord(
+				JSON.parse(JSON.stringify(record)),
+				expect,
+			);
+			assert.deepEqual(direct, fromFile, "read and validate disagree");
+			if (error) {
+				assert.match(String(direct.error), error);
+				assert.equal(direct.scaleX, undefined, "refused but returned scales");
+			} else {
+				assert.equal(direct.error, undefined);
+				assert.equal(direct.scaleX, record.scaleX);
+				assert.equal(direct.scaleY, record.scaleY);
+			}
+		} catch (err) {
+			failures.push(`${name}: ${err.message.split("\n")[0]}`);
+		}
 	}
+	assert.deepEqual(failures, []);
 });
 
 test("a non-object record is refused, not thrown on", async () => {

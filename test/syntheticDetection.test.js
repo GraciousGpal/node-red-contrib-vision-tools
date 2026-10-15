@@ -77,7 +77,7 @@ const CFG = {
 	debugStages: false,
 };
 
-test("every fail golden-compare raises on a synthetic frame lands on the defect the generator painted", async () => {
+test("golden-compare detects four synthetic ink and dropout defects where the generator painted them, and passes the non-harsh clean frames", async () => {
 	const raster = await goldenRaster(null, { width: W, height: H, seed: 1 });
 	const goldenPng = await sharp(raster.data, { raw: { width: W, height: H, channels: 1 } })
 		.png()

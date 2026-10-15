@@ -29,9 +29,6 @@
 
 const test = require("node:test");
 const assert = require("node:assert");
-const os = require("node:os");
-const path = require("node:path");
-const fsp = require("node:fs/promises");
 const sharp = require("sharp");
 const inspector = require("../lib/inspector.js");
 const core = require("../lib/inspectorCore.js");
@@ -43,10 +40,6 @@ function makeNode(config = {}) {
 	const node = loadNode("golden-compare.js", config);
 	const sent = [];
 	node.send = (m) => sent.push(m);
-	node.warn = () => {};
-	node.error = () => {};
-	node.status = () => {};
-	node.log = () => {};
 	const run = (msg) =>
 		new Promise((resolve, reject) =>
 			node.listeners.input(msg, undefined, (err) =>
@@ -184,6 +177,20 @@ test("the default configuration - no heatmaps, no stages - does not throw", asyn
 
 // ---- eviction and the retry -------------------------------------------
 
+const FILLER_CFG = {
+	workingSize: 64,
+	threshold: 128,
+	thresholdMode: "fixed",
+	sauvolaRadius: 24,
+	sauvolaK: 0.2,
+	inkMargin: 0,
+	backgroundTolerance: 0,
+	debugStages: false,
+	mmPerPixelNative: null,
+	calibrationNativeWidth: null,
+	calibrationNativeHeight: null,
+};
+
 test("a golden evicted between prepare and inspect is recovered, not spun on", async () => {
 	const golden = await png(svg(400, 560));
 	const frame = await png(svg(400, 560));
@@ -201,19 +208,7 @@ test("a golden evicted between prepare and inspect is recovered, not spun on", a
 		for (let i = 0; i < core.MAX_GOLDENS + 1; i++) {
 			await inspector.prepare({
 				cacheKey: `filler-${i}`,
-				cfg: {
-					workingSize: 64,
-					threshold: 128,
-					thresholdMode: "fixed",
-					sauvolaRadius: 24,
-					sauvolaK: 0.2,
-					inkMargin: 0,
-					backgroundTolerance: 0,
-					debugStages: false,
-					mmPerPixelNative: null,
-					calibrationNativeWidth: null,
-					calibrationNativeHeight: null,
-				},
+				cfg: FILLER_CFG,
 				golden: (await png(svg(80, 80))).buffer,
 			});
 		}
@@ -226,11 +221,29 @@ test("a golden evicted between prepare and inspect is recovered, not spun on", a
 	assert.strictEqual(typeof sent[1].result.transform.score, "number");
 });
 
-test("the store is bounded", () => {
-	assert.ok(
-		core.MAX_GOLDENS >= 2 && core.MAX_GOLDENS <= 8,
-		`MAX_GOLDENS is ${core.MAX_GOLDENS}`,
+test("the store is bounded: past MAX_GOLDENS the least recently used golden goes", async () => {
+	core.clear();
+	const golden = (await png(svg(80, 80))).buffer;
+	const MAX = core.MAX_GOLDENS;
+	for (let i = 0; i < MAX; i++) {
+		await core.prepare({ cacheKey: `bound-${i}`, cfg: FILLER_CFG, golden });
+	}
+	// re-inspecting the oldest makes it the most recently used, so the
+	// overflow must take bound-1 instead (insertion order would take bound-0)
+	assert.ok((await core.prepare({ cacheKey: "bound-0", cfg: FILLER_CFG })).goldenMeta, "precondition: bound-0 is held");
+	await core.prepare({ cacheKey: `bound-${MAX}`, cfg: FILLER_CFG, golden });
+	assert.deepStrictEqual(
+		await core.prepare({ cacheKey: "bound-1", cfg: FILLER_CFG }),
+		{ needGolden: true },
+		"the least recently used golden goes",
 	);
+	// MAX + 1 goldens prepared, exactly one evicted: every other key is held
+	const kept = [];
+	for (const i of [0, ...Array.from({ length: MAX - 1 }, (_, k) => k + 2)]) {
+		if ((await core.prepare({ cacheKey: `bound-${i}`, cfg: FILLER_CFG })).goldenMeta) kept.push(i);
+	}
+	assert.strictEqual(kept.length, MAX, `kept ${JSON.stringify(kept)}`);
+	core.clear();
 });
 
 test("a golden that fails to prepare does not wedge its key", async () => {
@@ -242,74 +255,16 @@ test("a golden that fails to prepare does not wedge its key", async () => {
 	const frame = await png(svg(400, 560));
 	const { run, sent } = makeNode({ ...CFG });
 
-	await assert.rejects(
-		run({ payload: frame, golden: notAnImage, goldenKey: "wedge" }),
-		/unsupported image format|Input buffer/i,
-	);
+	// an Error with sharp's own message, across the thread boundary
+	await assert.rejects(run({ payload: frame, golden: notAnImage, goldenKey: "wedge" }), (err) => {
+		assert.ok(err instanceof Error, "not an Error");
+		assert.match(err.message, /unsupported image format|Input buffer/i);
+		return true;
+	});
 
 	// same key, now with bytes that do decode - a stale rejected promise
 	// would make this fail too
 	const golden = await png(svg(400, 560));
 	await run({ payload: frame, golden, goldenKey: "wedge" });
 	assert.strictEqual(sent.length, 1, "the key stayed wedged after one failure");
-});
-
-// ---- error fidelity ----------------------------------------------------
-
-test("an error raised inside the pipeline keeps its message", async () => {
-	const frame = Buffer.from("not an image either");
-	const golden = await png(svg(400, 560));
-	const { run } = makeNode({ ...CFG });
-	await assert.rejects(
-		run({ payload: frame, golden, goldenKey: "err" }),
-		(err) => {
-			assert.ok(err instanceof Error, "not an Error");
-			assert.match(err.message, /unsupported image format|Input buffer/i);
-			return true;
-		},
-	);
-});
-
-// ---- calibration moved too --------------------------------------------
-
-test("checkerboard-calibrate still measures through the inspector", async () => {
-	const dir = await fsp.mkdtemp(path.join(os.tmpdir(), "gc-cal-"));
-	const board = [];
-	const sq = 40;
-	for (let y = 0; y < 6; y++) {
-		for (let x = 0; x < 8; x++) {
-			if ((x + y) % 2 === 0) continue;
-			board.push(
-				`<rect x="${20 + x * sq}" y="${20 + y * sq}" width="${sq}" height="${sq}" fill="#111"/>`,
-			);
-		}
-	}
-	const image = await png(
-		Buffer.from(
-			`<svg xmlns="http://www.w3.org/2000/svg" width="400" height="320">` +
-				`<rect width="100%" height="100%" fill="#fff"/>${board.join("")}</svg>`,
-		),
-	);
-
-	const node = loadNode("checkerboard-calibrate.js", {
-		cols: 4,
-		rows: 3,
-		squareMm: 10,
-		scaleFilePath: path.join(dir, "scale.json"),
-	});
-	const sent = [];
-	node.send = (m) => sent.push(m);
-	node.warn = () => {};
-	node.error = () => {};
-	node.status = () => {};
-	node.log = () => {};
-	await new Promise((resolve, reject) =>
-		node.listeners.input({ payload: image }, undefined, (err) =>
-			err ? reject(err) : resolve(),
-		),
-	);
-	assert.strictEqual(sent.length, 1);
-	// detected or not, the point is that it ran off-thread and answered
-	assert.strictEqual(typeof sent[0].result.checkerboardDetected, "boolean");
-	await fsp.rm(dir, { recursive: true, force: true });
 });

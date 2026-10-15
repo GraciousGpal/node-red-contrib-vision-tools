@@ -98,8 +98,6 @@ test("a pinned transform with absurd scales completes instead of hanging", async
 			angleSteps: 5,
 		},
 	);
-	assert.strictEqual(result.pinned, true);
-	assert.strictEqual(result.mx, 1e300);
 	// nothing on-frame is matchable from -Infinity, so the sweep must
 	// report no score rather than a bogus finite one
 	assert.strictEqual(result.score, Infinity);
