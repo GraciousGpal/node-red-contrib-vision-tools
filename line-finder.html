@@ -2276,6 +2276,15 @@
           if (imageUrl === url) imageUrl = null;
           URL.revokeObjectURL(url);
           RED.notify("line-finder: could not read that image", "error");
+          if (source !== "cached") return;
+          if (image) {
+            // as when the runtime loses its copy: the image on screen is
+            // no longer the runtime's frame, so Run uploads what is shown
+            imageSource = "file";
+            setFrameCaption("the new frame could not be decoded - Run will upload the image shown");
+          } else {
+            setFrameCaption("the last frame could not be decoded - send another, or choose a file");
+          }
         };
         img.src = url;
       };

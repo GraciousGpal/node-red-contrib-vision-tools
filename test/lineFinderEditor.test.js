@@ -1016,8 +1016,29 @@ test("an answer with no frame in it, or a frame that does not decode, leaves not
 		ajax.frames[0].resolve({ size: 1, type: "image/png" }, FRAME_HEADERS);
 		assert.deepStrictEqual(env.notifications, [{ message: "line-finder: could not read that image", kind: "error" }]);
 		assert.doesNotMatch(frameCaption(env), /through this node/, "no frame is claimed");
+		assert.strictEqual(frameCaption(env), "the last frame could not be decoded - send another, or choose a file");
 		assert.strictEqual(env.document.getElementById("line-finder-run").disabled, true);
 		assert.strictEqual(env.URL.revoked, env.URL.created, "the failed frame's URL is released");
+	});
+});
+
+test("a reloaded frame that does not decode leaves the shown frame in charge, and Run uploads it", () => {
+	withAjax((ajax) => {
+		// the first frame decodes, the reloaded one fails the way a browser's does
+		const secondBreaks =
+			"const GoodImage = Image; let loads = 0;\n" +
+			"Image = class extends GoodImage { set src(url) { if (++loads > 1) this.onerror(); else super.src = url; } };\n";
+		const env = boot(REGION_FIELDS, { id: "lf7" }, secondBreaks + SCRIPT);
+		ajax.frames[0].resolve({ size: 1, type: "image/png" }, FRAME_HEADERS);
+		assert.match(frameCaption(env), /through this node/);
+		env.document.getElementById("line-finder-reload-frame").dispatch("click");
+		ajax.frames[1].resolve({ size: 1, type: "image/png" }, FRAME_HEADERS);
+		assert.deepStrictEqual(env.notifications, [{ message: "line-finder: could not read that image", kind: "error" }]);
+		assert.strictEqual(frameCaption(env), "the new frame could not be decoded - Run will upload the image shown");
+		env.document.getElementById("line-finder-run").dispatch("click");
+		assert.strictEqual(ajax.calls.length, 1);
+		assert.strictEqual(typeof ajax.calls[0].body.image, "string");
+		assert.strictEqual(ajax.calls[0].body.nodeId, undefined);
 	});
 });
 
