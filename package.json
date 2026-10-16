@@ -81,5 +81,8 @@
     "ARCHITECTURE.md",
     "CHANGELOG.md",
     "LICENSE"
-  ]
+  ],
+  "devDependencies": {
+    "onnxruntime-web": "^1.30.0"
+  }
 }

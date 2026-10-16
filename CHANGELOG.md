@@ -23,6 +23,12 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   frame or a folder: the encoded file, the same frame as raw pixels, and
   the full-image pass; `--auto` derives profile-like regions from the
   first frame.
+- **`bench/ocr-bench.js`** reads given text lines with a PP-OCR
+  recognition model on onnxruntime-web and on OpenCV 5's dnn module
+  (opencv-js), and reports per line the free read, its exact match, the
+  CTC score of the expected text and of a one-character misprint, engine
+  agreement and timings. `onnxruntime-web` is a dev dependency; the models
+  are downloaded separately (links in the script's header).
 
 ### Changed
 
