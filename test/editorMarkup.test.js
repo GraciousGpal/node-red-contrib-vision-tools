@@ -28,6 +28,7 @@ const HTML_FILES = [
 	"line-finder.html",
 	"barcode-locate.html",
 	"synthetic-defects.html",
+	"text-inspect.html",
 ];
 
 /** The editor <script> and every data-template-name block, separately. */
@@ -87,6 +88,7 @@ for (const file of HTML_FILES) {
 		const CUSTOM_WIDGET = {
 			"barcode-locate.html": ["regions"],
 			"line-finder.html": ["regions"],
+			"text-inspect.html": ["regions"],
 		};
 		const { script, templates } = split(html);
 		const markup = templates.join("\n");

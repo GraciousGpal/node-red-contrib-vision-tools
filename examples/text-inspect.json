@@ -1,0 +1,137 @@
+[
+    {
+        "id": "tix-note",
+        "type": "comment",
+        "z": "tix-tab",
+        "name": "Read printed text after barcode-locate (text-inspect reads, it does not grade)",
+        "info": "Point `frame` at a camera frame on the Node-RED host, then open\n`text inspect`, load the last frame (press Inject once first) and drag a\nbox around each printed line you want read. The two regions shipped here\nare placeholders.\n\n`barcode-locate` must have Preview OFF here: with Preview on it replaces\nmsg.payload with the barcode's preview crop, and text-inspect would then\nread the crop, not the frame.\n\n`barcode-locate` sends one message per barcode it found (one with\ntext null when it found none), so text-inspect reads the frame once per\nmessage. A msg.regions on the way in would pass through barcode-locate\nand replace text-inspect's own regions.\n\nmsg.ocr carries { name, roi, text, confidences } per region. Nothing\nhere compares the printed text with the barcode data; add that\ndownstream if you need a verdict.",
+        "x": 330,
+        "y": 60,
+        "wires": []
+    },
+    {
+        "id": "tix-inject",
+        "type": "inject",
+        "z": "tix-tab",
+        "name": "one frame",
+        "props": [
+            {
+                "p": "payload"
+            }
+        ],
+        "repeat": "",
+        "crontab": "",
+        "once": false,
+        "onceDelay": 0.1,
+        "topic": "",
+        "payload": "",
+        "payloadType": "date",
+        "x": 130,
+        "y": 120,
+        "wires": [
+            [
+                "tix-read"
+            ]
+        ]
+    },
+    {
+        "id": "tix-read",
+        "type": "file in",
+        "z": "tix-tab",
+        "name": "frame",
+        "filename": "/data/frame.jpg",
+        "filenameType": "str",
+        "format": "",
+        "chunk": false,
+        "sendError": true,
+        "encoding": "none",
+        "allProps": false,
+        "x": 290,
+        "y": 120,
+        "wires": [
+            [
+                "tix-barcode"
+            ]
+        ]
+    },
+    {
+        "id": "tix-barcode",
+        "type": "barcode-locate",
+        "z": "tix-tab",
+        "name": "barcodes",
+        "mode": "regionsThenAuto",
+        "regions": [],
+        "regionSource": "list",
+        "profilePath": "",
+        "profileDir": "",
+        "scaleFilePath": "",
+        "regionPad": 0.2,
+        "regionPadMinPx": 64,
+        "Code128": true,
+        "DataMatrix": true,
+        "QRCode": true,
+        "EAN13": true,
+        "Code39": true,
+        "ITF": true,
+        "PDF417": true,
+        "EAN8": false,
+        "tryHarder": true,
+        "tryRotate": true,
+        "preview": false,
+        "x": 460,
+        "y": 120,
+        "wires": [
+            [
+                "tix-text"
+            ]
+        ]
+    },
+    {
+        "id": "tix-text",
+        "type": "text-inspect",
+        "z": "tix-tab",
+        "name": "text inspect",
+        "regions": [
+            {
+                "name": "line1",
+                "x": 100,
+                "y": 100,
+                "width": 600,
+                "height": 60
+            },
+            {
+                "name": "line2",
+                "x": 100,
+                "y": 180,
+                "width": 600,
+                "height": 60
+            }
+        ],
+        "frameWidth": 0,
+        "frameHeight": 0,
+        "x": 640,
+        "y": 120,
+        "wires": [
+            [
+                "tix-debug"
+            ]
+        ]
+    },
+    {
+        "id": "tix-debug",
+        "type": "debug",
+        "z": "tix-tab",
+        "name": "msg.ocr",
+        "active": true,
+        "tosidebar": true,
+        "console": false,
+        "tostatus": false,
+        "complete": "ocr",
+        "targetType": "msg",
+        "statusVal": "",
+        "statusType": "auto",
+        "x": 810,
+        "y": 120,
+        "wires": []
+    }
+]

@@ -133,6 +133,7 @@ const NODES = [
 	{ html: "line-finder.html", js: "line-finder.js" },
 	{ html: "barcode-locate.html", js: "barcode-locate.js" },
 	{ html: "synthetic-defects.html", js: "synthetic-defects.js" },
+	{ html: "text-inspect.html", js: "text-inspect.js" },
 ];
 
 for (const node of NODES) {

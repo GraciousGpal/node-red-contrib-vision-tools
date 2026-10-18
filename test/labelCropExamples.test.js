@@ -31,6 +31,7 @@ const EDITORS = {
 	"label-crop": "label-crop.html",
 	"golden-compare": "golden-compare.html",
 	"synthetic-defects": "synthetic-defects.html",
+	"text-inspect": "text-inspect.html",
 };
 
 /** The keys of a node's editor `defaults`, the way editorMarkup reads them. */
@@ -52,6 +53,12 @@ const exampleFiles = fs.readdirSync(EXAMPLES).filter((f) => f.endsWith(".json"))
 
 test("there are example flows to check", () => {
 	assert.ok(exampleFiles.length >= 2, exampleFiles.join(", "));
+});
+
+// a type listed above with no example would be checked against nothing
+test("every node type in EDITORS appears in some example", () => {
+	const seen = new Set(exampleFiles.flatMap((f) => loadExample(f).map((n) => n.type)));
+	assert.deepStrictEqual(Object.keys(EDITORS).filter((t) => !seen.has(t)), []);
 });
 
 for (const file of exampleFiles) {

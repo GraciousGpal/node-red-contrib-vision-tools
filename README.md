@@ -56,6 +56,11 @@ in [CHANGELOG.md](CHANGELOG.md).
   `golden-compare` found on the golden, mapped onto the camera frame
   through the transform `golden-compare` solved for that frame. Works
   offline.
+- **`text-inspect`** — reads the printed text inside rectangles you draw
+  on a frame, one line of text per rectangle, with an on-device OCR model
+  (PP-OCRv6 recognition, shipped in the package) and reports the text and
+  a confidence per character. It reads only: there is no expected text
+  and no pass or fail. Works offline.
 - **`synthetic-defects`** — a test bench, not a production node: takes a
   golden and emits camera-like frames of it with known defects painted in,
   one message at a time, each carrying the golden it was made from and the
@@ -1796,6 +1801,104 @@ and `msg.payload` set to a preview crop of that barcode's region (with
   restart failed. The node now loads the binary shipped inside the
   package and never touches the network.
 
+## How `text-inspect` works
+
+Reads the printed text inside rectangular regions of a frame with
+PaddleOCR's PP-OCRv6 text-recognition model (the tiny variant) running
+on [`onnxruntime-web`](https://www.npmjs.com/package/onnxruntime-web)'s
+WebAssembly backend, in process and offline. It is recognition only: each
+region is read as one line of text, cropped, scaled to the model's 48 px
+height with its aspect kept, and decoded greedily. It never finds text
+by itself, so a region should frame one printed line with a little
+margin. It reads and reports. There is no expected text and no pass or
+fail, so compare `msg.ocr` downstream if you need a verdict.
+
+`examples/text-inspect.json` is a starting flow: inject → file in →
+`barcode-locate` → `text-inspect` → debug. Import it from **Import →
+Examples**, point the file node at a frame on the Node-RED host and draw
+the regions; the two in it are placeholders. It does not compare the
+printed text with the barcode data.
+
+### Input
+
+`msg.payload` is the frame: encoded bytes (JPEG, PNG, WebP, ...) as a
+Buffer, Uint8Array or ArrayBuffer, a file path, an object
+`{ data | buffer | path }`, or bare pixels as
+`{ data, width, height, channels }` (or bytes plus `msg.rawInfo`).
+
+### Regions and scaling
+
+A region is `{ name, x, y, width, height }`, an upright rectangle in
+pixels; a region with no name is called `region1`, `region2`, ... by its
+position. In the editor you draw them on the last frame that went through
+the node, and the size of that frame is stored with them (**Drawn on**,
+`frameWidth` × `frameHeight`). When a frame of another size arrives, the
+configured regions are scaled by the width and height ratios, so they
+stay on the same part of the picture. Scaling needs both stored sizes
+above 0: a 0 in either means unknown, and the regions are used as they
+are, unscaled.
+
+Every region is then rounded to whole pixels and clipped to the frame.
+A region left empty by that, or with a coordinate that is not a number,
+fails the message, and the error names the region.
+
+### `msg.regions`
+
+`msg.regions`, an array of regions or its JSON string, replaces the
+configured list for that message. It is in the incoming frame's pixels
+and is never scaled. An empty or invalid `msg.regions` fails the message;
+the node does not fall back to the configured regions. A `msg.regions`
+set upstream for another node (for example `barcode-locate`, which passes
+every property through) reaches `text-inspect` too and replaces its
+regions, so delete it in between if the two lists differ.
+
+### Output
+
+One message per input. `msg.payload` and every other property pass
+through unchanged, except `msg.timings`, which is replaced (an upstream
+one, such as `barcode-locate`'s, is not kept). Added:
+
+- **`msg.ocr`**: one `{ name, roi, text, confidences }` per region, in
+  order. `roi` is the area actually read, in the frame's pixels after
+  scaling and clipping. `confidences` holds one value from 0 to 1 (3
+  decimals) per character of `text`. A region where nothing was read
+  gives `text: ""` and `confidences: []`.
+- **`msg.timings`** (replaced): milliseconds, one decimal: `inputMs` (resolving and
+  decoding `msg.payload`), `cropMs` (cropping and normalising every
+  region), `inferMs` (the model runs and decoding), and `totalMs` (from
+  message in to message out). The status shows `totalMs`. The model is
+  loaded at deploy, and a frame that arrives first waits for it, so that
+  wait shows up in `totalMs`.
+
+### Failures
+
+A failure sends nothing. It goes to a Catch node through the message's
+error, and the status turns red. A message fails when there are no
+regions (none configured and no `msg.regions`), when a region list is
+not valid JSON or not an array, when a region has a non-numeric
+coordinate or is empty inside the frame, or when the payload does not
+decode. If the model fails to load at deploy, the node warns "the OCR
+model did not load" and shows a red status. A frame waiting on that load
+fails with its error, and each later frame tries the load again.
+
+### After `barcode-locate`: turn its Preview off
+
+With **Preview** on, `barcode-locate` replaces `msg.payload` with the
+preview crop of the barcode it read, so a `text-inspect` wired after it
+would read that small crop and not the frame. Turn Preview off on the
+`barcode-locate` node when it feeds `text-inspect` (the example does).
+`barcode-locate` also sends one message per barcode found (one message
+with `text: null` when it found none), so `text-inspect` reads the frame
+once per message.
+
+### Model and licence
+
+The model and its character dictionary are shipped unmodified in
+`models/` (`PP-OCRv6_rec_tiny.onnx`, about 4.5 MB, and
+`ppocrv6_tiny_dict.txt`). They are PaddleOCR's PP-OCRv6 rec tiny, in
+RapidOCR's ONNX conversion, both Apache-2.0; see [NOTICE](NOTICE) for
+attribution and sources. Nothing is downloaded at run time.
+
 ## Deployment notes
 
 - `goldenPath`/`scaleFilePath` are paths **inside the container** — use
@@ -1932,7 +2035,7 @@ and `msg.payload` set to a preview crop of that barcode's region (with
 
 ## Tests
 
-`npm test` (Node 22+, no test framework needed — `node --test`), 732 tests.
+`npm test` (Node 22+, no test framework needed — `node --test`), 787 tests.
 Fixtures are generated with `sharp` rather than read from
 real camera photos, so the suite runs anywhere; the real QC photos are
 gitignored. Coverage spans the lib pipeline (`compare`, `align`, `warp`,
@@ -2029,6 +2132,7 @@ full matrix. Run it in both kernel modes - as is and with
 
 Apache-2.0 — see [LICENSE](LICENSE).
 
-`sharp`, `zxing-wasm` and the OpenCV engines (`@graciousstar/opencv5`
-and the optional `@techstark/opencv-js`) are separate packages under
-their own licences.
+`sharp`, `zxing-wasm`, `onnxruntime-web` and the OpenCV engines
+(`@graciousstar/opencv5` and the optional `@techstark/opencv-js`) are
+separate packages under their own licences. The OCR model files in
+`models/` are PaddleOCR's and RapidOCR's, Apache-2.0; see [NOTICE](NOTICE).

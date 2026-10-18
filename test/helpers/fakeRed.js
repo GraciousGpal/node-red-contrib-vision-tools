@@ -28,7 +28,8 @@ function loadNode(file, config = {}, { id, comms, log } = {}) {
 			},
 		},
 		auth: {
-			needsPermission: () => (req, res, next) => next(),
+			// the guard carries the permission it was made for, for a test to check
+			needsPermission: (permission) => Object.assign((req, res, next) => next(), { permission }),
 		},
 		nodes: {
 			createNode(node, cfg) {

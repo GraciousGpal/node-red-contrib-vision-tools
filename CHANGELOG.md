@@ -27,8 +27,22 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   recognition model on onnxruntime-web and on OpenCV 5's dnn module
   (opencv-js), and reports per line the free read, its exact match, the
   CTC score of the expected text and of a one-character misprint, engine
-  agreement and timings. `onnxruntime-web` is a dev dependency; the models
-  are downloaded separately (links in the script's header).
+  agreement and timings. The models other than the shipped PP-OCRv6 rec
+  tiny are downloaded separately (links in the script's header).
+- **text-inspect node reads printed text in regions you draw.** Each
+  region is read as one line by `lib/ocr.js`: PaddleOCR's PP-OCRv6 rec
+  tiny (RapidOCR's ONNX conversion) on `onnxruntime-web`'s WASM backend,
+  greedy CTC decode. `msg.ocr` carries `{ name, roi, text, confidences }`
+  per region, one confidence per character, and `msg.timings` carries
+  `inputMs`, `cropMs`, `inferMs` and `totalMs`. No grading: there is no
+  expected text. Configured regions scale with the frame they were drawn
+  on (`frameWidth` x `frameHeight`, 0 for unknown); `msg.regions`, in
+  the frame's pixels and never scaled, replaces them. The model and its
+  dictionary ship in `models/` (Apache-2.0, see `NOTICE`), so it works
+  offline; `onnxruntime-web` moves from a dev dependency to a
+  dependency. `examples/text-inspect.json` chains it after
+  barcode-locate, whose Preview must be off there, since Preview
+  replaces `msg.payload` with the barcode's crop.
 
 ### Changed
 
@@ -43,6 +57,10 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   read's time; the preview encodes still overlap the following reads.
   A region's RGB pixels are expanded to RGBA by a loop per channel
   count, about a quarter faster than the branch per pixel.
+- **barcode-locate reports `previewMs` as exactly 0 with Preview off.**
+  The empty wait for no preview encodes was still timed, so a busy
+  process could report 0.1 or 0.2 ms of preview cost for a preview it
+  never made, and the test asserting 0 failed intermittently.
 - **The test suite is tighter**: vacuous and duplicate tests removed, validator tests tabled, shared test harnesses extracted.
 - **One strict content-key check.** `lib/nuisanceMap.js` carried its own copy of `lib/transformFile.js`'s strict golden-content validation; both validators now call the one function in `transformFile.js`, same checks and messages.
 - **Node 22 or newer is required** (`engines.node`, was 20.9; Node 20 is end of life and CI runs 22). `npm test` runs `node --test test/*.test.js`, a glob Node 22 expands itself on every shell, so the helper modules in `test/helpers/` are no longer counted as tests.

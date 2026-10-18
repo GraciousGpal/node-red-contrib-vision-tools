@@ -1,0 +1,912 @@
+<script type="text/html" data-template-name="text-inspect">
+  <div class="form-row">
+    <label for="node-input-name"><i class="fa fa-tag"></i> Name</label>
+    <input type="text" id="node-input-name" placeholder="Name" />
+  </div>
+
+  <div class="form-row">
+    <label><i class="fa fa-list"></i> Regions</label>
+    <div style="margin-left:105px;">
+      <div style="font-size:11px; color:#999; font-family:monospace; padding-left:4px;">
+        name / x / y / width / height (px)
+      </div>
+      <div
+        id="text-inspect-region-list"
+        style="border:1px solid #ccc; border-radius:3px; background:#fafafa; max-height:180px; overflow-y:auto; font-size:12px;"
+      ></div>
+      <div style="margin-top:6px;">
+        <button
+          type="button"
+          id="text-inspect-region-add"
+          class="red-ui-button red-ui-button-small"
+          title="Add a region in the middle of the frame"
+        >
+          <i class="fa fa-plus"></i> Add
+        </button>
+      </div>
+    </div>
+  </div>
+
+  <div class="form-row">
+    <label><i class="fa fa-crop"></i> Frame</label>
+    <div style="margin-left:105px;">
+      <canvas
+        id="text-inspect-canvas"
+        width="360"
+        height="240"
+        style="border:1px solid #ccc; border-radius:3px; cursor:pointer; background:#fafafa;"
+        title="Click to open the zoom viewer"
+      ></canvas>
+      <div style="margin-top:6px;">
+        <input type="file" id="text-inspect-file" accept="image/*" style="width:210px;" />
+        <button
+          type="button"
+          id="text-inspect-reload-frame"
+          class="red-ui-button red-ui-button-small"
+          title="Fetch the last frame that went through this node"
+        >
+          <i class="fa fa-refresh"></i> Reload last frame
+        </button>
+        <button
+          type="button"
+          id="text-inspect-open-viewer"
+          class="red-ui-button red-ui-button-small"
+          title="Zoom in and draw the regions"
+        >
+          <i class="fa fa-search-plus"></i> Viewer
+        </button>
+      </div>
+      <div id="text-inspect-frame-caption" style="margin-top:4px; color:#999; font-size:12px;"></div>
+      <div style="margin-top:4px; color:#999; font-size:12px;">
+        The last frame this node saw loads by itself once one has been sent;
+        or choose a photo from a file. In the viewer, drag on empty space to
+        draw a region, drag a region to move it and a corner of the selected
+        one to resize it; right-drag pans, the wheel zooms.
+      </div>
+    </div>
+  </div>
+
+  <div class="form-row">
+    <label for="node-input-frameWidth"><i class="fa fa-arrows-alt"></i> Drawn on</label>
+    <input type="number" id="node-input-frameWidth" min="0" style="width:80px;" />
+    ×
+    <input type="number" id="node-input-frameHeight" min="0" style="width:80px;" />
+    <span class="node-input-hint" style="margin-left:10px; color:#999;"
+      >px; set when a frame loads. 0 = unknown, no scaling</span
+    >
+  </div>
+</script>
+
+<script type="text/html" data-help-name="text-inspect">
+  <p>
+    Reads the printed text inside rectangular regions of an image with an
+    on-device OCR model and reports what it read, with a confidence per
+    character. It only reads: there is no expected text and no pass or
+    fail. Compare the result downstream if you need a verdict.
+  </p>
+
+  <h3>Inputs</h3>
+  <dl class="message-properties">
+    <dt>payload <span class="property-type">buffer | string | object</span></dt>
+    <dd>
+      The image: encoded bytes (JPEG, PNG, WebP, ...), a file path, an
+      object <code>{ data | buffer | path }</code>, or bare pixels as
+      <code>{ data, width, height, channels }</code>.
+    </dd>
+    <dt class="optional">regions <span class="property-type">array | string</span></dt>
+    <dd>
+      Replaces the configured regions for this message: an array of
+      <code>{ name, x, y, width, height }</code> (or its JSON string) in the
+      incoming frame's pixels, never scaled. An empty or invalid list fails
+      the message; it does not fall back to the configured regions.
+      A configured list that is not valid JSON, or has a coordinate that
+      is not a number, fails every message, naming the region.
+    </dd>
+  </dl>
+
+  <h3>Outputs</h3>
+  <dl class="message-properties">
+    <dt>ocr <span class="property-type">array</span></dt>
+    <dd>
+      One <code>{ name, roi, text, confidences }</code> per region, in
+      order. <code>roi</code> is the area read, in the frame's pixels after
+      scaling and clamping; <code>confidences</code> holds one value from 0
+      to 1 per character of <code>text</code>.
+    </dd>
+    <dt>timings <span class="property-type">object</span></dt>
+    <dd>
+      Milliseconds: <code>inputMs</code> (decoding the payload),
+      <code>cropMs</code>, <code>inferMs</code> and <code>totalMs</code>.
+      The node status shows <code>totalMs</code>.
+    </dd>
+  </dl>
+  <p>
+    <code>msg.payload</code> and every other property pass through as they
+    came. A failure (no regions, a region empty inside the frame, an image
+    that does not decode) goes to a Catch node; nothing is sent.
+  </p>
+
+  <h3>Regions and scaling</h3>
+  <p>
+    Each region is an upright rectangle in pixels of the frame it was drawn
+    on, whose size is kept in <i>Drawn on</i>. When a frame of another size
+    arrives, the configured regions are scaled by the width and height
+    ratios, so they stay on the same part of the picture. <i>Drawn on</i>
+    of 0 means unknown: the regions are used as they are. A region partly
+    outside the frame is clipped to it.
+  </p>
+  <p>
+    The editor fetches the last frame through this node, if there has been
+    one. With no size recorded yet, or no regions drawn, it records that
+    frame's size; otherwise the recorded size and regions stay as they are
+    and a frame of another size is shown stretched to the recorded one.
+  </p>
+</script>
+
+<script type="text/javascript">
+  // The region list being edited. oneditprepare owns it and oneditsave
+  // reads it back; a hidden node-input would make Node-RED store the list
+  // as the string an <input> holds, so it stays in this closure instead.
+  let textInspectEditing = null;
+
+  RED.nodes.registerType("text-inspect", {
+    category: "vision",
+    color: "#5DADE2",
+    defaults: {
+      name: { value: "" },
+      // one entry per region, in pixels of a frameWidth x frameHeight frame
+      regions: { value: [] },
+      frameWidth: { value: 0, validate: RED.validators.number(true) },
+      frameHeight: { value: 0, validate: RED.validators.number(true) },
+    },
+    inputs: 1,
+    outputs: 1,
+    icon: "font-awesome/fa-font",
+    label: function () {
+      if (this.name) return this.name;
+      const n = Array.isArray(this.regions) ? this.regions.length : 0;
+      return n > 1 ? "text inspect ×" + n : "text inspect";
+    },
+    paletteLabel: function () {
+      return "text inspect";
+    },
+    oneditprepare: function () {
+      const node = this;
+      const MIN_SIDE = 3; // frame px; a smaller drag is a click
+      const NO_FRAME_CAPTION = "no frame yet - deploy and send one, or choose a file";
+
+      const num = function (v, fallback) {
+        const n = typeof v === "number" ? v : parseFloat(v);
+        return Number.isFinite(n) ? n : fallback;
+      };
+      const clamp = function (v, lo, hi) {
+        return Math.min(hi, Math.max(lo, v));
+      };
+      const parseRegions = function (list) {
+        let items = list;
+        if (typeof items === "string") {
+          try {
+            items = items.trim() ? JSON.parse(items) : [];
+          } catch (err) {
+            RED.notify("text-inspect: the stored regions are not valid JSON and were dropped", "warning");
+            items = [];
+          }
+        }
+        if (!Array.isArray(items)) return [];
+        return items
+          .filter(function (r) {
+            return r && typeof r === "object";
+          })
+          .map(function (r) {
+            return {
+              name: r.name == null ? "" : String(r.name),
+              x: num(r.x, 0),
+              y: num(r.y, 0),
+              width: Math.max(1, num(r.width, 1)),
+              height: Math.max(1, num(r.height, 1)),
+            };
+          });
+      };
+
+      const st = { regions: parseRegions(node.regions), selected: 0, release: null };
+      textInspectEditing = st;
+
+      const canvas = document.getElementById("text-inspect-canvas");
+      const ctx = canvas.getContext("2d");
+      const listEl = document.getElementById("text-inspect-region-list");
+      const fileInput = document.getElementById("text-inspect-file");
+      const captionEl = document.getElementById("text-inspect-frame-caption");
+      const fwField = document.getElementById("node-input-frameWidth");
+      const fhField = document.getElementById("node-input-frameHeight");
+
+      let image = null;
+      let imageW = 0;
+      let imageH = 0;
+      let imageUrl = null;
+      let viewer = null;
+      // bumped by every fetch and every chosen file; a load that finishes
+      // under an older token is stale and dropped
+      let frameToken = 0;
+
+      const setCaption = function (text) {
+        captionEl.textContent = text;
+      };
+      const uniqueName = function (list) {
+        const used = new Set(
+          list.map(function (r) {
+            return r.name;
+          }),
+        );
+        let i = 1;
+        while (used.has("text" + i)) i++;
+        return "text" + i;
+      };
+      /**
+       * The frame the regions are stored in: the stored size when known,
+       * else the shown image's. A frame of another size is shown stretched
+       * to it, so every coordinate on screen is a stored one.
+       */
+      const space = function () {
+        const fw = num(fwField.value, 0);
+        const fh = num(fhField.value, 0);
+        return fw > 0 && fh > 0 ? { w: fw, h: fh } : { w: imageW, h: imageH };
+      };
+      const pastFrame = function (r) {
+        if (!image) return false;
+        const sp = space();
+        return r.x < 0 || r.y < 0 || r.x + r.width > sp.w || r.y + r.height > sp.h;
+      };
+      const roundRegion = function (r) {
+        const x0 = Math.round(r.x);
+        const y0 = Math.round(r.y);
+        return {
+          name: r.name,
+          x: x0,
+          y: y0,
+          width: Math.max(1, Math.round(r.x + r.width) - x0),
+          height: Math.max(1, Math.round(r.y + r.height) - y0),
+        };
+      };
+
+      /** Every region as an upright box, the selected one brighter and on top. */
+      const drawRects = function (c, list, sel, toScreen) {
+        const one = function (r, active) {
+          const a = toScreen(r.x, r.y);
+          const b = toScreen(r.x + r.width, r.y + r.height);
+          c.lineWidth = 3;
+          c.strokeStyle = "rgba(0,0,0,0.6)";
+          c.strokeRect(a.x, a.y, b.x - a.x, b.y - a.y);
+          c.lineWidth = active ? 2 : 1.5;
+          c.strokeStyle = active ? "#00e5ff" : "#90caf9";
+          c.strokeRect(a.x, a.y, b.x - a.x, b.y - a.y);
+          if (r.name) {
+            c.font = "bold 11px sans-serif";
+            c.textAlign = "left";
+            c.lineWidth = 3;
+            c.strokeStyle = "rgba(0,0,0,0.7)";
+            c.strokeText(r.name, a.x + 2, a.y - 4);
+            c.fillStyle = "#ffffff";
+            c.fillText(r.name, a.x + 2, a.y - 4);
+          }
+        };
+        list.forEach(function (r, i) {
+          if (i !== sel) one(r, false);
+        });
+        if (list[sel]) one(list[sel], true);
+      };
+
+      // ---- thumbnail -------------------------------------------------
+      const drawThumb = function () {
+        ctx.clearRect(0, 0, canvas.width, canvas.height);
+        if (!image) {
+          ctx.fillStyle = "#999";
+          ctx.font = "12px sans-serif";
+          ctx.textAlign = "center";
+          ctx.fillText("Load a frame below,", canvas.width / 2, canvas.height / 2 - 8);
+          ctx.fillText("then click here for the zoom viewer", canvas.width / 2, canvas.height / 2 + 10);
+          return;
+        }
+        const sp = space();
+        const s = Math.min(canvas.width / sp.w, canvas.height / sp.h);
+        const dx = (canvas.width - sp.w * s) / 2;
+        const dy = (canvas.height - sp.h * s) / 2;
+        ctx.drawImage(image, dx, dy, sp.w * s, sp.h * s);
+        drawRects(ctx, st.regions, st.selected, function (x, y) {
+          return { x: dx + x * s, y: dy + y * s };
+        });
+      };
+
+      // ---- region rows -----------------------------------------------
+      let rowWarnings = [];
+      const updateWarnings = function () {
+        st.regions.forEach(function (r, i) {
+          if (rowWarnings[i]) rowWarnings[i].textContent = pastFrame(r) ? "⚠ past the frame" : "";
+        });
+      };
+      const highlightRows = function () {
+        Array.prototype.forEach.call(listEl.children, function (row, i) {
+          row.style.background = i === st.selected ? "#e3f2fd" : "";
+        });
+      };
+      const select = function (i) {
+        st.selected = i;
+        highlightRows();
+        drawThumb();
+      };
+      const renderList = function () {
+        rowWarnings = [];
+        const rows = st.regions.map(function (r, i) {
+          const row = document.createElement("div");
+          row.style.cssText = "display:flex; align-items:center; gap:4px; padding:2px 4px;";
+          for (const key of ["name", "x", "y", "width", "height"]) {
+            const inp = document.createElement("input");
+            inp.type = key === "name" ? "text" : "number";
+            inp.name = key;
+            inp.value = String(r[key]);
+            inp.title = key;
+            inp.style.cssText = key === "name" ? "width:90px;" : "width:62px;";
+            inp.addEventListener("input", function () {
+              const reg = st.regions[i];
+              if (!reg) return;
+              if (key === "name") {
+                reg.name = String(inp.value);
+              } else {
+                const n = parseFloat(inp.value);
+                // a field mid-edit or not a number keeps the last good value
+                if (!Number.isFinite(n)) return;
+                reg[key] = key === "width" || key === "height" ? Math.max(1, n) : n;
+                // with the stored size known, kept inside it as move and resize are
+                const fw = num(fwField.value, 0);
+                const fh = num(fhField.value, 0);
+                if (fw > 0 && fh > 0) {
+                  reg.width = clamp(reg.width, 1, fw);
+                  reg.height = clamp(reg.height, 1, fh);
+                  if (key === "width") reg.width = Math.min(reg.width, fw - Math.max(0, reg.x));
+                  if (key === "height") reg.height = Math.min(reg.height, fh - Math.max(0, reg.y));
+                  reg.x = clamp(reg.x, 0, fw - reg.width);
+                  reg.y = clamp(reg.y, 0, fh - reg.height);
+                }
+              }
+              updateWarnings();
+              drawThumb();
+            });
+            // once the edit is done, show the value actually kept
+            inp.addEventListener("change", function () {
+              const reg = st.regions[i];
+              if (reg && key !== "name") {
+                for (const el of row.children) if (el.name && el.name !== "name") el.value = String(reg[el.name]);
+              }
+            });
+            inp.addEventListener("focus", function () {
+              select(i);
+            });
+            row.appendChild(inp);
+          }
+          const remove = document.createElement("button");
+          remove.type = "button";
+          remove.className = "red-ui-button red-ui-button-small";
+          remove.textContent = "✕";
+          remove.title = "Remove this region";
+          remove.addEventListener("click", function () {
+            st.regions.splice(i, 1);
+            st.selected = clamp(st.selected > i ? st.selected - 1 : st.selected, 0, Math.max(0, st.regions.length - 1));
+            renderList();
+            drawThumb();
+          });
+          row.appendChild(remove);
+          const warn = document.createElement("span");
+          warn.style.cssText = "color:#c62828; font-size:11px;";
+          row.appendChild(warn);
+          rowWarnings.push(warn);
+          row.addEventListener("click", function () {
+            select(i);
+          });
+          return row;
+        });
+        listEl.replaceChildren.apply(listEl, rows);
+        highlightRows();
+        updateWarnings();
+      };
+
+      // ---- the frame -------------------------------------------------
+      /**
+       * A frame of w x h is now shown. With no stored size, or nothing drawn
+       * yet, its size becomes the stored one; otherwise the stored size and
+       * regions stay as they are and the frame is shown stretched to them.
+       * Returns what the caption should say about the size.
+       */
+      const adoptFrame = function (w, h) {
+        const fw = num(fwField.value, 0);
+        const fh = num(fhField.value, 0);
+        if (!(fw > 0 && fh > 0) || st.regions.length === 0) {
+          fwField.value = String(w);
+          fhField.value = String(h);
+          return w + "×" + h;
+        }
+        return fw === w && fh === h ? w + "×" + h : "Drawn on " + fw + "×" + fh + ", frame is " + w + "×" + h;
+      };
+
+      const releaseUrl = function () {
+        if (imageUrl) URL.revokeObjectURL(imageUrl);
+        imageUrl = null;
+      };
+      st.release = releaseUrl;
+      /** Decode a Blob into the shown frame; one that does not decode leaves the current one alone. */
+      const loadBlob = function (blob, source, onLoaded) {
+        const mine = frameToken;
+        releaseUrl();
+        const url = URL.createObjectURL(blob);
+        imageUrl = url;
+        const img = new Image();
+        img.onload = function () {
+          if (imageUrl === url) imageUrl = null;
+          URL.revokeObjectURL(url);
+          if (mine !== frameToken) return;
+          image = img;
+          imageW = img.naturalWidth;
+          imageH = img.naturalHeight;
+          if (onLoaded) onLoaded();
+          renderList();
+          drawThumb();
+        };
+        img.onerror = function () {
+          if (imageUrl === url) imageUrl = null;
+          URL.revokeObjectURL(url);
+          if (mine !== frameToken) return;
+          const what = source === "cached" ? "the last frame" : "that file";
+          RED.notify("text-inspect: " + what + " does not decode", "error");
+          setCaption(
+            what + " does not decode" +
+              (image ? " - still showing the previous one" : " - send another, or choose a file"),
+          );
+        };
+        img.src = url;
+      };
+
+      /**
+       * Ask the runtime for the last frame through this node. A node never
+       * deployed, or with no input yet, gets a quiet 404. jQuery's ajax so
+       * the editor's auth header goes with the request.
+       */
+      const fetchLastFrame = function () {
+        if (typeof $ === "undefined" || !$ || typeof $.ajax !== "function") return;
+        const mine = ++frameToken;
+        setCaption("fetching the last frame…");
+        $.ajax({
+          url: "text-inspect/last-frame/" + node.id,
+          type: "GET",
+          cache: false,
+          xhrFields: { responseType: "blob" },
+        })
+          .done(function (blob, _status, xhr) {
+            if (mine !== frameToken) return;
+            if (!blob || typeof blob !== "object") {
+              setCaption(NO_FRAME_CAPTION);
+              return;
+            }
+            const header = function (name) {
+              return xhr && typeof xhr.getResponseHeader === "function" ? xhr.getResponseHeader(name) : null;
+            };
+            const w = Math.round(num(header("X-Frame-Width"), 0));
+            const h = Math.round(num(header("X-Frame-Height"), 0));
+            loadBlob(blob, "cached", function () {
+              // the runtime's size is the one the regions are placed on
+              if (w > 0 && h > 0) {
+                imageW = w;
+                imageH = h;
+              }
+              setCaption("last frame through this node (" + adoptFrame(imageW, imageH) + ")");
+            });
+          })
+          .fail(function () {
+            if (mine !== frameToken) return;
+            setCaption(image ? "the runtime has no frame yet - still showing the previous one" : NO_FRAME_CAPTION);
+          });
+      };
+
+      fileInput.addEventListener("change", function () {
+        const file = fileInput.files && fileInput.files[0];
+        if (!file) return;
+        frameToken++;
+        loadBlob(file, "file", function () {
+          setCaption("sample from " + (file.name || "a file") + " (" + adoptFrame(imageW, imageH) + ")");
+        });
+      });
+
+      // ---- the zoom viewer -------------------------------------------
+      const openViewer = function () {
+        if (!image) {
+          setCaption("Load a frame first.");
+          return;
+        }
+        if (viewer) return;
+        const dpr = window.devicePixelRatio || 1;
+        const W = space().w;
+        const H = space().h;
+        // edited here and written back only on Apply
+        let vregs = st.regions.map(function (r) {
+          return Object.assign({}, r);
+        });
+        let vsel = Math.min(st.selected, vregs.length - 1);
+
+        const overlay = document.createElement("div");
+        overlay.style.cssText =
+          "position:fixed;inset:0;z-index:100000;background:rgba(0,0,0,0.78);" +
+          "display:flex;flex-direction:column;align-items:center;justify-content:center;" +
+          "font:12px/1.4 sans-serif;color:#ddd;";
+        const mkButton = function (text, title) {
+          const b = document.createElement("button");
+          b.type = "button";
+          b.textContent = text;
+          b.title = title || "";
+          b.style.cssText =
+            "background:#4a4d54;color:#eee;border:1px solid #666;border-radius:3px;" +
+            "padding:3px 9px;cursor:pointer;font:12px sans-serif;";
+          return b;
+        };
+        const bar =
+          "display:flex;align-items:center;gap:6px;width:92vw;max-width:1200px;padding:6px 8px;" +
+          "background:#33353a;border:1px solid #555;box-sizing:border-box;flex:0 0 auto;";
+        const header = document.createElement("div");
+        header.style.cssText = bar + "border-bottom:none;border-radius:6px 6px 0 0;";
+        const btnZoomOut = mkButton("−", "Zoom out (the wheel zooms to the cursor)");
+        const btnZoomIn = mkButton("+", "Zoom in");
+        const btnFit = mkButton("Fit", "Fit the frame into the window");
+        const btn100 = mkButton("100%", "Actual pixel size");
+        const btnDelete = mkButton("Delete region", "Remove the selected region");
+        const imgInfo = document.createElement("span");
+        imgInfo.style.color = "#999";
+        imgInfo.textContent = W + " × " + H + " px";
+        const btnClose = mkButton("✕", "Close without applying");
+        btnClose.style.marginLeft = "auto";
+        header.append(btnZoomOut, btnZoomIn, btnFit, btn100, btnDelete, imgInfo, btnClose);
+
+        const body = document.createElement("div");
+        body.style.cssText =
+          "width:92vw;max-width:1200px;height:76vh;background:#232325;" +
+          "border:1px solid #555;position:relative;overflow:hidden;box-sizing:border-box;";
+        const viewCanvas = document.createElement("canvas");
+        viewCanvas.style.cssText =
+          "position:absolute;inset:0;width:100%;height:100%;display:block;touch-action:none;cursor:crosshair;";
+        body.appendChild(viewCanvas);
+        const vctx = viewCanvas.getContext("2d");
+
+        const footer = document.createElement("div");
+        footer.style.cssText = bar + "border-top:none;border-radius:0 0 6px 6px;gap:10px;";
+        const footReadout = document.createElement("span");
+        footReadout.style.color = "#bbb";
+        footReadout.style.fontFamily = "monospace";
+        const btnApply = mkButton("Apply", "Write the regions into the node");
+        btnApply.style.background = "#3574f0";
+        btnApply.style.borderColor = "#3574f0";
+        btnApply.style.marginLeft = "auto";
+        const btnCancel = mkButton("Cancel", "Close without applying");
+        footer.append(footReadout, btnApply, btnCancel);
+
+        overlay.append(header, body, footer);
+        document.body.appendChild(overlay);
+        viewer = overlay;
+        st.closeViewer = function () {
+          closeViewer();
+        };
+
+        // view.scale/ox/oy map frame pixels to canvas CSS px
+        const view = { scale: 1, ox: 0, oy: 0 };
+        const toImage = function (ev) {
+          const b = viewCanvas.getBoundingClientRect();
+          return {
+            x: (ev.clientX - b.left - view.ox) / view.scale,
+            y: (ev.clientY - b.top - view.oy) / view.scale,
+          };
+        };
+        const toScreen = function (x, y) {
+          return { x: view.ox + x * view.scale, y: view.oy + y * view.scale };
+        };
+        const fitView = function () {
+          const w = body.clientWidth;
+          const h = body.clientHeight;
+          view.scale = Math.min(w / W, h / H, 1) * 0.96;
+          view.ox = (w - W * view.scale) / 2;
+          view.oy = (h - H * view.scale) / 2;
+        };
+        const zoomAt = function (cx, cy, factor) {
+          const ix = (cx - view.ox) / view.scale;
+          const iy = (cy - view.oy) / view.scale;
+          view.scale = clamp(view.scale * factor, 0.02, 40);
+          view.ox = cx - ix * view.scale;
+          view.oy = cy - iy * view.scale;
+        };
+
+        const HANDLE = 5; // half-size in screen px
+        const TOL = 8;
+        /** Corners of a region, clockwise from top-left. */
+        const corners = function (r) {
+          return [
+            { x: r.x, y: r.y },
+            { x: r.x + r.width, y: r.y },
+            { x: r.x + r.width, y: r.y + r.height },
+            { x: r.x, y: r.y + r.height },
+          ];
+        };
+        const hitHandle = function (sx, sy) {
+          const r = vregs[vsel];
+          if (!r) return -1;
+          const pts = corners(r).map(function (p) {
+            return toScreen(p.x, p.y);
+          });
+          for (let i = 0; i < pts.length; i++) {
+            if (Math.abs(pts[i].x - sx) <= TOL && Math.abs(pts[i].y - sy) <= TOL) return i;
+          }
+          return -1;
+        };
+        const inside = function (r, p) {
+          return p.x >= r.x && p.x <= r.x + r.width && p.y >= r.y && p.y <= r.y + r.height;
+        };
+        /** The region under p: the selected one first, then the topmost. */
+        const hitRegion = function (p) {
+          if (vregs[vsel] && inside(vregs[vsel], p)) return vsel;
+          for (let i = vregs.length - 1; i >= 0; i--) if (inside(vregs[i], p)) return i;
+          return -1;
+        };
+        const boxFrom = function (a, b) {
+          const x0 = Math.min(a.x, b.x);
+          const y0 = Math.min(a.y, b.y);
+          return { x: x0, y: y0, width: Math.abs(b.x - a.x), height: Math.abs(b.y - a.y) };
+        };
+
+        let drag = null;
+        const drawView = function () {
+          const w = body.clientWidth;
+          const h = body.clientHeight;
+          vctx.clearRect(0, 0, w, h);
+          vctx.fillStyle = "#26262a";
+          vctx.fillRect(0, 0, w, h);
+          vctx.save();
+          vctx.translate(view.ox, view.oy);
+          vctx.scale(view.scale, view.scale);
+          vctx.imageSmoothingEnabled = view.scale < 4;
+          vctx.drawImage(image, 0, 0, W, H);
+          vctx.restore();
+          const tl = toScreen(0, 0);
+          const br = toScreen(W, H);
+          vctx.strokeStyle = "rgba(255,255,255,0.25)";
+          vctx.lineWidth = 1;
+          vctx.strokeRect(tl.x, tl.y, br.x - tl.x, br.y - tl.y);
+          drawRects(vctx, vregs, vsel, toScreen);
+          if (vregs[vsel]) {
+            for (const c of corners(vregs[vsel])) {
+              const p = toScreen(c.x, c.y);
+              vctx.fillStyle = "#ffffff";
+              vctx.fillRect(p.x - HANDLE, p.y - HANDLE, HANDLE * 2, HANDLE * 2);
+              vctx.strokeStyle = "#2196f3";
+              vctx.lineWidth = 1.5;
+              vctx.strokeRect(p.x - HANDLE, p.y - HANDLE, HANDLE * 2, HANDLE * 2);
+            }
+          }
+          if (drag && drag.type === "new" && drag.box) {
+            const a = toScreen(drag.box.x, drag.box.y);
+            vctx.setLineDash([4, 3]);
+            vctx.strokeStyle = "#ffeb3b";
+            vctx.lineWidth = 1.5;
+            vctx.strokeRect(a.x, a.y, drag.box.width * view.scale, drag.box.height * view.scale);
+            vctx.setLineDash([]);
+          }
+          const r = vregs[vsel];
+          footReadout.textContent =
+            "zoom " + Math.round(view.scale * 100) + "%" +
+            (r
+              ? "  ·  " + (r.name || "region") + ": x " + Math.round(r.x) + "  y " + Math.round(r.y) +
+                "  " + Math.round(r.width) + " × " + Math.round(r.height) +
+                (pastFrame(r) ? "  ·  ⚠ past the frame" : "")
+              : "  ·  drag to draw a region");
+        };
+
+        viewCanvas.addEventListener("pointerdown", function (ev) {
+          if (ev.button !== 0 && ev.button !== 2) return;
+          viewCanvas.setPointerCapture(ev.pointerId);
+          const b = viewCanvas.getBoundingClientRect();
+          const sx = ev.clientX - b.left;
+          const sy = ev.clientY - b.top;
+          const p = toImage(ev);
+          if (ev.button === 2) {
+            drag = { type: "pan", sx: sx, sy: sy, ox: view.ox, oy: view.oy };
+          } else {
+            const handle = hitHandle(sx, sy);
+            const hit = handle >= 0 ? vsel : hitRegion(p);
+            if (handle >= 0) {
+              // the corner opposite the one grabbed stays put
+              drag = { type: "handle", fixed: corners(vregs[vsel])[(handle + 2) % 4] };
+            } else if (hit >= 0) {
+              vsel = hit;
+              drag = { type: "move", ix: p.x, iy: p.y, start: Object.assign({}, vregs[hit]) };
+            } else {
+              drag = { type: "new", from: p, box: null };
+            }
+          }
+          ev.preventDefault();
+          drawView();
+        });
+        viewCanvas.addEventListener("pointermove", function (ev) {
+          if (!drag) return;
+          const b = viewCanvas.getBoundingClientRect();
+          const p = toImage(ev);
+          if (drag.type === "pan") {
+            view.ox = drag.ox + (ev.clientX - b.left - drag.sx);
+            view.oy = drag.oy + (ev.clientY - b.top - drag.sy);
+          } else if (drag.type === "new") {
+            drag.box = boxFrom(
+              { x: clamp(drag.from.x, 0, W), y: clamp(drag.from.y, 0, H) },
+              { x: clamp(p.x, 0, W), y: clamp(p.y, 0, H) },
+            );
+          } else if (drag.type === "move") {
+            const r = drag.start;
+            vregs[vsel] = Object.assign({}, r, {
+              x: clamp(r.x + (p.x - drag.ix), 0, Math.max(0, W - r.width)),
+              y: clamp(r.y + (p.y - drag.iy), 0, Math.max(0, H - r.height)),
+            });
+          } else if (drag.type === "handle") {
+            vregs[vsel] = Object.assign({}, vregs[vsel], boxFrom(drag.fixed, { x: clamp(p.x, 0, W), y: clamp(p.y, 0, H) }));
+          }
+          drawView();
+        });
+        const endDrag = function () {
+          if (!drag) return;
+          if (drag.type === "new") {
+            const box = drag.box;
+            if (box && box.width >= MIN_SIDE && box.height >= MIN_SIDE) {
+              vregs.push(roundRegion(Object.assign({ name: uniqueName(vregs) }, box)));
+              vsel = vregs.length - 1;
+            }
+          } else if (drag.type !== "pan" && vregs[vsel]) {
+            vregs[vsel] = roundRegion(vregs[vsel]);
+          }
+          drag = null;
+          drawView();
+        };
+        viewCanvas.addEventListener("pointerup", endDrag);
+        viewCanvas.addEventListener("pointercancel", endDrag);
+        viewCanvas.addEventListener("contextmenu", function (ev) {
+          ev.preventDefault();
+        });
+        viewCanvas.addEventListener(
+          "wheel",
+          function (ev) {
+            ev.preventDefault();
+            const b = viewCanvas.getBoundingClientRect();
+            zoomAt(ev.clientX - b.left, ev.clientY - b.top, ev.deltaY < 0 ? 1.25 : 0.8);
+            drawView();
+          },
+          { passive: false },
+        );
+
+        const setViewSize = function () {
+          viewCanvas.width = Math.round(body.clientWidth * dpr);
+          viewCanvas.height = Math.round(body.clientHeight * dpr);
+          vctx.setTransform(dpr, 0, 0, dpr, 0, 0);
+          drawView();
+        };
+        const onKeyDown = function (ev) {
+          if (ev.key === "Escape") {
+            ev.preventDefault();
+            ev.stopPropagation();
+            closeViewer();
+          } else if (ev.key === "Enter" && !(ev.target && overlay.contains(ev.target))) {
+            // keep Enter from saving the whole edit dialog behind the modal
+            ev.preventDefault();
+            ev.stopPropagation();
+          }
+        };
+        const closeViewer = function () {
+          if (!viewer) return;
+          window.removeEventListener("keydown", onKeyDown, true);
+          window.removeEventListener("resize", setViewSize);
+          overlay.remove();
+          viewer = null;
+          st.closeViewer = null;
+        };
+
+        btnZoomIn.addEventListener("click", function () {
+          zoomAt(body.clientWidth / 2, body.clientHeight / 2, 1.5);
+          drawView();
+        });
+        btnZoomOut.addEventListener("click", function () {
+          zoomAt(body.clientWidth / 2, body.clientHeight / 2, 1 / 1.5);
+          drawView();
+        });
+        btnFit.addEventListener("click", function () {
+          fitView();
+          drawView();
+        });
+        btn100.addEventListener("click", function () {
+          view.scale = 1;
+          view.ox = (body.clientWidth - W) / 2;
+          view.oy = (body.clientHeight - H) / 2;
+          drawView();
+        });
+        btnDelete.addEventListener("click", function () {
+          if (!vregs[vsel]) return;
+          vregs.splice(vsel, 1);
+          vsel = Math.max(0, Math.min(vsel, vregs.length - 1));
+          drawView();
+        });
+        btnClose.addEventListener("click", closeViewer);
+        btnCancel.addEventListener("click", closeViewer);
+        btnApply.addEventListener("click", function () {
+          st.regions = vregs;
+          st.selected = Math.max(0, vsel);
+          renderList();
+          drawThumb();
+          closeViewer();
+        });
+        overlay.addEventListener(
+          "wheel",
+          function (ev) {
+            ev.preventDefault();
+          },
+          { passive: false },
+        );
+        window.addEventListener("keydown", onKeyDown, true);
+        window.addEventListener("resize", setViewSize);
+
+        fitView();
+        setViewSize();
+        btnApply.focus();
+      };
+
+      // ---- wiring ----------------------------------------------------
+      canvas.addEventListener("click", openViewer);
+      document.getElementById("text-inspect-open-viewer").addEventListener("click", openViewer);
+      document.getElementById("text-inspect-reload-frame").addEventListener("click", fetchLastFrame);
+      document.getElementById("text-inspect-region-add").addEventListener("click", function () {
+        const sp = space();
+        const w = image ? Math.max(MIN_SIDE, Math.round(sp.w / 4)) : 200;
+        const h = image ? Math.max(MIN_SIDE, Math.round(sp.h / 10)) : 60;
+        st.regions.push({
+          name: uniqueName(st.regions),
+          x: image ? Math.round((sp.w - w) / 2) : 0,
+          y: image ? Math.round((sp.h - h) / 2) : 0,
+          width: w,
+          height: h,
+        });
+        st.selected = st.regions.length - 1;
+        renderList();
+        drawThumb();
+      });
+
+      renderList();
+      drawThumb();
+      fetchLastFrame();
+    },
+    oneditsave: function () {
+      const st = textInspectEditing;
+      textInspectEditing = null;
+      if (!st) return;
+      // Done with the viewer open discards it, as its Cancel would
+      if (st.closeViewer) st.closeViewer();
+      if (st.release) st.release();
+      this.regions = st.regions.map(function (r) {
+        return {
+          name: String(r.name == null ? "" : r.name).trim(),
+          x: Number(r.x),
+          y: Number(r.y),
+          width: Number(r.width),
+          height: Number(r.height),
+        };
+      });
+      // Node-RED copies the inputs over these afterwards; numbers here
+      // keep a direct caller of oneditsave honest, and the runtime reads
+      // either form
+      for (const key of ["frameWidth", "frameHeight"]) {
+        const el = document.getElementById("node-input-" + key);
+        const v = el ? parseFloat(el.value) : NaN;
+        this[key] = Number.isFinite(v) && v > 0 ? Math.round(v) : 0;
+      }
+    },
+    oneditcancel: function () {
+      const st = textInspectEditing;
+      if (st && st.closeViewer) st.closeViewer();
+      if (st && st.release) st.release();
+      textInspectEditing = null;
+    },
+  });
+</script>

@@ -1,0 +1,23 @@
+@graciousstar/node-red-contrib-vision-tools
+Copyright 2026 GraciousStar
+
+Licensed under the Apache License, Version 2.0 (LICENSE).
+
+The files under models/ are third-party, shipped unmodified.
+
+------------------------------------------------------------------------
+PP-OCRv6 text recognition, tiny (models/PP-OCRv6_rec_tiny.onnx and its
+character dictionary models/ppocrv6_tiny_dict.txt)
+https://github.com/PaddlePaddle/PaddleOCR - Apache License, Version 2.0
+(the same text as LICENSE)
+
+Copyright (c) 2016 PaddlePaddle Authors. All Rights Reserved.
+
+The ONNX conversion is RapidOCR's (https://github.com/RapidAI/RapidOCR,
+Apache License, Version 2.0):
+
+Copyright (c) 2021 RapidOCR Authors. All rights reserved.
+
+Downloaded from:
+https://www.modelscope.cn/models/RapidAI/RapidOCR/resolve/master/onnx/PP-OCRv6/rec/PP-OCRv6_rec_tiny.onnx
+https://www.modelscope.cn/models/RapidAI/RapidOCR/resolve/master/paddle/PP-OCRv6/rec/PP-OCRv6_rec_tiny/ppocrv6_tiny_dict.txt
