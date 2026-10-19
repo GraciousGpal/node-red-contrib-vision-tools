@@ -30,22 +30,56 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   agreement and timings. The models other than the shipped PP-OCRv6 rec
   tiny are downloaded separately (links in the script's header).
 - **text-inspect node reads printed text in regions you draw.** Each
-  region is read as one line by `lib/ocr.js`: PaddleOCR's PP-OCRv6 rec
-  tiny (RapidOCR's ONNX conversion) on `onnxruntime-web`'s WASM backend,
-  greedy CTC decode. `msg.ocr` carries `{ name, roi, text, confidences }`
-  per region, one confidence per character, and `msg.timings` carries
+  region is read by `lib/ocr.js`: PaddleOCR's PP-OCRv6 rec tiny
+  (RapidOCR's ONNX conversion) on `onnxruntime-web`'s WASM backend,
+  greedy CTC decode. The model reads one line at a time, so a region is
+  split into text lines by its row ink profile (rules in the README;
+  lines under 6 px tall are dropped, and a crop with grey contrast
+  under 32 is not read) and one box may cover several lines. `msg.ocr`
+  carries `{ name, roi, rotate, text, confidences, lines }` per region:
+  `lines` is `[{ text, confidences, y0, y1 }]` top to bottom in the
+  rotated crop's pixels, empty lines left out; `text` joins them with
+  `"\n"` and `confidences` has one value per character, each `"\n"`
+  carrying 1. `msg.timings` carries
   `inputMs`, `cropMs`, `inferMs` and `totalMs`. No grading: there is no
   expected text. Configured regions scale with the frame they were drawn
   on (`frameWidth` x `frameHeight`, 0 for unknown); `msg.regions`, in
-  the frame's pixels and never scaled, replaces them. The model and its
+  the frame's pixels and never scaled, replaces them. A region's
+  `rotate` (0, 90, 180 or 270, default 0, set per row in the editor,
+  which marks a rotated region with an arrow) turns its crop clockwise
+  before reading: 270 for text running top to bottom, 90 bottom to top,
+  180 upside down; any other value fails the message. The model and its
   dictionary ship in `models/` (Apache-2.0, see `NOTICE`), so it works
   offline; `onnxruntime-web` moves from a dev dependency to a
   dependency. `examples/text-inspect.json` chains it after
   barcode-locate, whose Preview must be off there, since Preview
   replaces `msg.payload` with the barcode's crop.
+- **region-detect node finds the regions on a golden label**, with
+  `lib/regionDetect.js`: text blocks, barcodes (zxing, plus bar groups
+  that do not decode) and graphics, as `msg.regions`
+  `[{ name, label, kind, x, y, width, height, rotate, score }]` in frame
+  pixels, plus `msg.detect` `{ frameWidth, frameHeight, charHeight,
+  counts }` and `msg.timings`. One-off per golden, 0.3 to 3 s. Config
+  `orientation` ("auto" reads each text block both ways with the OCR
+  model; 0/90/180/270 fixed), `minTextHeight` (8), `minScore` (0.7),
+  `graphics` and `barcodes` (on) and `pad` (4), each overridable per
+  message in `msg.detect`. The editor shows the last successful
+  detection, its frame with the boxes coloured by kind, a table of the
+  regions and a Copy regions JSON button, served by
+  `GET /region-detect/last-frame/:id` and `/last-regions/:id`.
+  `examples/region-detect.json` feeds it to text-inspect and
+  barcode-locate side by side.
 
 ### Changed
 
+- **text-inspect and barcode-locate keep only regions of their kind.**
+  A `msg.regions` item with a `kind` string (region-detect's output) is
+  read by text-inspect only when `kind` is `"text"` (a list with items
+  but none of kind text fails the message) and scanned by barcode-locate
+  only when `kind` is `"barcode"`; items without `kind` are used as
+  before.
+- **barcode-locate accepts `msg.regions` as a JSON string** as well as
+  an array; invalid JSON fails the message, as it does in text-inspect.
 - **barcode-locate warms zxing up at deploy**, not on the first frame
   after a restart (~750 ms on a workstation). A frame that arrives
   before the warm-up is done waits for it and reports the wait as

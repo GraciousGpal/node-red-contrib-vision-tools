@@ -45,7 +45,8 @@
       "line-finder": "line-finder.js",
       "barcode-locate": "barcode-locate.js",
       "synthetic-defects": "synthetic-defects.js",
-      "text-inspect": "text-inspect.js"
+      "text-inspect": "text-inspect.js",
+      "region-detect": "region-detect.js"
     }
   },
   "scripts": {

@@ -101,8 +101,8 @@ test("recognise reads a rendered line exactly, with one confidence per character
 		assert.ok(c >= 0 && c <= 1);
 		assert.equal(c, Math.round(c * 1000) / 1000, "rounded to 3 decimals");
 	}
-	// measured 2026-10-16: [1, 1, 1, 0.99, 1, 1]; the floor leaves room for
-	// font and resampling differences between machines
+	// read in a band cut to the line; the floor leaves room for font and
+	// resampling differences between machines
 	assert.ok(Math.min(...confidences) > 0.8, `confidences ${confidences}`);
 });
 
@@ -145,12 +145,291 @@ test("a roi given as strings reads as the numeric one", async () => {
 	assert.deepEqual(reading(await ocr.recognise(raw, { x: "180", y: "40", width: "220", height: "60" })), reading(numeric));
 });
 
+// renderedLine turned by sharp: 90 is clockwise, so 270 reads it upright
+async function turnedLine(degrees) {
+	const line = await renderedLine();
+	const { data, info } = await sharp(line.data, { raw: { width: line.width, height: line.height, channels: line.channels } })
+		.rotate(degrees)
+		.raw()
+		.toBuffer({ resolveWithObject: true });
+	return { data, width: info.width, height: info.height, channels: info.channels };
+}
+
+test("rotate turns the crop upright before reading: a line turned 90 reads with rotate 270", async () => {
+	const raw = await turnedLine(90);
+	assert.deepEqual([raw.width, raw.height], [64, 360]);
+	const roi = { x: 0, y: 0, width: 64, height: 360 };
+	const turned = await ocr.recognise(raw, roi, { rotate: 270 });
+	assert.equal(turned.text, "TX4829");
+	assert.equal(turned.confidences.length, 6);
+	assert.notEqual((await ocr.recognise(raw, roi, { rotate: 0 })).text, "TX4829");
+	assert.notEqual((await ocr.recognise(raw, roi)).text, "TX4829", "no rotate is 0");
+});
+
+test("rotate as a numeric string reads as the number; null options are rotate 0", async () => {
+	const raw = await turnedLine(90);
+	const roi = { x: 0, y: 0, width: 64, height: 360 };
+	assert.equal((await ocr.recognise(raw, roi, { rotate: "270" })).text, "TX4829");
+	const upright = await renderedLine();
+	const whole = { x: 0, y: 0, width: 360, height: 64 };
+	assert.deepEqual(reading(await ocr.recognise(upright, whole, null)), reading(await ocr.recognise(upright, whole, { rotate: 0 })));
+	assert.equal((await ocr.recognise(upright, whole, null)).text, "TX4829");
+	await assert.rejects(ocr.recognise(upright, whole, { rotate: 45 }), /rotate/);
+});
+
+test("an upside-down line reads with rotate 180", async () => {
+	const raw = await turnedLine(180);
+	const roi = { x: 0, y: 0, width: 360, height: 64 };
+	const turned = await ocr.recognise(raw, roi, { rotate: 180 });
+	assert.equal(turned.text, "TX4829");
+	assert.equal(turned.confidences.length, 6);
+	assert.notEqual((await ocr.recognise(raw, roi, { rotate: 0 })).text, "TX4829");
+});
+
 test("a roi outside the frame or empty throws one clear error", async () => {
 	const raw = await renderedLine();
 	for (const roi of [{ x: 1, y: 0, width: 360, height: 64 }, { x: 0, y: 0, width: 0, height: 64 }, { x: -1, y: 0, width: 10, height: 10 }]) {
 		await assert.rejects(ocr.recognise(raw, roi), (e) => /roi/.test(e.message) && /360x64/.test(e.message), JSON.stringify(roi));
 	}
 	await assert.rejects(ocr.recognise(raw, { x: NaN, y: 0, width: 10, height: 10 }), (e) => /roi/.test(e.message) && /NaN/.test(e.message));
+});
+
+// 360x200, three 36 px lines with baselines at y 30, 95 and 160; ink and
+// paper as given
+async function threeLines(ink = "black", paper = "white") {
+	const line = (y, t) => `<text x="20" y="${y}" font-family="DejaVu Sans, Arial, sans-serif" font-size="36" fill="${ink}">${t}</text>`;
+	const svg = `<svg xmlns="http://www.w3.org/2000/svg" width="360" height="200">
+		<rect width="360" height="200" fill="${paper}"/>
+		${line(30, "TX4829")}${line(95, "KM73")}${line(160, "AB12CD")}
+	</svg>`;
+	const { data, info } = await sharp(Buffer.from(svg)).removeAlpha().raw().toBuffer({ resolveWithObject: true });
+	return { data, width: info.width, height: info.height, channels: info.channels };
+}
+
+const THREE = ["TX4829", "KM73", "AB12CD"];
+
+function assertThreeLines(r) {
+	assert.equal(r.text, THREE.join("\n"));
+	assert.deepEqual(r.lines.map((l) => l.text), THREE);
+	for (let i = 0; i < r.lines.length; i++) {
+		const l = r.lines[i];
+		assert.ok(l.y0 < l.y1, `line ${i} y0 ${l.y0} y1 ${l.y1}`);
+		if (i) assert.ok(l.y0 >= r.lines[i - 1].y1, `line ${i} starts below line ${i - 1}`);
+		assert.equal(l.confidences.length, l.text.length);
+	}
+	assert.equal(r.confidences.length, r.text.length);
+	[...r.text].forEach((c, i) => {
+		if (c === "\n") assert.equal(r.confidences[i], 1, `the newline at ${i} carries 1`);
+	});
+	assert.deepEqual(r.confidences, r.lines.flatMap((l, i) => (i ? [1, ...l.confidences] : l.confidences)));
+}
+
+test("one box over three printed lines reads every line, top to bottom", async () => {
+	const raw = await threeLines();
+	const r = await ocr.recognise(raw, { x: 0, y: 0, width: 360, height: 200 });
+	assertThreeLines(r);
+	assert.ok(Math.min(...r.confidences) > 0.8, `confidences ${r.confidences}`);
+});
+
+test("three lines turned 90 read with rotate 270, y in the upright crop", async () => {
+	const upright = await threeLines();
+	const { data, info } = await sharp(upright.data, { raw: { width: 360, height: 200, channels: upright.channels } })
+		.rotate(90)
+		.raw()
+		.toBuffer({ resolveWithObject: true });
+	const raw = { data, width: info.width, height: info.height, channels: info.channels };
+	assert.deepEqual([raw.width, raw.height], [200, 360]);
+	const r = await ocr.recognise(raw, { x: 0, y: 0, width: 200, height: 360 }, { rotate: 270 });
+	assertThreeLines(r);
+	const straight = await ocr.recognise(upright, { x: 0, y: 0, width: 360, height: 200 });
+	assert.deepEqual(r.lines.map((l) => [l.y0, l.y1]), straight.lines.map((l) => [l.y0, l.y1]));
+});
+
+test("light text on a dark ground splits the same", async () => {
+	const r = await ocr.recognise(await threeLines("white", "black"), { x: 0, y: 0, width: 360, height: 200 });
+	assertThreeLines(r);
+});
+
+test("a single line reads as one line, cropped to its band", async () => {
+	const raw = await renderedLine();
+	const r = await ocr.recognise(raw, { x: 0, y: 0, width: 360, height: 64 });
+	assert.equal(r.text, "TX4829");
+	assert.equal(r.confidences.length, 6);
+	// the band's padding (see lineBands) moves the X's confidence most; a
+	// floor, not exact values: fonts differ between machines
+	assert.ok(Math.min(...r.confidences) > 0.8, `confidences ${r.confidences}`);
+	assert.equal(r.lines.length, 1);
+	assert.equal(r.lines[0].text, "TX4829");
+	assert.deepEqual(r.lines[0].confidences, r.confidences);
+});
+
+// lines on white, [baseline y, text] each, 36 px unless size is given;
+// extra is more svg drawn over them
+async function linesOn(width, height, lines, size = 36, extra = "") {
+	const t = lines.map(([y, s]) => `<text x="20" y="${y}" font-family="DejaVu Sans, Arial, sans-serif" font-size="${size}" fill="black">${s}</text>`).join("");
+	const svg = `<svg xmlns="http://www.w3.org/2000/svg" width="${width}" height="${height}"><rect width="${width}" height="${height}" fill="white"/>${t}${extra}</svg>`;
+	const { data, info } = await sharp(Buffer.from(svg)).removeAlpha().raw().toBuffer({ resolveWithObject: true });
+	return { data, width: info.width, height: info.height, channels: info.channels };
+}
+
+test("one line in a tall box is cropped to its band before reading", async () => {
+	const r = await ocr.recognise(await linesOn(400, 200, [[110, "TX4829"]]), { x: 0, y: 0, width: 400, height: 200 });
+	assert.equal(r.text, "TX4829");
+	assert.equal(r.lines.length, 1);
+	assert.ok(r.lines[0].y0 > 0 && r.lines[0].y1 < 200, `band ${r.lines[0].y0}..${r.lines[0].y1}`);
+});
+
+test("short lines in a wide box split and read: rows by the ink's width, bands cut to their ink columns", async () => {
+	// tops at about y 10 and 65; read at the box's 5000 px width a band is
+	// almost all paper and misreads (measured: AB as two odd signs, CD as D)
+	const r = await ocr.recognise(await linesOn(5000, 120, [[37, "AB"], [92, "CD"]]), { x: 0, y: 0, width: 5000, height: 120 });
+	assert.equal(r.text, "AB\nCD");
+	assert.equal(r.lines.length, 2);
+});
+
+test("tight leading: descenders over ascenders 7 px apart stay two lines", async () => {
+	// 36 px at 1.15 leading: "gypsy jig" descends to y 38, "Tiled fig" rises from y 45
+	const raw = await linesOn(400, 100, [[30, "gypsy jig"], [71, "Tiled fig"]]);
+	const r = await ocr.recognise(raw, { x: 0, y: 0, width: 400, height: 100 });
+	assert.deepEqual(r.lines.map((l) => l.text), ["gypsy jig", "Tiled fig"]);
+});
+
+test("i and j dots join their line, not a line of their own", async () => {
+	const r = await ocr.recognise(await linesOn(300, 60, [[45, "iiii jiji"]]), { x: 0, y: 0, width: 300, height: 60 });
+	assert.equal(r.lines.length, 1);
+	// the same line without dots starts lower: the dots are in the band
+	const plain = await ocr.recognise(await linesOn(300, 60, [[45, "uuuu nunu"]]), { x: 0, y: 0, width: 300, height: 60 });
+	assert.equal(plain.lines.length, 1);
+	assert.ok(r.lines[0].y0 < plain.lines[0].y0, `dotted from ${r.lines[0].y0}, plain from ${plain.lines[0].y0}`);
+});
+
+const OUTLINE = (w, h) => `<rect x="1" y="1" width="${w - 2}" height="${h - 2}" fill="none" stroke="black" stroke-width="2"/>`;
+
+test("a 2 px box outline at the crop edge is not text: both lines inside read", async () => {
+	const r = await ocr.recognise(await linesOn(240, 140, [[50, "TX4829"], [110, "KM73"]], 36, OUTLINE(240, 140)), { x: 0, y: 0, width: 240, height: 140 });
+	assert.deepEqual(r.lines.map((l) => l.text), ["TX4829", "KM73"]);
+});
+
+test("an outline with an 8 px rule along its top: both lines inside read", async () => {
+	const extra = OUTLINE(240, 140) + `<rect x="0" y="0" width="240" height="8" fill="black"/>`;
+	const r = await ocr.recognise(await linesOn(240, 140, [[50, "TX4829"], [110, "KM73"]], 36, extra), { x: 0, y: 0, width: 240, height: 140 });
+	assert.deepEqual(r.lines.map((l) => l.text), ["TX4829", "KM73"]);
+});
+
+test("an outline over only 85% of the crop's height is still not text", async () => {
+	// 2 px edges on rows 12..134 of 140: under 90% of the rows
+	const extra = `<rect x="1" y="13" width="238" height="120" fill="none" stroke="black" stroke-width="2"/>`;
+	const r = await ocr.recognise(await linesOn(240, 140, [[50, "TX4829"], [110, "KM73"]], 36, extra), { x: 0, y: 0, width: 240, height: 140 });
+	assert.equal(r.text, "TX4829\nKM73");
+});
+
+// text rendered at 36 px and trimmed to its ink: a box drawn tight
+async function tight(text) {
+	const svg = `<svg xmlns="http://www.w3.org/2000/svg" width="300" height="80"><rect width="300" height="80" fill="white"/><text x="20" y="55" font-family="DejaVu Sans, Arial, sans-serif" font-size="36" fill="black">${text}</text></svg>`;
+	const { data, info } = await sharp(Buffer.from(svg)).removeAlpha().trim().raw().toBuffer({ resolveWithObject: true });
+	return { data, width: info.width, height: info.height, channels: info.channels };
+}
+
+test("an outline over only 55% of the crop's height is still not text", async () => {
+	// 2 px edges on rows 50..170 of 220 around both lines
+	const extra = `<rect x="1" y="51" width="398" height="118" fill="none" stroke="black" stroke-width="2"/>`;
+	const r = await ocr.recognise(await linesOn(400, 220, [[95, "TX4829"], [150, "KM73"]], 36, extra), { x: 0, y: 0, width: 400, height: 220 });
+	assert.equal(r.text, "TX4829\nKM73");
+});
+
+test("the stems of a tight crop of 1111 are text, not rules", async () => {
+	const raw = await tight("1111");
+	assert.deepEqual([raw.width, raw.height], [63, 26]);
+	const r = await ocr.recognise(raw, { x: 0, y: 0, width: raw.width, height: raw.height });
+	assert.equal(r.text, "1111");
+});
+
+test("a leading or trailing I in a tight box is text, not a box edge", async () => {
+	for (const text of ["IL42", "TAXI"]) {
+		const raw = await tight(text);
+		const r = await ocr.recognise(raw, { x: 0, y: 0, width: raw.width, height: raw.height });
+		assert.equal(r.text, text, `${raw.width}x${raw.height}`);
+	}
+	// after digits the model reads the I as a 1 (measured "TX4821"): the stem
+	// is kept, which letter it is stays the model's call
+	const raw = await tight("TX482I");
+	const r = await ocr.recognise(raw, { x: 0, y: 0, width: raw.width, height: raw.height });
+	assert.equal(r.text.length, 6, r.text);
+	assert.match(r.text, /^TX482[I1l]$/);
+});
+
+test("a lone 1 under a long line is a line of its own", async () => {
+	const long = "ABCDEFGHJKLMNPQRSTUVWXYZ012345";
+	assert.equal(long.length, 30);
+	const r = await ocr.recognise(await linesOn(1000, 140, [[50, long], [120, "1"]], 44), { x: 0, y: 0, width: 1000, height: 140 });
+	assert.equal(r.lines.length, 2, JSON.stringify(r.lines.map((l) => [l.text, l.y0, l.y1])));
+	assert.equal(r.lines[1].text, "1");
+});
+
+test("18 px lines at 1.1 leading: padded bands never overlap", async () => {
+	// 1.1 leading: 19.8 px from baseline to baseline
+	const lines = [[20, "gypsy jig"], [40, "Tiled fig"], [60, "Hello 42"]];
+	const r = await ocr.recognise(await linesOn(300, 80, lines, 18), { x: 0, y: 0, width: 300, height: 80 });
+	assert.ok(r.lines.length >= 2, JSON.stringify(r.lines.map((l) => [l.text, l.y0, l.y1])));
+	for (let i = 1; i < r.lines.length; i++) {
+		assert.ok(r.lines[i - 1].y1 <= r.lines[i].y0, `line ${i - 1} ends at ${r.lines[i - 1].y1}, line ${i} starts at ${r.lines[i].y0}`);
+	}
+});
+
+test("lineBands: one band per bar, padded without overlap; null when the crop has no contrast", () => {
+	// 1-channel 100x60 white, black bars over columns 10..90 on rows 10..20
+	// and 26..36
+	const width = 100;
+	const height = 60;
+	const data = Buffer.alloc(width * height, 255);
+	for (const [a, b] of [[10, 20], [26, 36]]) for (let y = a; y < b; y++) data.fill(0, y * width + 10, y * width + 90);
+	const bands = ocr.lineBands({ data, info: { width, height, channels: 1 } });
+	assert.equal(bands.length, 2, JSON.stringify(bands));
+	const [top, bottom] = bands;
+	assert.ok(top.y0 < 10 && top.y1 > 20 && bottom.y0 < 26 && bottom.y1 > 36, JSON.stringify(bands));
+	assert.ok(top.y1 <= bottom.y0, "the 6 px gap is shared, not crossed");
+	assert.ok(top.y0 >= 0 && bottom.y1 <= height);
+	assert.equal(ocr.lineBands({ data: Buffer.alloc(width * height, 240), info: { width, height, channels: 1 } }), null);
+});
+
+// counts model runs while fn runs
+async function modelRuns(fn) {
+	const { session } = await ocr.loadModel();
+	const run = session.run;
+	let calls = 0;
+	session.run = function (...args) {
+		calls++;
+		return run.apply(this, args);
+	};
+	try {
+		return { result: await fn(), calls };
+	} finally {
+		session.run = run;
+	}
+}
+
+test("a crop with under 32 grey levels of contrast reads nothing without running the model", async () => {
+	const width = 200;
+	const height = 100;
+	const flat = Buffer.alloc(width * height * 3, 0xf0);
+	const noise = Buffer.alloc(width * height * 3);
+	for (let i = 0; i < noise.length; i++) noise[i] = 245 + ((i * 7919) % 11);
+	for (const data of [flat, noise]) {
+		const { result, calls } = await modelRuns(() => ocr.recognise({ data, width, height, channels: 3 }, { x: 0, y: 0, width, height }));
+		assert.equal(calls, 0);
+		assert.deepEqual({ text: result.text, confidences: result.confidences, lines: result.lines, inferMs: result.inferMs }, { text: "", confidences: [], lines: [], inferMs: 0 });
+	}
+	// the stub counts: a line runs it
+	const { calls } = await modelRuns(async () => ocr.recognise(await renderedLine(), { x: 0, y: 0, width: 360, height: 64 }));
+	assert.equal(calls, 1);
+});
+
+test("a blank crop reads nothing, no lines", async () => {
+	const data = Buffer.alloc(200 * 100 * 3, 255);
+	const r = await ocr.recognise({ data, width: 200, height: 100, channels: 3 }, { x: 0, y: 0, width: 200, height: 100 });
+	assert.equal(r.text, "");
+	assert.deepEqual(r.confidences, []);
+	assert.deepEqual(r.lines, []);
 });
 
 test("package.json ships the runtime, the models and the NOTICE", () => {

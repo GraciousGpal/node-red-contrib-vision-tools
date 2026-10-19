@@ -61,6 +61,10 @@ in [CHANGELOG.md](CHANGELOG.md).
   (PP-OCRv6 recognition, shipped in the package) and reports the text and
   a confidence per character. It reads only: there is no expected text
   and no pass or fail. Works offline.
+- **`region-detect`** — finds the text blocks, barcodes and graphics on
+  a golden label once and sends them as `msg.regions`, which
+  `text-inspect` and `barcode-locate` read as they come, each keeping
+  its own kind. A one-off per golden, 0.3 to 3 s. Works offline.
 - **`synthetic-defects`** — a test bench, not a production node: takes a
   golden and emits camera-like frames of it with known defects painted in,
   one message at a time, each carrying the golden it was made from and the
@@ -1729,6 +1733,11 @@ copied, so they must not be changed until this node has sent its
 messages; a Function node that reuses a frame buffer must hand this node
 a copy. Optional per-message overrides:
 `msg.regions`, `msg.mode`, `msg.profile` (a profile name).
+`msg.regions` may be an array or its JSON string; an item with a `kind`
+(`region-detect`'s output) is scanned only when `kind` is `"barcode"`,
+and items without `kind` are scanned as before. The match is exact and
+case-sensitive, a `kind` that is not a string counts as absent, and a
+`msg.regions` string that is not valid JSON fails the message.
 
 ### Output
 
@@ -1806,12 +1815,45 @@ and `msg.payload` set to a preview crop of that barcode's region (with
 Reads the printed text inside rectangular regions of a frame with
 PaddleOCR's PP-OCRv6 text-recognition model (the tiny variant) running
 on [`onnxruntime-web`](https://www.npmjs.com/package/onnxruntime-web)'s
-WebAssembly backend, in process and offline. It is recognition only: each
-region is read as one line of text, cropped, scaled to the model's 48 px
-height with its aspect kept, and decoded greedily. It never finds text
-by itself, so a region should frame one printed line with a little
-margin. It reads and reports. There is no expected text and no pass or
-fail, so compare `msg.ocr` downstream if you need a verdict.
+WebAssembly backend, in process and offline. It is recognition only: the
+model reads one line of text at a time, so each region is cropped,
+turned by its `rotate`, and split into text lines by its row ink
+profile. Each line is scaled to the model's 48 px height with its
+aspect kept and decoded greedily. A box may therefore cover several
+printed lines, and one box per line still works. It never finds text
+outside the regions, so a region should frame the text with a little
+margin. Lines under 6 px tall are dropped, so draw the boxes on a frame
+where each line is at least about 8 px tall. It reads and reports.
+There is no expected text and no pass or fail, so compare `msg.ocr`
+downstream if you need a verdict.
+
+How a region is split into lines, on the rotated crop:
+
+- Grey is the mean of the colour channels. A crop whose grey spans
+  under 32 levels has nothing printed in it: it gives `text: ""` and
+  the model is not run.
+- Ink is darker than the midpoint of the crop's darkest and lightest
+  grey, or lighter when more than half the pixels are dark (light text
+  on a dark ground).
+- Bands are found counting every column. Only when that gives a single
+  band are they found again without the columns in the outer 15% of the
+  width on either side that are inked in over 25% of the rows (box
+  edges, vertical rules); if that gives two or more bands, those are
+  used and the columns are left out, otherwise the single band stands.
+  A stem of a leading or trailing I, 1 or l in a tight box therefore
+  stays text. A row inked across over 90% of the counted width (a
+  horizontal rule) is not text. A vertical line in the middle of the
+  region (a table rule between lines) is not handled: it joins the lines
+  into one band; draw one region per cell.
+- A row is text when its ink is at least max(2, 0.25% of the ink span)
+  pixels, the ink span being the leftmost to rightmost inked column.
+- Runs of text rows are bands. Two bands closer than 15% of the median
+  band height merge (an i dot joins its stems); bands under 6 px are
+  dropped.
+- Each band is padded by max(2, 15% of its height) px above and below,
+  never past half the gap to the next band (bands never overlap) or the
+  crop's edge, and cut to its inked columns plus 2 px on each side.
+- A region with contrast but no band is read whole, as one line.
 
 `examples/text-inspect.json` is a starting flow: inject → file in →
 `barcode-locate` → `text-inspect` → debug. Import it from **Import →
@@ -1828,15 +1870,21 @@ Buffer, Uint8Array or ArrayBuffer, a file path, an object
 
 ### Regions and scaling
 
-A region is `{ name, x, y, width, height }`, an upright rectangle in
-pixels; a region with no name is called `region1`, `region2`, ... by its
-position. In the editor you draw them on the last frame that went through
-the node, and the size of that frame is stored with them (**Drawn on**,
-`frameWidth` × `frameHeight`). When a frame of another size arrives, the
-configured regions are scaled by the width and height ratios, so they
-stay on the same part of the picture. Scaling needs both stored sizes
-above 0: a 0 in either means unknown, and the regions are used as they
-are, unscaled.
+A region is `{ name, x, y, width, height, rotate }`, an upright
+rectangle in pixels; a region with no name is called `region1`,
+`region2`, ... by its position in the list as given (after the `kind`
+filter below, an item keeps its original index).
+`rotate` (0, 90, 180 or 270, default 0) turns the region's crop clockwise before it is read: use 270 for text
+running top to bottom, 90 for text running bottom to top and 180 for
+upside-down text. Any other value fails the message, naming the region;
+the editor sets it per region and marks a rotated one with an arrow along
+the way its text runs. In the editor you draw them on the last frame
+that went through the node, and the size of that frame is stored with
+them (**Drawn on**, `frameWidth` × `frameHeight`). When a frame of
+another size arrives, the configured regions are scaled by the width
+and height ratios, so they stay on the same part of the picture.
+Scaling needs both stored sizes above 0: a 0 in either means unknown,
+and the regions are used as they are, unscaled.
 
 Every region is then rounded to whole pixels and clipped to the frame.
 A region left empty by that, or with a coordinate that is not a number,
@@ -1850,7 +1898,13 @@ and is never scaled. An empty or invalid `msg.regions` fails the message;
 the node does not fall back to the configured regions. A `msg.regions`
 set upstream for another node (for example `barcode-locate`, which passes
 every property through) reaches `text-inspect` too and replaces its
-regions, so delete it in between if the two lists differ.
+regions, so delete it in between if the two lists differ. An item with
+a `kind` (`region-detect`'s output) is read only when `kind` is
+`"text"`, and a list with items but none of kind text fails the
+message; items without `kind` are read as before. The match is exact and
+case-sensitive, a `kind` that is not a string counts as absent, and the
+same filter applies to the configured list, which the editor never gives
+a `kind`.
 
 ### Output
 
@@ -1858,14 +1912,22 @@ One message per input. `msg.payload` and every other property pass
 through unchanged, except `msg.timings`, which is replaced (an upstream
 one, such as `barcode-locate`'s, is not kept). Added:
 
-- **`msg.ocr`**: one `{ name, roi, text, confidences }` per region, in
-  order. `roi` is the area actually read, in the frame's pixels after
-  scaling and clipping. `confidences` holds one value from 0 to 1 (3
-  decimals) per character of `text`. A region where nothing was read
-  gives `text: ""` and `confidences: []`.
-- **`msg.timings`** (replaced): milliseconds, one decimal: `inputMs` (resolving and
-  decoding `msg.payload`), `cropMs` (cropping and normalising every
-  region), `inferMs` (the model runs and decoding), and `totalMs` (from
+- **`msg.ocr`**: one `{ name, roi, rotate, text, confidences, lines }`
+  per region, in order. `roi` is the area actually read, in the frame's
+  pixels after scaling and clipping. `rotate` is the region's rotate as
+  a number (0, 90, 180 or 270). A region is split into text lines
+  automatically (see above), so one box may cover several lines.
+  `lines` is `[{ text, confidences, y0, y1 }]`, top to bottom, `y0`..`y1`
+  the line's rows in the rotated crop's pixels, end exclusive, with the
+  band's padding included (not just the inked rows); a line that read
+  nothing is left out. `text` joins the lines' texts with `"\n"`.
+  `confidences` holds one value from 0 to 1 (3 decimals) per character
+  of `text`, each `"\n"` carrying 1. A region where nothing was read
+  gives `text: ""`, `confidences: []` and `lines: []`.
+- **`msg.timings`** (replaced): milliseconds, one decimal: `inputMs`
+  (resolving and decoding `msg.payload`), `cropMs` (cropping, rotating
+  and the ink profile of every region), `inferMs` (resizing, the model
+  run and decoding for every line of every region), and `totalMs` (from
   message in to message out). The status shows `totalMs`. The model is
   loaded at deploy, and a frame that arrives first waits for it, so that
   wait shows up in `totalMs`.
@@ -1898,6 +1960,118 @@ The model and its character dictionary are shipped unmodified in
 `ppocrv6_tiny_dict.txt`). They are PaddleOCR's PP-OCRv6 rec tiny, in
 RapidOCR's ONNX conversion, both Apache-2.0; see [NOTICE](NOTICE) for
 attribution and sources. Nothing is downloaded at run time.
+
+## How `region-detect` works
+
+Finds the regions of interest on a printed label — text blocks, barcodes
+and graphics — and sends them as `msg.regions`, which `text-inspect` and
+`barcode-locate` take as it comes. It is a one-off, run when a new golden
+image is chosen, not per frame: a label takes 0.3 to 3 s, most of it the
+barcode decode and, with orientation `auto`, two model reads per text
+block. It runs in process and offline (zxing for barcodes, the
+`text-inspect` OCR model for orientation).
+
+How it finds them, in short (the full method is in the header of
+`lib/regionDetect.js`): dark and light (reversed) ink are thresholded and
+split into components; zxing decodes the barcodes over the whole frame,
+and groups of thin parallel bars that did not decode are barcodes too.
+Character-sized components that line up become text lines, and lines
+stacked close together become a block; a block whose median line is
+thinner than **Min text** is dropped. With orientation `auto`, each
+block's longest line is read both ways to find which way up it is. Dark
+ink left over is graphics; light ink never becomes a graphic. Every box
+is padded by **Pad** (a decoded linear barcode by at least 12 px across
+its bars) and clamped to the frame.
+
+`examples/region-detect.json` is a starting flow: inject → file in →
+`region-detect` → `text-inspect` and `barcode-locate` (Regions only,
+Preview off) side by side → debug. Point the file node at a golden on the
+Node-RED host; `/data/golden.jpg` is a placeholder.
+
+### Settings
+
+Each can be overridden for one message by the same key in `msg.detect`
+(an object, any subset).
+
+- **Orientation** (`orientation`, default `auto`): `auto` reads each text
+  block both ways with the OCR model and keeps the better; `0`, `90`,
+  `180` or `270` is used for every block as it is, nothing is read and
+  the model is not loaded.
+- **Min text** (`minTextHeight`, px, default 8): thinner text is not
+  text.
+- **Min score** (`minScore`, 0..1, default 0.7): with `auto`, a text block
+  read below it is dropped.
+- **Graphics** and **Barcodes** (`graphics`, `barcodes`, default on):
+  look for that kind at all. In `msg.detect` they take `true`, `false`,
+  `"true"` or `"false"` only.
+- **Pad** (`pad`, px, default 4): added around every box.
+
+A bad `msg.detect` value fails the message, naming it; unknown keys are
+ignored. `msg.detect.minTextHeight` takes any number >= 0, while the
+node's own setting is a whole number of at least 1.
+
+### Input
+
+`msg.payload` is the image: encoded bytes (JPEG, PNG, WebP, ...) as a
+Buffer, Uint8Array or ArrayBuffer, a file path, an object
+`{ data | buffer | path }`, or bare pixels as
+`{ data, width, height, channels }` (or bytes plus `msg.rawInfo`). EXIF
+rotation on a JPEG is ignored: send upright or rectified frames.
+
+### Output
+
+One message per input; `msg.payload` and every other property pass
+through. Added:
+
+- **`msg.regions`**: `[{ name, label, kind, x, y, width, height, rotate,
+  score }]`, integers in the frame's pixels, `kind` `"text"`,
+  `"barcode"` or `"graphic"`, sorted by y then x and named per kind
+  (`text1`, `barcode1`, `graphic1`); `label` equals `name`. `rotate`
+  (text only, else 0) turns the box clockwise upright, as `text-inspect`
+  reads it. `score` is 0..1: for text, the orientation vote (the mean OCR
+  confidence over the block's longest line at its rotate), and 1 when the
+  orientation is fixed; for a barcode, 1 when decoded, else the bars'
+  regularity (at most 0.95); for a graphic, its ink over its ink's
+  bounding box.
+- **`msg.detect`**: `{ frameWidth, frameHeight, charHeight, counts:
+  { text, barcode, graphic } }`; `charHeight` is the median character
+  height in px.
+- **`msg.timings`**: ms with one decimal: `inputMs` (resolving and
+  decoding `msg.payload`), `thresholdMs`, `componentsMs`, `barcodeMs`,
+  `textMs`, `orientMs`, `graphicsMs`, and `totalMs` (message in to
+  message out). The status shows the counts and `totalMs`.
+
+A failure sends nothing; it goes to a Catch node through `done(err)`.
+
+### Downstream
+
+`text-inspect` keeps only the `msg.regions` items of kind `"text"` and
+reads each at its `rotate`; `barcode-locate` keeps only kind
+`"barcode"`. Items without a `kind` are used by both as before, so a
+hand-made list is unchanged.
+
+### In the editor
+
+The dialog shows the last successful detection (a failed message leaves
+the previous one): the frame with the boxes drawn, text red, barcodes
+blue, graphics green, an arrow along the way rotated text runs, the
+counts, and a table of the regions. **Reload** fetches it again;
+**Copy regions JSON** puts `msg.regions` on the clipboard for records or
+for writing into flow JSON. They come from
+`GET /region-detect/last-frame/:id` and
+`GET /region-detect/last-regions/:id` (permission `region-detect.read`,
+404 before any input).
+
+### Known limits
+
+Two blocks closer than 1.2x their character height merge into one; a 2D
+code that does not decode comes out as a graphic, or as text when it is
+next to text; a single short character is not text and, under the
+graphic size floor, vanishes; random dense specks can read as text at
+0.6-0.9 confidence; a large graphic within 1.2x the character height of
+text can join its block; reversed text under about 24 px on a thin band
+may be missed. Raise **Min text** or **Min score**, or check the boxes in
+the editor.
 
 ## Deployment notes
 
@@ -2035,7 +2209,7 @@ attribution and sources. Nothing is downloaded at run time.
 
 ## Tests
 
-`npm test` (Node 22+, no test framework needed — `node --test`), 787 tests.
+`npm test` (Node 22+, no test framework needed — `node --test`), 900 tests.
 Fixtures are generated with `sharp` rather than read from
 real camera photos, so the suite runs anywhere; the real QC photos are
 gitignored. Coverage spans the lib pipeline (`compare`, `align`, `warp`,

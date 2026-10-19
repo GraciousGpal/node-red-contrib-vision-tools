@@ -83,6 +83,11 @@ function runtimeDefault(js, name, table) {
 		`pickMode\\(config\\.${name},\\s*("[^"]*")(?:,|\\))`,
 	).exec(js);
 	if (mode) return mode[1].trim();
+	// `pickMode(String(config.x), "d", ...)` and `asBoolean(config.x, true|false)`
+	const modeOfString = new RegExp(`pickMode\\(String\\(config\\.${name}\\),\\s*("[^"]*")`).exec(js);
+	if (modeOfString) return modeOfString[1].trim();
+	const bool = new RegExp(`asBoolean\\(config\\.${name}\\s*,\\s*(true|false)\\)`).exec(js);
+	if (bool) return bool[1];
 	// `config.x !== false` defaults to true; `!!config.x` defaults to false
 	if (new RegExp(`config\\.${name}\\s*!==\\s*false`).test(js)) return "true";
 	if (new RegExp(`!!config\\.${name}\\b`).test(js)) return "false";
@@ -134,6 +139,7 @@ const NODES = [
 	{ html: "barcode-locate.html", js: "barcode-locate.js" },
 	{ html: "synthetic-defects.html", js: "synthetic-defects.js" },
 	{ html: "text-inspect.html", js: "text-inspect.js" },
+	{ html: "region-detect.html", js: "region-detect.js" },
 ];
 
 for (const node of NODES) {

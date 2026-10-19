@@ -1,0 +1,159 @@
+[
+    {
+        "id": "rdx-note",
+        "type": "comment",
+        "z": "rdx-tab",
+        "name": "Find the regions on a golden once, then read and scan them",
+        "info": "One-off, not per frame: run this when a new golden is chosen. A label\ntakes 0.3 to 3 s in region-detect.\n\nPoint `golden` at the golden image on the Node-RED host (the path here\nis a placeholder) and press Inject. region-detect finds the text blocks,\nbarcodes and graphics and sends them as msg.regions\n[{ name, label, kind, x, y, width, height, rotate, score }] plus\nmsg.detect { frameWidth, frameHeight, charHeight, counts }.\n\ntext-inspect and barcode-locate both take msg.regions as it comes and\nkeep only the items of their own kind: text-inspect reads the kind\n\"text\" boxes (at their rotate), barcode-locate scans the kind\n\"barcode\" boxes. barcode-locate runs Regions only with Preview off, so\nmsg.payload stays the frame.\n\nOpen region-detect after a run to see the boxes on the frame; Copy\nregions JSON puts msg.regions on the clipboard for your records.",
+        "x": 330,
+        "y": 60,
+        "wires": []
+    },
+    {
+        "id": "rdx-inject",
+        "type": "inject",
+        "z": "rdx-tab",
+        "name": "one golden",
+        "props": [
+            {
+                "p": "payload"
+            }
+        ],
+        "repeat": "",
+        "crontab": "",
+        "once": false,
+        "onceDelay": 0.1,
+        "topic": "",
+        "payload": "",
+        "payloadType": "date",
+        "x": 130,
+        "y": 140,
+        "wires": [
+            [
+                "rdx-read"
+            ]
+        ]
+    },
+    {
+        "id": "rdx-read",
+        "type": "file in",
+        "z": "rdx-tab",
+        "name": "golden",
+        "filename": "/data/golden.jpg",
+        "filenameType": "str",
+        "format": "",
+        "chunk": false,
+        "sendError": true,
+        "encoding": "none",
+        "allProps": false,
+        "x": 290,
+        "y": 140,
+        "wires": [
+            [
+                "rdx-detect"
+            ]
+        ]
+    },
+    {
+        "id": "rdx-detect",
+        "type": "region-detect",
+        "z": "rdx-tab",
+        "name": "regions",
+        "orientation": "auto",
+        "minTextHeight": 8,
+        "minScore": 0.7,
+        "graphics": true,
+        "barcodes": true,
+        "pad": 4,
+        "x": 450,
+        "y": 140,
+        "wires": [
+            [
+                "rdx-text",
+                "rdx-barcode"
+            ]
+        ]
+    },
+    {
+        "id": "rdx-text",
+        "type": "text-inspect",
+        "z": "rdx-tab",
+        "name": "text inspect",
+        "regions": [],
+        "frameWidth": 0,
+        "frameHeight": 0,
+        "x": 640,
+        "y": 100,
+        "wires": [
+            [
+                "rdx-debug-ocr"
+            ]
+        ]
+    },
+    {
+        "id": "rdx-barcode",
+        "type": "barcode-locate",
+        "z": "rdx-tab",
+        "name": "barcodes",
+        "mode": "regionsOnly",
+        "regions": [],
+        "regionSource": "list",
+        "profilePath": "",
+        "profileDir": "",
+        "scaleFilePath": "",
+        "regionPad": 0.2,
+        "regionPadMinPx": 64,
+        "Code128": true,
+        "DataMatrix": true,
+        "QRCode": true,
+        "EAN13": true,
+        "Code39": true,
+        "ITF": true,
+        "PDF417": true,
+        "EAN8": false,
+        "tryHarder": true,
+        "tryRotate": true,
+        "preview": false,
+        "x": 640,
+        "y": 180,
+        "wires": [
+            [
+                "rdx-debug-codes"
+            ]
+        ]
+    },
+    {
+        "id": "rdx-debug-ocr",
+        "type": "debug",
+        "z": "rdx-tab",
+        "name": "msg.ocr",
+        "active": true,
+        "tosidebar": true,
+        "console": false,
+        "tostatus": false,
+        "complete": "ocr",
+        "targetType": "msg",
+        "statusVal": "",
+        "statusType": "auto",
+        "x": 830,
+        "y": 100,
+        "wires": []
+    },
+    {
+        "id": "rdx-debug-codes",
+        "type": "debug",
+        "z": "rdx-tab",
+        "name": "msg.text",
+        "active": true,
+        "tosidebar": true,
+        "console": false,
+        "tostatus": false,
+        "complete": "text",
+        "targetType": "msg",
+        "statusVal": "",
+        "statusType": "auto",
+        "x": 830,
+        "y": 180,
+        "wires": []
+    }
+]

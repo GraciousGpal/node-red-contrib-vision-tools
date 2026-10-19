@@ -35,8 +35,12 @@
  * a file path string, or an object { data | buffer | path }; bare pixels
  * as { data, width, height, channels } or bytes plus msg.rawInfo, as
  * golden-compare accepts them.
- * Optional per-message overrides: msg.regions (array), msg.mode,
- * msg.profile (a profile name).
+ * Optional per-message overrides: msg.regions (array or its JSON string;
+ * invalid JSON fails the message), msg.mode, msg.profile (a profile name).
+ * A msg.regions item with a kind string (region-detect's output) is
+ * scanned only when kind is exactly "barcode" (case-sensitive; a kind that
+ * is not a string counts as absent), so a list with none is an empty
+ * msg.regions.
  *
  * Output: one message per barcode found, in the order regions were scanned
  * (then, if used, the full-image fallback) - msg.text, msg.format,
@@ -77,8 +81,17 @@ const WARNED_MAX = 256;
 
 module.exports = (RED) => {
 	function normalizeRegions(regions) {
+		if (typeof regions === "string") {
+			try {
+				regions = JSON.parse(regions);
+			} catch (err) {
+				throw new Error(`barcode-locate: msg.regions is not valid JSON: ${err.message}`);
+			}
+		}
 		if (!Array.isArray(regions)) return [];
 		return regions
+			// region-detect's output: only its barcode boxes are for scanning
+			.filter((r) => typeof (r && r.kind) !== "string" || r.kind === "barcode")
 			.map((r) => ({
 				label: String(r.label || "").trim(),
 				x: parseInt(r.x, 10) || 0,

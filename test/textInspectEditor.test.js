@@ -117,6 +117,10 @@ const TWO = [
 	{ name: "lot", x: 100, y: 200, width: 400, height: 100 },
 	{ name: "date", x: 600, y: 200, width: 300, height: 80 },
 ];
+/** A region as saved: a stored one without rotate is read at 0. */
+const R0 = (r) => ({ ...r, rotate: 0 });
+const TWO0 = TWO.map(R0);
+const rotateSelect = (env, i) => rows(env)[i].descendants().find((e) => e.tagName === "SELECT" && e.name === "rotate");
 
 // ---- the viewer -----------------------------------------------------------
 
@@ -127,7 +131,7 @@ test("a drag on the viewer adds a region in frame pixels, not screen pixels", ()
 	drag(v.canvas, toScreen(100, 200), toScreen(500, 300));
 	v.button("Apply").click();
 	assert.strictEqual(env.document.body.children.length, 0, "Apply closes the viewer");
-	assert.deepStrictEqual(save(env), [{ name: "text1", x: 100, y: 200, width: 400, height: 100 }]);
+	assert.deepStrictEqual(save(env), [{ name: "text1", x: 100, y: 200, width: 400, height: 100, rotate: 0 }]);
 });
 
 test("in the viewer a drag inside a region moves it and a corner handle resizes it; Cancel keeps nothing", () => {
@@ -140,15 +144,15 @@ test("in the viewer a drag inside a region moves it and a corner handle resizes 
 	drag(v.canvas, toScreen(550, 320), toScreen(600, 400));
 	v.button("Apply").click();
 	const saved = save(env);
-	assert.deepStrictEqual(saved[0], { name: "lot", x: 150, y: 220, width: 450, height: 180 });
-	assert.deepStrictEqual(saved[1], TWO[1], "the other region is untouched");
+	assert.deepStrictEqual(saved[0], { name: "lot", x: 150, y: 220, width: 450, height: 180, rotate: 0 });
+	assert.deepStrictEqual(saved[1], TWO0[1], "the other region is untouched");
 
 	const env2 = boot({ id: "t2", regions: TWO.map((r) => ({ ...r })) });
 	loadFile(env2);
 	v = openViewer(env2);
 	drag(v.canvas, toScreen(1000, 600), toScreen(1200, 700));
 	v.button("Cancel").click();
-	assert.deepStrictEqual(save(env2), TWO, "a cancelled viewer changes nothing");
+	assert.deepStrictEqual(save(env2), TWO0, "a cancelled viewer changes nothing");
 });
 
 test("a click on the viewer without a drag adds no region", () => {
@@ -196,7 +200,7 @@ test("a frame of another size leaves the stored size and regions alone and the c
 		ajax.frames[0].resolve({ size: 1, type: "image/png" }, HALF_HEADERS);
 		assert.match(caption(env), /Drawn on 1800×1200, frame is 900×600/);
 		save(env);
-		assert.deepStrictEqual(env.node.regions, [lot]);
+		assert.deepStrictEqual(env.node.regions, [R0(lot)]);
 		assert.strictEqual(env.node.frameWidth, 1800);
 		assert.strictEqual(env.node.frameHeight, 1200);
 	});
@@ -219,7 +223,7 @@ test("a drag over a smaller frame shown stretched to the stored size gives store
 	// the view is fitted to 1800x1200, so FIT still applies
 	drag(v.canvas, toScreen(1000, 600), toScreen(1400, 800));
 	v.button("Apply").click();
-	assert.deepStrictEqual(save(env)[1], { name: "text1", x: 1000, y: 600, width: 400, height: 200 });
+	assert.deepStrictEqual(save(env)[1], { name: "text1", x: 1000, y: 600, width: 400, height: 200, rotate: 0 });
 	assert.strictEqual(env.node.frameWidth, 1800);
 });
 
@@ -270,7 +274,7 @@ test("a 404 from last-frame says there is no frame yet and does not throw", () =
 		assert.match(caption(env), /^no frame yet/);
 		assert.strictEqual(env.notifications.length, 0, "a quiet 404, no error toast");
 		save(env);
-		assert.deepStrictEqual(env.node.regions, TWO);
+		assert.deepStrictEqual(env.node.regions, TWO0);
 		assert.strictEqual(env.node.frameWidth, 0, "no frame, the size stays unknown");
 	});
 });
@@ -305,16 +309,16 @@ test("a local file is a frame too: its size is stored", () => {
 
 // ---- the list and what is saved ---------------------------------------------
 
-test("oneditsave writes regions as an array of numeric {name,x,y,width,height}, never a string", () => {
+test("oneditsave writes regions as an array of numeric {name,x,y,width,height,rotate}, never a string", () => {
 	// a node whose regions came in as a JSON string still saves an array
 	const env = boot({ id: "s1", regions: JSON.stringify(TWO), frameWidth: "1800", frameHeight: "1200" });
 	assert.strictEqual(rows(env).length, 2);
 	const saved = save(env);
 	assert.ok(Array.isArray(saved), `regions saved as ${typeof saved}`);
-	assert.deepStrictEqual(saved, TWO);
+	assert.deepStrictEqual(saved, TWO0);
 	for (const r of saved) {
-		assert.deepStrictEqual(Object.keys(r), ["name", "x", "y", "width", "height"]);
-		for (const k of ["x", "y", "width", "height"]) assert.strictEqual(typeof r[k], "number", k);
+		assert.deepStrictEqual(Object.keys(r), ["name", "x", "y", "width", "height", "rotate"]);
+		for (const k of ["x", "y", "width", "height", "rotate"]) assert.strictEqual(typeof r[k], "number", k);
 	}
 	assert.strictEqual(env.node.frameWidth, 1800);
 	assert.strictEqual(env.node.frameHeight, 1200);
@@ -338,8 +342,8 @@ test("editing name, x, y, width or height in a row updates the saved region", ()
 	cell(env, 1, "x").value = "abc";
 	cell(env, 1, "x").dispatch("input");
 	const saved = save(env);
-	assert.deepStrictEqual(saved[0], { name: "lot no", x: 110, y: 205.5, width: 390, height: 90 });
-	assert.deepStrictEqual(saved[1], TWO[1]);
+	assert.deepStrictEqual(saved[0], { name: "lot no", x: 110, y: 205.5, width: 390, height: 90, rotate: 0 });
+	assert.deepStrictEqual(saved[1], TWO0[1]);
 });
 
 test("Add appends a region and a row's remove button drops it", () => {
@@ -350,11 +354,12 @@ test("Add appends a region and a row's remove button drops it", () => {
 	assert.strictEqual(saved.length, 3);
 	assert.strictEqual(saved[2].name, "text1");
 	assert.ok(saved[2].width > 0 && saved[2].height > 0);
+	assert.strictEqual(saved[2].rotate, 0, "an added region reads upright");
 
 	const env2 = boot({ id: "a2", regions: TWO.map((r) => ({ ...r })) });
 	rows(env2)[0].findButton("✕").dispatch("click");
 	saved = save(env2);
-	assert.deepStrictEqual(saved, [TWO[1]]);
+	assert.deepStrictEqual(saved, [TWO0[1]]);
 });
 
 test("a region past the frame is called out in its row", () => {
@@ -370,7 +375,7 @@ test("a typed coordinate past the stored frame is clamped to it", () => {
 	cell(env, 0, "x").dispatch("input");
 	cell(env, 0, "height").value = "5000";
 	cell(env, 0, "height").dispatch("input");
-	assert.deepStrictEqual(save(env)[0], { name: "lot", x: 1400, y: 200, width: 400, height: 1000 });
+	assert.deepStrictEqual(save(env)[0], { name: "lot", x: 1400, y: 200, width: 400, height: 1000, rotate: 0 });
 });
 
 test("a drag where two regions overlap moves the selected one", () => {
@@ -383,7 +388,7 @@ test("a drag where two regions overlap moves the selected one", () => {
 	v.button("Apply").click();
 	const saved = save(env);
 	assert.strictEqual(saved[0].x, 150, "the selected region moved");
-	assert.deepStrictEqual(saved[1], b);
+	assert.deepStrictEqual(saved[1], R0(b));
 });
 
 test("a new drag past the frame edge is clamped to the frame", () => {
@@ -392,5 +397,67 @@ test("a new drag past the frame edge is clamped to the frame", () => {
 	const v = openViewer(env);
 	drag(v.canvas, toScreen(1600, 1000), toScreen(2200, 1500));
 	v.button("Apply").click();
-	assert.deepStrictEqual(save(env), [{ name: "text1", x: 1600, y: 1000, width: 200, height: 200 }]);
+	assert.deepStrictEqual(save(env), [{ name: "text1", x: 1600, y: 1000, width: 200, height: 200, rotate: 0 }]);
+});
+
+// ---- rotate -------------------------------------------------------------------
+
+test("each row has a rotate select of 0/90/180/270; a change is saved as a number", () => {
+	const env = boot({ id: "r1", regions: [{ ...TWO[0] }, { ...TWO[1], rotate: "270" }] });
+	const sel = rotateSelect(env, 0);
+	assert.ok(sel, "row 0 has a rotate select");
+	const options = sel.children.filter((e) => e.tagName === "OPTION");
+	assert.deepStrictEqual(options.map((o) => String(o.value)), ["0", "90", "180", "270"]);
+	assert.deepStrictEqual(options.map((o) => o.textContent), ["0°", "90°", "180°", "270°"]);
+	assert.strictEqual(String(sel.value), "0", "a region without rotate shows 0");
+	assert.strictEqual(String(rotateSelect(env, 1).value), "270");
+
+	sel.value = "90";
+	sel.dispatch("change");
+	const saved = save(env);
+	assert.strictEqual(saved[0].rotate, 90);
+	assert.strictEqual(saved[1].rotate, 270, "a stored string is saved as a number");
+});
+
+test("rotated regions draw in the thumbnail and viewer without throwing and keep their rotate", () => {
+	const regions = [
+		{ name: "up", x: 100, y: 100, width: 60, height: 400, rotate: 90 },
+		{ name: "flip", x: 300, y: 100, width: 400, height: 60, rotate: 180 },
+		{ name: "down", x: 800, y: 100, width: 60, height: 400, rotate: 270 },
+	];
+	const env = boot({ id: "r2", regions: regions.map((r) => ({ ...r })) });
+	assert.doesNotThrow(() => loadFile(env));
+	let v;
+	assert.doesNotThrow(() => {
+		v = openViewer(env);
+		// move "down" 50 frame px right, then draw a new region
+		drag(v.canvas, toScreen(830, 300), toScreen(880, 300));
+		drag(v.canvas, toScreen(1000, 800), toScreen(1400, 900));
+	});
+	v.button("Apply").click();
+	const saved = save(env);
+	assert.deepStrictEqual(saved.map((r) => r.rotate), [90, 180, 270, 0]);
+	assert.strictEqual(saved[2].x, 850, "the moved region kept its rotate");
+});
+
+test("a stored rotate that is not 0/90/180/270 shows 0 and warns once, naming the region and the value", () => {
+	const env = boot({
+		id: "r3",
+		regions: [
+			{ ...TWO[0], rotate: 45 },
+			{ ...TWO[1], rotate: "90abc" },
+			{ name: "ok", x: 0, y: 0, width: 10, height: 10, rotate: "180" },
+		],
+	});
+	assert.strictEqual(String(rotateSelect(env, 0).value), "0");
+	assert.strictEqual(String(rotateSelect(env, 1).value), "0");
+	assert.strictEqual(env.notifications.length, 1, "one warning per load");
+	const { message, kind } = env.notifications[0];
+	assert.strictEqual(kind, "warning");
+	assert.match(message, /lot/);
+	assert.match(message, /45/);
+	assert.match(message, /date/);
+	assert.match(message, /90abc/);
+	assert.doesNotMatch(message, /\bok\b/);
+	assert.deepStrictEqual(save(env).map((r) => r.rotate), [0, 0, 180]);
 });

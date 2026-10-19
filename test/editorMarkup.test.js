@@ -29,6 +29,7 @@ const HTML_FILES = [
 	"barcode-locate.html",
 	"synthetic-defects.html",
 	"text-inspect.html",
+	"region-detect.html",
 ];
 
 /** The editor <script> and every data-template-name block, separately. */

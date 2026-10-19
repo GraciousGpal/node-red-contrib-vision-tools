@@ -161,8 +161,10 @@ class FakeContext {
  * exists, and enumerating every input here would only duplicate the
  * template without testing anything.
  */
-function makeEditorEnv({ script, imageSize = { width: 800, height: 600 } } = {}) {
+function makeEditorEnv({ script, imageSize = { width: 800, height: 600 }, deferImages = false } = {}) {
 	const byId = new Map();
+	// with deferImages, an image loads only when the test calls load() or fail()
+	const pendingImages = [];
 	const notifications = [];
 	const created = [];
 
@@ -206,6 +208,14 @@ function makeEditorEnv({ script, imageSize = { width: 800, height: 600 } } = {})
 			this._src = value;
 			this.naturalWidth = imageSize.width;
 			this.naturalHeight = imageSize.height;
+			if (deferImages) {
+				pendingImages.push({
+					image: this,
+					load: () => this.onload && this.onload(),
+					fail: () => this.onerror && this.onerror(),
+				});
+				return;
+			}
 			if (this.onload) this.onload();
 		}
 		get src() {
@@ -257,6 +267,7 @@ function makeEditorEnv({ script, imageSize = { width: 800, height: 600 } } = {})
 		byId,
 		created,
 		notifications,
+		pendingImages,
 		field: (id) => document.getElementById("node-input-" + id),
 		/** The topmost element appended straight to <body> - the modal overlay. */
 		overlay: () => document.body.children[document.body.children.length - 1],

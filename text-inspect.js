@@ -5,11 +5,19 @@
  * lib/ocr.js (PP-OCR line recognition) and reports what it read, with a
  * confidence per character. No grading: there is no expected text.
  *
- * Regions are { name, x, y, width, height } in pixels: msg.regions (an
+ * Regions are { name, x, y, width, height, rotate } in pixels: rotate (0,
+ * 90, 180 or 270, a number or numeric string, default 0) turns the crop
+ * clockwise before reading, so 270 reads text running top to bottom and 90
+ * text running bottom to top; any other value fails the message, naming
+ * the region. msg.regions (an
  * array or its JSON string, in the incoming frame's pixels) replaces the
  * configured list; an empty or invalid msg.regions fails the message, it
- * never falls back to the configured list. Configured regions are drawn
- * on a frame of frameWidth x frameHeight; when both are > 0 and the frame
+ * never falls back to the configured list. An item with a kind string
+ * (region-detect's output) is read only when kind is exactly "text"
+ * (case-sensitive; a kind that is not a string counts as absent), a list
+ * with items but none of kind text fails the message, and unnamed items
+ * are named by their position in the whole list. Configured regions
+ * are drawn on a frame of frameWidth x frameHeight; when both are > 0 and the frame
  * differs, they are scaled by the width and height ratios (0: unknown, no
  * scaling). Every region is then clamped to the frame; one left empty, or
  * with a coordinate that is not a number, fails the message, naming it.
@@ -19,13 +27,19 @@
  * as { data, width, height, channels } or bytes plus msg.rawInfo.
  *
  * Output: one message per input, msg.payload and every other field as
- * they came, plus msg.ocr - one { name, roi, text, confidences } per
- * region in order, roi in the frame's pixels after scaling, confidences
- * 0..1 at 3 decimals - and msg.timings. Failures go to done(err) only.
+ * they came, plus msg.ocr - one { name, roi, rotate, text, confidences,
+ * lines } per region in order, roi in the frame's pixels after scaling,
+ * confidences 0..1 at 3 decimals - and msg.timings. A region over several
+ * printed lines is split into lines by its ink rows and each is read:
+ * lines is [{ text, confidences, y0, y1 }] top to bottom, y0..y1 the rows
+ * in the upright crop; text joins the line texts with "\n" and each "\n"
+ * has confidence 1. Lines that read nothing are left out. Failures go to
+ * done(err) only.
  *
  * msg.timings, ms with one decimal: inputMs (resolving and decoding
- * msg.payload), cropMs (cropping and normalising every region), inferMs
- * (model runs and decode), totalMs (message in to message out, a first
+ * msg.payload), cropMs (cropping, turning and the ink profile of every
+ * region), inferMs (resize, model run and decode of every band of every
+ * region), totalMs (message in to message out, a first
  * frame's wait for the model included). The status shows totalMs.
  *
  * GET /text-inspect/last-frame/:id (permission text-inspect.read) serves
@@ -43,6 +57,20 @@ const { formatMs } = require("./lib/formatMs.js");
 
 // regions are clamped to the frame later; this only keeps the arithmetic sane
 const LIMIT = 1e6;
+
+/**
+ * An error as status badge text: no "text-inspect: " prefix, at most 60
+ * characters, and no file paths or names (done(err) keeps them). Every
+ * quoted string, single or double, holding / or \ becomes "…" in its own
+ * quotes; a msg.payload message only ever quotes the payload path, so all
+ * its double-quoted strings go too.
+ */
+function statusText(err) {
+	let text = String(err && err.message ? err.message : err).replace(/^text-inspect: /, "");
+	if (text.startsWith("msg.payload")) text = text.replace(/"[^"]*"/g, '"…"');
+	text = text.replace(/"[^"]*[/\\][^"]*"/g, '"…"').replace(/'[^']*[/\\][^']*'/g, "'…'");
+	return text.slice(0, 60);
+}
 
 module.exports = (RED) => {
 	/** The last frame through each node, by id: { payload, width, height, receivedAt, png }. */
@@ -82,9 +110,10 @@ module.exports = (RED) => {
 	}
 
 	/**
-	 * An array or its JSON string to [{ name, x, y, width, height }]. Not
-	 * JSON, not an array, an entry that is not an object or a coordinate
-	 * that is not a finite number: an error naming `label`, the region and
+	 * An array or its JSON string to [{ name, x, y, width, height, rotate }].
+	 * Not JSON, not an array, an entry that is not an object, a coordinate
+	 * that is not a finite number or a rotate other than 0, 90, 180 or 270
+	 * (absent is 0): an error naming `label`, the region and
 	 * the field, so a bad list never reads the wrong area.
 	 */
 	function normalizeRegions(list, label) {
@@ -100,19 +129,30 @@ module.exports = (RED) => {
 		}
 		if (items == null) return [];
 		if (!Array.isArray(items)) throw new Error(`text-inspect: ${label} is not an array of regions`);
-		return items.map((r, i) => {
+		// region-detect's output: only its text boxes are for reading; names
+		// and errors keep each item's position in the whole list
+		const out = [];
+		items.forEach((r, i) => {
+			if (typeof (r && r.kind) === "string" && r.kind !== "text") return;
 			if (!r || typeof r !== "object") throw new Error(`text-inspect: ${label}[${i}] is not a region object`);
 			const name = String(r.name == null ? "" : r.name).trim() || `region${i + 1}`;
-			const out = { name };
+			const region = { name };
 			for (const key of ["x", "y", "width", "height"]) {
 				const n = finite(r[key]);
 				if (Number.isNaN(n)) {
 					throw new Error(`text-inspect: region "${name}" has ${key} ${JSON.stringify(r[key])}, not a number`);
 				}
-				out[key] = Math.min(LIMIT, Math.max(-LIMIT, n));
+				region[key] = Math.min(LIMIT, Math.max(-LIMIT, n));
 			}
-			return out;
+			const rotate = r.rotate == null || r.rotate === "" ? 0 : finite(r.rotate);
+			if (![0, 90, 180, 270].includes(rotate)) {
+				throw new Error(`text-inspect: region "${name}" has rotate ${JSON.stringify(r.rotate)}, not 0, 90, 180 or 270`);
+			}
+			region.rotate = rotate;
+			out.push(region);
 		});
+		if (items.length && !out.length) throw new Error(`text-inspect: no text regions in ${label}`);
+		return out;
 	}
 
 	/** A region scaled from the drawing-time frame and clamped to this one, in whole pixels. */
@@ -191,10 +231,10 @@ module.exports = (RED) => {
 				let inferMs = 0;
 				const read = [];
 				for (let i = 0; i < regions.length; i++) {
-					const r = await ocr.recognise(frame, rois[i]);
+					const r = await ocr.recognise(frame, rois[i], { rotate: regions[i].rotate });
 					cropMs += r.cropMs;
 					inferMs += r.inferMs;
-					read.push({ name: regions[i].name, roi: rois[i], text: r.text, confidences: r.confidences });
+					read.push({ name: regions[i].name, roi: rois[i], rotate: regions[i].rotate, text: r.text, confidences: r.confidences, lines: r.lines });
 				}
 
 				const timings = {
@@ -214,7 +254,7 @@ module.exports = (RED) => {
 				});
 				done();
 			} catch (err) {
-				node.status({ fill: "red", shape: "ring", text: "error" });
+				node.status({ fill: "red", shape: "ring", text: statusText(err) });
 				// done(err) reports through node.error once; don't also call it
 				done(err);
 			}
@@ -250,3 +290,6 @@ module.exports = (RED) => {
 		}
 	});
 };
+
+// pure, for the tests
+module.exports.statusText = statusText;

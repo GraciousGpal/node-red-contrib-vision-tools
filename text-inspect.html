@@ -8,7 +8,7 @@
     <label><i class="fa fa-list"></i> Regions</label>
     <div style="margin-left:105px;">
       <div style="font-size:11px; color:#999; font-family:monospace; padding-left:4px;">
-        name / x / y / width / height (px)
+        name / x / y / width / height (px) / rotate
       </div>
       <div
         id="text-inspect-region-list"
@@ -96,9 +96,10 @@
     <dt class="optional">regions <span class="property-type">array | string</span></dt>
     <dd>
       Replaces the configured regions for this message: an array of
-      <code>{ name, x, y, width, height }</code> (or its JSON string) in the
-      incoming frame's pixels, never scaled. An empty or invalid list fails
-      the message; it does not fall back to the configured regions.
+      <code>{ name, x, y, width, height, rotate }</code> (or its JSON
+      string) in the incoming frame's pixels, never scaled. An empty or
+      invalid list fails the message; it does not fall back to the
+      configured regions.
       A configured list that is not valid JSON, or has a coordinate that
       is not a number, fails every message, naming the region.
     </dd>
@@ -108,16 +109,28 @@
   <dl class="message-properties">
     <dt>ocr <span class="property-type">array</span></dt>
     <dd>
-      One <code>{ name, roi, text, confidences }</code> per region, in
-      order. <code>roi</code> is the area read, in the frame's pixels after
-      scaling and clamping; <code>confidences</code> holds one value from 0
-      to 1 per character of <code>text</code>.
+      One <code>{ name, roi, rotate, text, confidences, lines }</code> per
+      region, in order. <code>roi</code> is the area read, in the frame's
+      pixels after scaling and clamping; <code>rotate</code> is the
+      region's rotate as a number (0, 90, 180 or 270). A box may cover
+      several printed lines: after rotating it is split into lines by the
+      rows that carry ink, and each line is read on its own.
+      <code>lines</code> is <code>[{ text, confidences, y0, y1 }]</code>
+      top to bottom, <code>y0</code>..<code>y1</code> the line's rows in
+      the rotated crop with the padding added around the ink; lines that
+      read nothing are left out. <code>text</code> joins the lines with
+      <code>"\n"</code>, and <code>confidences</code> holds one value from
+      0 to 1 per character of <code>text</code>, each <code>"\n"</code>
+      counting 1. A box with no text gives <code>text: ""</code>,
+      <code>confidences: []</code> and <code>lines: []</code>.
     </dd>
     <dt>timings <span class="property-type">object</span></dt>
     <dd>
       Milliseconds: <code>inputMs</code> (decoding the payload),
-      <code>cropMs</code>, <code>inferMs</code> and <code>totalMs</code>.
-      The node status shows <code>totalMs</code>.
+      <code>cropMs</code> (cropping, rotating and the ink profile of every
+      region), <code>inferMs</code> (resizing, the model run and decoding
+      for every line of every region) and <code>totalMs</code>. The node
+      status shows <code>totalMs</code>.
     </dd>
   </dl>
   <p>
@@ -136,6 +149,13 @@
     outside the frame is clipped to it.
   </p>
   <p>
+    <i>rotate</i> (0, 90, 180 or 270, default 0) turns a region's crop
+    clockwise before it is read: use 270 for text running top to bottom,
+    90 for text running bottom to top and 180 for upside-down text. Any
+    other value fails the message, naming the region. The editor marks a
+    rotated region with an arrow along the way its text runs.
+  </p>
+  <p>
     The editor fetches the last frame through this node, if there has been
     one. With no size recorded yet, or no regions drawn, it records that
     frame's size; otherwise the recorded size and regions stay as they are
@@ -148,6 +168,17 @@
   // reads it back; a hidden node-input would make Node-RED store the list
   // as the string an <input> holds, so it stays in this closure instead.
   let textInspectEditing = null;
+
+  const TEXT_INSPECT_ROTATIONS = [0, 90, 180, 270];
+  /**
+   * A stored rotate as 0/90/180/270, by strict Number() so "90abc" is not
+   * 90; missing (undefined, null, "") reads 0. Anything else is null.
+   */
+  const textInspectRotate = function (v) {
+    if (v === undefined || v === null || v === "") return 0;
+    const n = typeof v === "number" || typeof v === "string" ? Number(v) : NaN;
+    return TEXT_INSPECT_ROTATIONS.indexOf(n) >= 0 ? n : null;
+  };
 
   RED.nodes.registerType("text-inspect", {
     category: "vision",
@@ -182,6 +213,12 @@
       const clamp = function (v, lo, hi) {
         return Math.min(hi, Math.max(lo, v));
       };
+      const ROTATIONS = TEXT_INSPECT_ROTATIONS;
+      /** A rotate as one of ROTATIONS; one that is not reads 0 (parseRegions warns about it). */
+      const rotateOf = function (v) {
+        const n = textInspectRotate(v);
+        return n === null ? 0 : n;
+      };
       const parseRegions = function (list) {
         let items = list;
         if (typeof items === "string") {
@@ -193,19 +230,31 @@
           }
         }
         if (!Array.isArray(items)) return [];
-        return items
+        const badRotate = [];
+        const out = items
           .filter(function (r) {
             return r && typeof r === "object";
           })
           .map(function (r) {
+            if (textInspectRotate(r.rotate) === null) {
+              badRotate.push((r.name == null ? "" : String(r.name)) + " (" + String(r.rotate) + ")");
+            }
             return {
               name: r.name == null ? "" : String(r.name),
               x: num(r.x, 0),
               y: num(r.y, 0),
               width: Math.max(1, num(r.width, 1)),
               height: Math.max(1, num(r.height, 1)),
+              rotate: rotateOf(r.rotate),
             };
           });
+        if (badRotate.length) {
+          RED.notify(
+            "text-inspect: rotate must be 0, 90, 180 or 270; shown as 0 for " + badRotate.join(", "),
+            "warning",
+          );
+        }
+        return out;
       };
 
       const st = { regions: parseRegions(node.regions), selected: 0, release: null };
@@ -265,7 +314,35 @@
           y: y0,
           width: Math.max(1, Math.round(r.x + r.width) - x0),
           height: Math.max(1, Math.round(r.y + r.height) - y0),
+          rotate: rotateOf(r.rotate),
         };
+      };
+
+      // the way the text runs on screen for each rotate: 90 bottom to
+      // top, 180 upside down (right to left), 270 top to bottom
+      const READ_DIR = { 90: { x: 0, y: -1 }, 180: { x: -1, y: 0 }, 270: { x: 0, y: 1 } };
+      /** An arrow through the middle of the box a-b along the reading direction; none for 0. */
+      const drawReadArrow = function (c, a, b, rotate) {
+        const d = READ_DIR[rotate];
+        if (!d) return;
+        const cx = (a.x + b.x) / 2;
+        const cy = (a.y + b.y) / 2;
+        const len = clamp(Math.min(Math.abs(b.x - a.x), Math.abs(b.y - a.y)) * 0.4, 3, 14);
+        const head = len * 0.6;
+        const tip = { x: cx + d.x * len, y: cy + d.y * len };
+        const back = { x: tip.x - d.x * head, y: tip.y - d.y * head };
+        c.beginPath();
+        c.moveTo(cx - d.x * len, cy - d.y * len);
+        c.lineTo(tip.x, tip.y);
+        c.moveTo(back.x - d.y * head * 0.6, back.y + d.x * head * 0.6);
+        c.lineTo(tip.x, tip.y);
+        c.lineTo(back.x + d.y * head * 0.6, back.y - d.x * head * 0.6);
+        c.lineWidth = 3;
+        c.strokeStyle = "rgba(0,0,0,0.6)";
+        c.stroke();
+        c.lineWidth = 1.5;
+        c.strokeStyle = "#ffeb3b";
+        c.stroke();
       };
 
       /** Every region as an upright box, the selected one brighter and on top. */
@@ -279,6 +356,7 @@
           c.lineWidth = active ? 2 : 1.5;
           c.strokeStyle = active ? "#00e5ff" : "#90caf9";
           c.strokeRect(a.x, a.y, b.x - a.x, b.y - a.y);
+          drawReadArrow(c, a, b, r.rotate);
           if (r.name) {
             c.font = "bold 11px sans-serif";
             c.textAlign = "left";
@@ -382,6 +460,29 @@
             });
             row.appendChild(inp);
           }
+          // how the text runs in the box: the crop is turned this far
+          // clockwise before it is read
+          const rot = document.createElement("select");
+          rot.name = "rotate";
+          rot.title = "rotate: 270 reads text running top to bottom, 90 bottom to top, 180 upside down";
+          rot.style.cssText = "width:62px;";
+          for (const deg of ROTATIONS) {
+            const opt = document.createElement("option");
+            opt.value = String(deg);
+            opt.textContent = deg + "°";
+            rot.appendChild(opt);
+          }
+          rot.value = String(rotateOf(r.rotate));
+          rot.addEventListener("change", function () {
+            const reg = st.regions[i];
+            if (!reg) return;
+            reg.rotate = rotateOf(rot.value);
+            drawThumb();
+          });
+          rot.addEventListener("focus", function () {
+            select(i);
+          });
+          row.appendChild(rot);
           const remove = document.createElement("button");
           remove.type = "button";
           remove.className = "red-ui-button red-ui-button-small";
@@ -867,6 +968,7 @@
           y: image ? Math.round((sp.h - h) / 2) : 0,
           width: w,
           height: h,
+          rotate: 0,
         });
         st.selected = st.regions.length - 1;
         renderList();
@@ -891,6 +993,7 @@
           y: Number(r.y),
           width: Number(r.width),
           height: Number(r.height),
+          rotate: textInspectRotate(r.rotate) || 0,
         };
       });
       // Node-RED copies the inputs over these afterwards; numbers here

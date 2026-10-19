@@ -32,6 +32,7 @@ const EDITORS = {
 	"golden-compare": "golden-compare.html",
 	"synthetic-defects": "synthetic-defects.html",
 	"text-inspect": "text-inspect.html",
+	"region-detect": "region-detect.html",
 };
 
 /** The keys of a node's editor `defaults`, the way editorMarkup reads them. */

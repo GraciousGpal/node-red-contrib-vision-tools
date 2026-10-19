@@ -1,0 +1,580 @@
+<script type="text/html" data-template-name="region-detect">
+  <div class="form-row">
+    <label for="node-input-name"><i class="fa fa-tag"></i> Name</label>
+    <input type="text" id="node-input-name" placeholder="Name" />
+  </div>
+
+  <div class="form-row">
+    <label for="node-input-orientation"><i class="fa fa-repeat"></i> Orientation</label>
+    <select id="node-input-orientation" style="width:200px;">
+      <option value="auto">auto (read both ways)</option>
+      <option value="0">0°</option>
+      <option value="90">90°</option>
+      <option value="180">180°</option>
+      <option value="270">270°</option>
+    </select>
+  </div>
+
+  <div class="form-row">
+    <label for="node-input-minTextHeight"><i class="fa fa-text-height"></i> Min text</label>
+    <input type="number" id="node-input-minTextHeight" min="1" step="1" style="width:80px;" />
+    <span class="node-input-hint" style="margin-left:10px; color:#999;">px; thinner is not text</span>
+  </div>
+
+  <div class="form-row">
+    <label for="node-input-minScore"><i class="fa fa-check"></i> Min score</label>
+    <input type="number" id="node-input-minScore" min="0" max="1" step="0.05" style="width:80px;" />
+    <span class="node-input-hint" style="margin-left:10px; color:#999;">0..1; with auto, text read below it is dropped</span>
+  </div>
+
+  <div class="form-row">
+    <label for="node-input-pad"><i class="fa fa-expand"></i> Pad</label>
+    <input type="number" id="node-input-pad" min="0" step="1" style="width:80px;" />
+    <span class="node-input-hint" style="margin-left:10px; color:#999;">px added around every box</span>
+  </div>
+
+  <div class="form-row">
+    <label>&nbsp;</label>
+    <input type="checkbox" id="node-input-graphics" style="width:auto; margin:0 4px 0 0;" />
+    <label for="node-input-graphics" style="width:auto;">Graphics</label>
+    <input type="checkbox" id="node-input-barcodes" style="width:auto; margin:0 4px 0 16px;" />
+    <label for="node-input-barcodes" style="width:auto;">Barcodes</label>
+  </div>
+
+  <div class="form-row">
+    <label><i class="fa fa-crop"></i> Last result</label>
+    <div style="margin-left:105px;">
+      <canvas
+        id="region-detect-canvas"
+        width="360"
+        height="240"
+        style="border:1px solid #ccc; border-radius:3px; background:#fafafa;"
+      ></canvas>
+      <div style="margin-top:6px;">
+        <button
+          type="button"
+          id="region-detect-reload"
+          class="red-ui-button red-ui-button-small"
+          title="Fetch the last frame and regions of this node"
+        >
+          <i class="fa fa-refresh"></i> Reload
+        </button>
+        <button
+          type="button"
+          id="region-detect-copy"
+          class="red-ui-button red-ui-button-small"
+          title="Copy msg.regions of the last result to the clipboard"
+        >
+          <i class="fa fa-clipboard"></i> Copy regions JSON
+        </button>
+      </div>
+      <div id="region-detect-caption" style="margin-top:4px; color:#999; font-size:12px;"></div>
+      <div style="margin-top:6px; max-height:200px; overflow-y:auto; border:1px solid #ccc; border-radius:3px;">
+        <table style="width:100%; font-size:12px; font-family:monospace; border-collapse:collapse;">
+          <thead>
+            <tr style="color:#999; text-align:left;">
+              <th>name</th><th>kind</th><th>rotate</th><th>score</th><th>x</th><th>y</th><th>w</th><th>h</th>
+            </tr>
+          </thead>
+          <tbody id="region-detect-table"></tbody>
+        </table>
+      </div>
+    </div>
+  </div>
+</script>
+
+<script type="text/html" data-help-name="region-detect">
+  <p>
+    Finds the regions of interest on a printed label - text blocks,
+    barcodes and graphics - and emits them as boxes for the nodes
+    downstream.
+  </p>
+
+  <h3>Inputs</h3>
+  <dl class="message-properties">
+    <dt>payload <span class="property-type">buffer | string | object</span></dt>
+    <dd>
+      The image: encoded bytes (JPEG, PNG, WebP, ...), a file path, an
+      object <code>{ data | buffer | path }</code>, bare pixels as
+      <code>{ data, width, height, channels }</code>, or raw pixel bytes
+      with their size in <code>msg.rawInfo</code>.
+    </dd>
+    <dt class="optional">detect <span class="property-type">object</span></dt>
+    <dd>
+      Overrides any of <code>orientation</code>, <code>minTextHeight</code>,
+      <code>minScore</code>, <code>graphics</code>, <code>barcodes</code> and
+      <code>pad</code> for this message only. <code>graphics</code> and
+      <code>barcodes</code> take <code>true</code>, <code>false</code>,
+      <code>"true"</code> or <code>"false"</code>; a bad value fails the
+      message, naming it.
+    </dd>
+  </dl>
+
+  <h3>Outputs</h3>
+  <dl class="message-properties">
+    <dt>regions <span class="property-type">array</span></dt>
+    <dd>
+      <code>[{ name, label, kind, x, y, width, height, rotate, score }]</code>
+      in the frame's pixels, <code>kind</code> <code>"text"</code>,
+      <code>"barcode"</code> or <code>"graphic"</code>, sorted by y then x
+      and named per kind (<code>text1</code>, <code>barcode1</code>, ...).
+      <code>rotate</code> (text only, else 0) turns the box clockwise
+      upright. <code>score</code> 0..1: for text the orientation vote (the
+      mean OCR confidence of its longest line), 1 when the orientation is
+      fixed; for a barcode 1 when decoded, else at most 0.95; for a graphic
+      its ink over its bounding box.
+    </dd>
+    <dt>detect <span class="property-type">object</span></dt>
+    <dd>
+      <code>{ frameWidth, frameHeight, charHeight, counts: { text, barcode, graphic } }</code>;
+      <code>charHeight</code> is the median character height in px.
+    </dd>
+    <dt>timings <span class="property-type">object</span></dt>
+    <dd>
+      Milliseconds: <code>inputMs</code>, <code>thresholdMs</code>,
+      <code>componentsMs</code>, <code>barcodeMs</code>, <code>textMs</code>,
+      <code>orientMs</code>, <code>graphicsMs</code> and <code>totalMs</code>.
+    </dd>
+  </dl>
+  <p>
+    <code>msg.payload</code> and every other property pass through as they
+    came. A failure goes to a Catch node; nothing is sent.
+  </p>
+
+  <h3>Details</h3>
+  <p>
+    Run it once per golden image, not per frame: a label takes 0.3 to 3 s.
+    <i>text-inspect</i> and <i>barcode-locate</i> take
+    <code>msg.regions</code> directly, as it comes, and each keeps only the
+    items of its own kind: text-inspect reads the <code>"text"</code> boxes
+    at their <code>rotate</code>, barcode-locate scans the
+    <code>"barcode"</code> boxes. <i>Copy regions JSON</i> is for records
+    or for writing into flow JSON by hand.
+  </p>
+  <p>
+    <i>Orientation</i> <code>auto</code> reads each text block both ways
+    with the OCR model and keeps the better; a fixed angle reads nothing
+    and does not load the model. Send upright or rectified frames: EXIF
+    rotation on a JPEG is ignored.
+  </p>
+  <p>
+    The dialog shows the last successful detection (a failed message
+    leaves the previous one): its frame with the regions drawn, text red,
+    barcodes blue, graphics green, and an arrow along the way rotated text
+    runs.
+  </p>
+  <p>
+    Known limits: two blocks closer than 1.2x their character height merge;
+    a 2D code that does not decode comes out as a graphic (or as text next
+    to text); a lone short character is not text; dense specks can read as
+    text; reversed text under about 24 px on a thin band may be missed.
+    Raise <i>Min text</i> or <i>Min score</i>, or check the boxes here.
+  </p>
+</script>
+
+<script type="text/javascript">
+  // The last-result view being shown; oneditsave and oneditcancel release it.
+  let regionDetectEditing = null;
+
+  const REGION_DETECT_COLOURS = { text: "#e53935", barcode: "#1e88e5", graphic: "#43a047" };
+  const REGION_DETECT_NUMBERS = ["minTextHeight", "minScore", "pad"];
+  const REGION_DETECT_BOOLEANS = ["graphics", "barcodes"];
+  /** Node-RED's number validator (blank allowed) plus lo <= value <= hi. */
+  const regionDetectRange = function (numberValidator, lo, hi) {
+    return function (v, opt) {
+      const ok = numberValidator.call(this, v, opt);
+      if (ok !== true) return ok;
+      if (v === "" || v === undefined || v === null) return true;
+      const n = Number(v);
+      return n >= lo && n <= hi;
+    };
+  };
+
+  const regionDetectDef = {
+    category: "vision",
+    color: "#5DADE2",
+    defaults: {
+      name: { value: "" },
+      orientation: { value: "auto" },
+      minTextHeight: { value: 8, validate: regionDetectRange(RED.validators.number(true), 1, Infinity) },
+      minScore: { value: 0.7, validate: regionDetectRange(RED.validators.number(true), 0, 1) },
+      graphics: { value: true },
+      barcodes: { value: true },
+      pad: { value: 4, validate: regionDetectRange(RED.validators.number(true), 0, Infinity) },
+    },
+    inputs: 1,
+    outputs: 1,
+    icon: "font-awesome/fa-object-group",
+    label: function () {
+      return this.name || "region detect";
+    },
+    paletteLabel: function () {
+      return "region detect";
+    },
+    oneditprepare: function () {
+      const node = this;
+      const defaults = regionDetectDef.defaults;
+      const NO_RESULT = "no result yet - deploy and send a frame";
+
+      // A node saved before a setting existed has no value for it; give its
+      // input the default, or saving writes back a blank or unticked box
+      // nobody chose.
+      for (const name in defaults) {
+        const def = defaults[name];
+        if (node[name] !== undefined || def.value === undefined) continue;
+        const input = document.getElementById("node-input-" + name);
+        if (!input) continue;
+        if (input.type === "checkbox") input.checked = !!def.value;
+        else input.value = def.value;
+      }
+
+      const canvas = document.getElementById("region-detect-canvas");
+      const ctx = canvas.getContext("2d");
+      const captionEl = document.getElementById("region-detect-caption");
+      const tableEl = document.getElementById("region-detect-table");
+
+      const st = {
+        token: 0,
+        image: null,
+        frameW: 0,
+        frameH: 0,
+        frameReceived: null,
+        // 0 for a fetch from open or Reload, 1 for the one refetch of a pair
+        // from different messages; mismatch is set when that refetch differs too
+        round: 0,
+        mismatch: false,
+        // "pending", "ok", "none" or "bad"
+        frame: "pending",
+        result: "pending",
+        regions: [],
+        detect: null,
+        received: null,
+        url: null,
+      };
+      regionDetectEditing = st;
+
+      const num = function (v, fallback) {
+        const n = typeof v === "number" ? v : parseFloat(v);
+        return Number.isFinite(n) ? n : fallback;
+      };
+      const releaseUrl = function () {
+        if (st.url) URL.revokeObjectURL(st.url);
+        st.url = null;
+      };
+      st.release = releaseUrl;
+
+      const timeText = function (iso) {
+        if (!iso) return "?";
+        const d = new Date(iso);
+        return Number.isNaN(d.getTime()) ? String(iso) : d.toLocaleString();
+      };
+
+      const setCaption = function () {
+        let text;
+        if (st.frame === "bad") text = "the last frame does not decode - send another";
+        else if (st.result === "none") text = NO_RESULT;
+        else if (st.frame === "pending" || st.result === "pending") text = "fetching the last result…";
+        else {
+          const counts = (st.detect && st.detect.counts) || {};
+          const count = function (kind) {
+            if (Number.isFinite(counts[kind])) return counts[kind];
+            return st.regions.filter(function (r) {
+              return r && r.kind === kind;
+            }).length;
+          };
+          const ch = st.detect && st.detect.charHeight != null ? st.detect.charHeight : "?";
+          text =
+            count("text") + " text · " + count("barcode") + " barcode · " + count("graphic") + " graphic" +
+            ", charHeight " + ch + ", received " + timeText(st.received || st.frameReceived) +
+            (st.frame === "none" ? " (no frame to show)" : "") +
+            (st.mismatch ? " (frame and regions from different messages)" : "");
+        }
+        captionEl.textContent = text;
+      };
+
+      // the way the text runs on screen for each rotate: 90 bottom to
+      // top, 180 upside down (right to left), 270 top to bottom
+      const READ_DIR = { 90: { x: 0, y: -1 }, 180: { x: -1, y: 0 }, 270: { x: 0, y: 1 } };
+      const drawReadArrow = function (a, b, rotate) {
+        const d = READ_DIR[Number(rotate)];
+        if (!d) return;
+        const cx = (a.x + b.x) / 2;
+        const cy = (a.y + b.y) / 2;
+        const len = Math.min(14, Math.max(3, Math.min(Math.abs(b.x - a.x), Math.abs(b.y - a.y)) * 0.4));
+        const head = len * 0.6;
+        const tip = { x: cx + d.x * len, y: cy + d.y * len };
+        const back = { x: tip.x - d.x * head, y: tip.y - d.y * head };
+        ctx.beginPath();
+        ctx.moveTo(cx - d.x * len, cy - d.y * len);
+        ctx.lineTo(tip.x, tip.y);
+        ctx.moveTo(back.x - d.y * head * 0.6, back.y + d.x * head * 0.6);
+        ctx.lineTo(tip.x, tip.y);
+        ctx.lineTo(back.x + d.y * head * 0.6, back.y - d.x * head * 0.6);
+        ctx.lineWidth = 1.5;
+        ctx.strokeStyle = "#ffeb3b";
+        ctx.stroke();
+      };
+
+      const drawThumb = function () {
+        ctx.clearRect(0, 0, canvas.width, canvas.height);
+        if (!st.image) {
+          ctx.fillStyle = "#999";
+          ctx.font = "12px sans-serif";
+          ctx.textAlign = "center";
+          ctx.fillText("no frame to show", canvas.width / 2, canvas.height / 2);
+          return;
+        }
+        // the regions are in the detected frame's pixels
+        const fw = (st.detect && num(st.detect.frameWidth, 0)) || st.frameW || st.image.naturalWidth || 1;
+        const fh = (st.detect && num(st.detect.frameHeight, 0)) || st.frameH || st.image.naturalHeight || 1;
+        const s = Math.min(canvas.width / fw, canvas.height / fh);
+        const dx = (canvas.width - fw * s) / 2;
+        const dy = (canvas.height - fh * s) / 2;
+        ctx.drawImage(st.image, dx, dy, fw * s, fh * s);
+        st.regions.forEach(function (r) {
+          if (!r || typeof r !== "object") return;
+          const a = { x: dx + num(r.x, 0) * s, y: dy + num(r.y, 0) * s };
+          const b = {
+            x: a.x + Math.max(1, num(r.width, 0) * s),
+            y: a.y + Math.max(1, num(r.height, 0) * s),
+          };
+          ctx.lineWidth = 1.5;
+          ctx.strokeStyle = REGION_DETECT_COLOURS[r.kind] || "#999";
+          ctx.strokeRect(a.x, a.y, b.x - a.x, b.y - a.y);
+          if (r.kind === "text") drawReadArrow(a, b, r.rotate);
+        });
+      };
+
+      const renderTable = function () {
+        const rows = st.regions.map(function (r) {
+          const tr = document.createElement("tr");
+          const score = num(r && r.score, NaN);
+          const cells = [
+            r.name,
+            r.kind,
+            r.rotate,
+            Number.isFinite(score) ? score.toFixed(2) : "",
+            r.x,
+            r.y,
+            r.width,
+            r.height,
+          ];
+          for (const v of cells) {
+            const td = document.createElement("td");
+            td.textContent = v == null ? "" : String(v);
+            tr.appendChild(td);
+          }
+          return tr;
+        });
+        tableEl.replaceChildren.apply(tableEl, rows);
+      };
+
+      const show = function () {
+        setCaption();
+        renderTable();
+        drawThumb();
+      };
+
+      /** Decode the fetched frame; one that does not decode is said so in the caption. */
+      const loadBlob = function (blob, mine) {
+        releaseUrl();
+        const url = URL.createObjectURL(blob);
+        st.url = url;
+        const img = new Image();
+        img.onload = function () {
+          // a URL no longer ours was revoked when it was released
+          if (st.url === url) {
+            st.url = null;
+            URL.revokeObjectURL(url);
+          }
+          if (mine !== st.token) return;
+          st.image = img;
+          st.frame = "ok";
+          show();
+        };
+        img.onerror = function () {
+          // a URL no longer ours was revoked when it was released
+          if (st.url === url) {
+            st.url = null;
+            URL.revokeObjectURL(url);
+          }
+          if (mine !== st.token) return;
+          st.frame = "bad";
+          show();
+        };
+        img.src = url;
+      };
+
+      /**
+       * Ask the runtime for the last frame and the last regions. A node
+       * never deployed, or with no input yet, gets a quiet 404. jQuery's
+       * ajax so the editor's auth header goes with the request.
+       */
+      const sameTime = function (a, b) {
+        const ta = Date.parse(a);
+        const tb = Date.parse(b);
+        return Number.isNaN(ta) || Number.isNaN(tb) ? String(a) === String(b) : ta === tb;
+      };
+      /**
+       * The frame and the regions are two requests, so a message can land
+       * between them. With both stamps in and different, fetch both once
+       * more; a second mismatch is shown and said. True when it refetched.
+       */
+      const checkPair = function () {
+        if (!st.frameReceived || st.result !== "ok" || !st.received) return false;
+        if (sameTime(st.frameReceived, st.received)) return false;
+        if (st.round === 0) {
+          fetchLast(true);
+          return true;
+        }
+        st.mismatch = true;
+        return false;
+      };
+
+      const fetchLast = function (retry) {
+        if (typeof $ === "undefined" || !$ || typeof $.ajax !== "function") return;
+        const mine = ++st.token;
+        // a click passes its event, so only a literal true is the refetch
+        st.round = retry === true ? st.round + 1 : 0;
+        st.mismatch = false;
+        st.frameReceived = null;
+        st.frame = "pending";
+        st.result = "pending";
+        st.image = null;
+        st.regions = [];
+        st.detect = null;
+        st.received = null;
+        show();
+        $.ajax({
+          url: "region-detect/last-frame/" + node.id,
+          type: "GET",
+          cache: false,
+          xhrFields: { responseType: "blob" },
+        })
+          .done(function (blob, _status, xhr) {
+            if (mine !== st.token) return;
+            if (!blob || typeof blob !== "object") {
+              st.frame = "none";
+              show();
+              return;
+            }
+            const header = function (name) {
+              return xhr && typeof xhr.getResponseHeader === "function" ? xhr.getResponseHeader(name) : null;
+            };
+            st.frameW = Math.round(num(header("X-Frame-Width"), 0));
+            st.frameH = Math.round(num(header("X-Frame-Height"), 0));
+            st.frameReceived = header("X-Frame-Received");
+            if (checkPair()) return;
+            loadBlob(blob, mine);
+          })
+          .fail(function () {
+            if (mine !== st.token) return;
+            st.frame = "none";
+            show();
+          });
+        $.ajax({
+          url: "region-detect/last-regions/" + node.id,
+          type: "GET",
+          cache: false,
+          dataType: "json",
+        })
+          .done(function (body) {
+            if (mine !== st.token) return;
+            if (!body || !Array.isArray(body.regions)) {
+              st.result = "none";
+              show();
+              return;
+            }
+            st.regions = body.regions.filter(function (r) {
+              return r && typeof r === "object";
+            });
+            st.detect = body.detect && typeof body.detect === "object" ? body.detect : null;
+            st.received = body.received || null;
+            st.result = "ok";
+            if (checkPair()) return;
+            show();
+          })
+          .fail(function () {
+            if (mine !== st.token) return;
+            st.result = "none";
+            show();
+          });
+      };
+
+      const copyRegions = function () {
+        if (st.result !== "ok") {
+          RED.notify("region-detect: no regions to copy yet", "warning");
+          return;
+        }
+        const text = JSON.stringify(st.regions);
+        const copied = function () {
+          RED.notify("region-detect: copied " + st.regions.length + " regions as JSON", "success");
+        };
+        // the old way, for a page without the async clipboard (plain http)
+        const fallback = function () {
+          const ta = document.createElement("textarea");
+          ta.value = text;
+          ta.style.cssText = "position:fixed; top:0; left:0; opacity:0;";
+          document.body.appendChild(ta);
+          let ok = false;
+          try {
+            if (ta.select) ta.select();
+            ok = typeof document.execCommand === "function" && document.execCommand("copy");
+          } catch (_e) {
+            ok = false;
+          }
+          ta.remove();
+          if (ok) copied();
+          else RED.notify("region-detect: the browser would not copy to the clipboard", "error");
+        };
+        const clip = typeof navigator !== "undefined" && navigator ? navigator.clipboard : null;
+        if (clip && typeof clip.writeText === "function") clip.writeText(text).then(copied, fallback);
+        else fallback();
+      };
+
+      document.getElementById("region-detect-reload").addEventListener("click", fetchLast);
+      document.getElementById("region-detect-copy").addEventListener("click", copyRegions);
+
+      show();
+      fetchLast();
+    },
+    oneditsave: function () {
+      const st = regionDetectEditing;
+      regionDetectEditing = null;
+      if (st) {
+        st.token++;
+        if (st.release) st.release();
+      }
+      const defaults = regionDetectDef.defaults;
+      const input = function (key) {
+        return document.getElementById("node-input-" + key);
+      };
+      const o = input("orientation");
+      const ov = o ? String(o.value) : "auto";
+      // anything but 0/90/180/270 saves as "auto", as the runtime reads it
+      this.orientation = ["0", "90", "180", "270"].indexOf(ov) >= 0 ? Number(ov) : "auto";
+      // Node-RED copies the inputs over these afterwards; numbers here
+      // keep a direct caller of oneditsave honest, and the runtime reads
+      // either form
+      for (const key of REGION_DETECT_NUMBERS) {
+        const el = input(key);
+        const v = el && String(el.value).trim() !== "" ? Number(el.value) : NaN;
+        this[key] = Number.isFinite(v) ? v : defaults[key].value;
+      }
+      for (const key of REGION_DETECT_BOOLEANS) {
+        const el = input(key);
+        this[key] = el ? !!el.checked : defaults[key].value;
+      }
+    },
+    oneditcancel: function () {
+      const st = regionDetectEditing;
+      regionDetectEditing = null;
+      if (st) {
+        st.token++;
+        if (st.release) st.release();
+      }
+    },
+  };
+
+  RED.nodes.registerType("region-detect", regionDetectDef);
+</script>

@@ -4,7 +4,7 @@
         "type": "comment",
         "z": "tix-tab",
         "name": "Read printed text after barcode-locate (text-inspect reads, it does not grade)",
-        "info": "Point `frame` at a camera frame on the Node-RED host, then open\n`text inspect`, load the last frame (press Inject once first) and drag a\nbox around each printed line you want read. The two regions shipped here\nare placeholders.\n\n`barcode-locate` must have Preview OFF here: with Preview on it replaces\nmsg.payload with the barcode's preview crop, and text-inspect would then\nread the crop, not the frame.\n\n`barcode-locate` sends one message per barcode it found (one with\ntext null when it found none), so text-inspect reads the frame once per\nmessage. A msg.regions on the way in would pass through barcode-locate\nand replace text-inspect's own regions.\n\nmsg.ocr carries { name, roi, text, confidences } per region. Nothing\nhere compares the printed text with the barcode data; add that\ndownstream if you need a verdict.",
+        "info": "Point `frame` at a camera frame on the Node-RED host, then open\n`text inspect`, load the last frame (press Inject once first) and drag a\nbox around each printed line you want read. The two regions shipped here\nare placeholders.\n\n`barcode-locate` must have Preview OFF here: with Preview on it replaces\nmsg.payload with the barcode's preview crop, and text-inspect would then\nread the crop, not the frame.\n\n`barcode-locate` sends one message per barcode it found (one with\ntext null when it found none), so text-inspect reads the frame once per\nmessage. A msg.regions on the way in would pass through barcode-locate\nand replace text-inspect's own regions.\n\nline2 has rotate 270, for text running top to bottom; set 0 for an\nupright line.\n\nOne box may cover several printed lines: text-inspect splits it into\nlines and reads each. msg.ocr carries\n{ name, roi, rotate, text, confidences, lines } per region, lines\nbeing [{ text, confidences, y0, y1 }] top to bottom and text the lines\njoined with a newline. Nothing\nhere compares the printed text with the barcode data; add that\ndownstream if you need a verdict.",
         "x": 330,
         "y": 60,
         "wires": []
@@ -101,10 +101,11 @@
             },
             {
                 "name": "line2",
-                "x": 100,
-                "y": 180,
-                "width": 600,
-                "height": 60
+                "x": 760,
+                "y": 100,
+                "width": 60,
+                "height": 600,
+                "rotate": 270
             }
         ],
         "frameWidth": 0,
