@@ -30,6 +30,11 @@ const {
 const { findLine, rectFromLines } = require("../lib/lineFinder.js");
 const { pixelEngine } = require("./helpers/pixelEngine.js");
 
+// The fake engines ignore the encoded bytes, but label-crop reads their
+// header first (the pixel cap), so they must be a real image: a 1x1 PNG.
+const ENCODED_1X1 = () =>
+	Buffer.from("iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAAAAAA6fptVAAAACklEQVR4nGNgAAAAAgABSK+kcQAAAABJRU5ErkJggg==", "base64");
+
 // ---- fake engine ------------------------------------------------------
 
 /** Engine-shaped recorder: handlers receive the raw args array and return
@@ -490,7 +495,7 @@ test("labelCrop decodes an encoded buffer and returns corners in original coordi
 	});
 	const fake = detectionEngine(mask);
 	const res = await labelCrop(
-		Buffer.from("fake-jpeg-bytes"),
+		ENCODED_1X1(),
 		{ maxEdge: 400 },
 		fake.engine,
 	);
@@ -588,7 +593,7 @@ test("labelCrop fixed polarity analyzes only the polarity it is given", async ()
 test("labelCrop passes the original through unchanged on a miss", async () => {
 	const empty = new Uint8Array(SMALL_W * SMALL_H);
 	const fake = detectionEngine(empty);
-	const original = Buffer.from("fake-jpeg-bytes");
+	const original = ENCODED_1X1();
 	const res = await labelCrop(original, { maxEdge: 400 }, fake.engine);
 	assert.strictEqual(res.detected, false);
 	assert.strictEqual(res.image, original, "original object passed through");
@@ -655,7 +660,7 @@ test("labelCrop rejects a detection whose refined size deviates from the expecte
 	// The refined label covers ~11.5% of the frame.
 	const gray = labelGray(SMALL_W, SMALL_H, 130, 100, 270, 200);
 	const fake = detectionEngine(mask, { gray });
-	const original = Buffer.from("fake-jpeg-bytes");
+	const original = ENCODED_1X1();
 	const res = await labelCrop(
 		original,
 		{ maxEdge: 400, expectedSizeFraction: 0.4, sizeTolerance: 0.2 },
@@ -1171,7 +1176,7 @@ test("no rect at all is no-upstream-rect", async () => {
 		assert.deepStrictEqual(eng.calls, []);
 	}
 	// an encoded input is decoded once and still passed through as the very bytes
-	const encoded = Buffer.from("jpeg-bytes");
+	const encoded = ENCODED_1X1();
 	const eng = pixelEngine();
 	eng.colorConvert = async () => ({ image: trayFrame(), timing: {} });
 	const res = await labelCrop(encoded, UPSTREAM_CFG, eng);

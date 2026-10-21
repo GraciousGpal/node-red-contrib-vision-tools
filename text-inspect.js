@@ -52,7 +52,7 @@
 const sharp = require("sharp");
 const { performance } = require("node:perf_hooks");
 const ocr = require("./lib/ocr.js");
-const { resolveImage, rawGeometry, assertRawFits, asView, clampInt } = require("./lib/nodeInput.js");
+const { resolveImage, rawGeometry, assertRawFits, asView, clampInt, sharpInput } = require("./lib/nodeInput.js");
 const { formatMs } = require("./lib/formatMs.js");
 
 // regions are clamped to the frame later; this only keeps the arithmetic sane
@@ -195,14 +195,14 @@ module.exports = (RED) => {
 			const ms = (from) => Math.round((performance.now() - from) * 10) / 10;
 			try {
 				// read-only: no copy of a raw frame's bytes
-				const buffer = await resolveImage(msg.payload, "msg.payload", { copy: false });
 				const geometry = rawGeometry(msg, msg.payload);
+				const buffer = await resolveImage(msg.payload, "msg.payload", { copy: false, raw: !!geometry });
 				assertRawFits(buffer, geometry, "msg.payload");
 				let frame;
 				if (geometry) {
 					frame = { data: buffer, ...geometry };
 				} else {
-					const { data, info } = await sharp(buffer).raw().toBuffer({ resolveWithObject: true });
+					const { data, info } = await (await sharpInput(buffer, "msg.payload")).raw().toBuffer({ resolveWithObject: true });
 					frame = { data, width: info.width, height: info.height, channels: info.channels };
 				}
 				lastFrames.set(node.id, {

@@ -17,6 +17,11 @@ const { makeRectMask, rawImage, labelOnTray } = require("./helpers/synthetic.js"
 const { pixelEngine } = require("./helpers/pixelEngine.js");
 const { loadNode } = require("./helpers/fakeRed.js");
 
+// The fake engines ignore the encoded bytes, but label-crop reads their
+// header first (the pixel cap), so they must be a real image: a 1x1 PNG.
+const ENCODED_1X1 = () =>
+	Buffer.from("iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAAAAAA6fptVAAAACklEQVR4nGNgAAAAAgABSK+kcQAAAABJRU5ErkJggg==", "base64");
+
 function makeNode(config = {}) {
 	const published = [];
 	const node = loadNode("label-crop.js", config, {
@@ -192,7 +197,7 @@ test("label-crop passes the original payload through on a detection miss", async
 	});
 	try {
 		const { run, sent, doneErrors } = makeNode({ maxEdge: 400 });
-		const input = Buffer.from("original-encoded-bytes");
+		const input = ENCODED_1X1();
 		await run({ payload: input });
 		assert.strictEqual(sent.length, 1);
 		const msg = sent[0];
@@ -229,7 +234,7 @@ test("label-crop applies same-named msg overrides", async () => {
 	_setBridge(engine);
 	try {
 		const { run, sent, doneErrors } = makeNode({ maxEdge: 400, outputFormat: "raw" });
-		await run({ payload: Buffer.from("jpeg-bytes"), outputFormat: "jpg" });
+		await run({ payload: ENCODED_1X1(), outputFormat: "jpg" });
 		assert.deepStrictEqual(doneErrors, []);
 		assert.strictEqual(sent[0].labelCrop.detected, true);
 		assert.strictEqual(formats.at(-1), "jpg");
@@ -352,6 +357,47 @@ test("upstream mode with nothing in front is a no-upstream-rect miss, and only u
 		assert.notStrictEqual(sent[1].labelCrop.reason, "upstream-rect");
 		assert.notStrictEqual(sent[1].labelCrop.reason, "no-upstream-rect");
 		assert.deepStrictEqual(doneErrors, []);
+	} finally {
+		_resetBridge();
+	}
+});
+
+test("label-crop refuses an image over the pixel cap with a clear error, not a miss", async () => {
+	const sharp = require("sharp");
+	_setBridge(pixelEngine());
+	try {
+		const h = makeNode();
+		const bomb = await sharp({ create: { width: 16000, height: 16000, channels: 3, background: "#fff" } })
+			.toColourspace("b-w")
+			.png()
+			.toBuffer();
+		await h.run({ payload: bomb });
+		assert.strictEqual(h.doneErrors.length, 1, "one done(err)");
+		assert.match(h.doneErrors[0], /16000x16000 is above the 64M pixel cap/);
+		assert.strictEqual(h.sent.length, 0);
+	} finally {
+		_resetBridge();
+	}
+});
+
+test("label-crop refuses a BMP header it cannot decode with a clear error", async () => {
+	_setBridge(pixelEngine());
+	try {
+		const h = makeNode();
+		// "BM" + 14-byte file header + 40-byte info header claiming 30000x30000, 24 bit
+		const bmp = Buffer.alloc(54);
+		bmp.write("BM", 0);
+		bmp.writeUInt32LE(54 + 30000 * 30000 * 3, 2);
+		bmp.writeUInt32LE(54, 10);
+		bmp.writeUInt32LE(40, 14);
+		bmp.writeInt32LE(30000, 18);
+		bmp.writeInt32LE(30000, 22);
+		bmp.writeUInt16LE(1, 26);
+		bmp.writeUInt16LE(24, 28);
+		await h.run({ payload: bmp });
+		assert.strictEqual(h.doneErrors.length, 1, "one done(err)");
+		assert.match(h.doneErrors[0], /msg\.payload: not a supported image/);
+		assert.strictEqual(h.sent.length, 0);
 	} finally {
 		_resetBridge();
 	}

@@ -723,3 +723,27 @@ test("barcode-locate reports a failure once, through done(err) only", async () =
 	assert.strictEqual(errors.length, 0, "done(err) must be the only report");
 	assert.deepStrictEqual(statuses.at(-1), { fill: "red", shape: "ring", text: "error" });
 });
+
+test("an SVG golden file is refused before any decoder, through done once", async () => {
+	const dir = await tmpDir();
+	const goldenPath = path.join(dir, "golden.png");
+	await fsp.writeFile(goldenPath, labelSvg(300, 400));
+	const { run, errors, doneErrors } = makeNode(NODE_CFG);
+	await run({ golden: goldenPath, payload: await png(labelSvg(300, 400)) });
+	assert.strictEqual(doneErrors.length, 1, doneErrors.join("\n"));
+	assert.match(doneErrors[0], /golden: not a supported image/);
+	assert.strictEqual(errors.length, 0, "done(err) must be the only report");
+});
+
+test("a frame above the pixel cap is refused by name, through done once", async () => {
+	const { run, errors, doneErrors, sent } = makeNode(NODE_CFG);
+	const bomb = await sharp({ create: { width: 16000, height: 16000, channels: 3, background: "#fff" } })
+		.toColourspace("b-w")
+		.png()
+		.toBuffer();
+	await run({ golden: await png(labelSvg(300, 400)), payload: bomb });
+	assert.strictEqual(doneErrors.length, 1, doneErrors.join("\n"));
+	assert.match(doneErrors[0], /msg\.payload: 16000x16000 is above the 64M pixel cap/);
+	assert.strictEqual(sent.length, 0);
+	assert.strictEqual(errors.length, 0, "done(err) must be the only report");
+});

@@ -896,3 +896,11 @@ test("deleting the node drops its frame; a plain redeploy keeps it", async () =>
 	await new Promise((done) => h.node.listeners.close(true, done));
 	assert.strictEqual((await lastFrame(h)).status, 404, "a removed node takes its frame with it");
 });
+
+test("the Run endpoint refuses an SVG upload with a 4xx, naming the upload", async () => {
+	const svg = Buffer.from('<svg xmlns="http://www.w3.org/2000/svg" width="400" height="300"/>').toString("base64");
+	const res = await callRun({ image: svg, region: RUN_REGION, cfg: RUN_CFG });
+	assert.ok(res.status >= 400 && res.status < 500, String(res.status));
+	assert.strictEqual(res.body.ok, false);
+	assert.match(res.body.error, /line-finder\/run: image: not a supported image/);
+});

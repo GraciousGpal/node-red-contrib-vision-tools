@@ -361,3 +361,16 @@ test("package.json registers region-detect", () => {
 	const pkg = JSON.parse(fs.readFileSync(path.join(__dirname, "..", "package.json"), "utf8"));
 	assert.equal(pkg["node-red"].nodes["region-detect"], "region-detect.js");
 });
+
+// 256M pixels of white in ~280KB: refused by the 64M pixel cap, not decoded
+const bombPng = () =>
+	sharp({ create: { width: 16000, height: 16000, channels: 3, background: "#fff" } }).toColourspace("b-w").png().toBuffer();
+
+test("a 16000x16000 PNG is refused by the pixel cap through done(err) only", async () => {
+	const h = makeNode();
+	await h.run({ payload: await bombPng() });
+	assert.equal(h.doneErrors.length, 1);
+	assert.match(h.doneErrors[0], /msg\.payload: 16000x16000 is above the 64M pixel cap/);
+	assert.equal(h.sent.length, 0);
+	assert.deepEqual(h.errors, []);
+});

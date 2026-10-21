@@ -53,7 +53,7 @@
 
 const crypto = require("node:crypto");
 const sharp = require("sharp");
-const { resolveImage, isBytes, clampInt, pickMode, asBoolean } = require("./lib/nodeInput.js");
+const { resolveImage, isBytes, clampInt, pickMode, asBoolean, sharpInput } = require("./lib/nodeInput.js");
 const { FAMILIES, SEVERITIES } = require("./lib/synth/defects.js");
 const { capturePresets, frameBox } = require("./lib/synth/capture.js");
 const { planCases, makeCases, goldenRaster } = require("./lib/synth/cases.js");
@@ -91,7 +91,7 @@ module.exports = (RED) => {
 
 	/** An encoded image as a base64 JPEG no wider than `width`. */
 	async function thumbnail(buffer, width) {
-		const jpeg = await sharp(buffer)
+		const jpeg = await (await sharpInput(buffer, "msg.payload"))
 			.resize({ width, withoutEnlargement: true })
 			.jpeg({ quality: 70 })
 			.toBuffer();

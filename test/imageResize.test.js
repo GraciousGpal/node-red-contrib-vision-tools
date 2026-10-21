@@ -183,7 +183,7 @@ test("a bad input stops the message with an error and a red status", { skip }, a
 		[{ payload: { data: Buffer.alloc(10) } }, /no usable width/],
 		[{ payload: { data: Buffer.alloc(10), width: 10, height: 10, channels: 3 } }, /needs 300 bytes/],
 		[{ payload: { ...noise(4, 4, 1), dtype: "float32" } }, /uint8/],
-		[{ payload: Buffer.from("not an image") }, /unsupported image format/],
+		[{ payload: Buffer.from("not an image") }, /not a supported image/],
 		[{ payload: 42 }, /image object/],
 	];
 	for (const [msg, re] of cases) {
@@ -196,4 +196,25 @@ test("a bad input stops the message with an error and a red status", { skip }, a
 	const bad = makeNode({ widthMode: "auto", heightMode: "auto" });
 	const err = await bad.run({ payload: noise(8, 8, 1) });
 	assert.match(err.message, /both be auto/);
+});
+
+// 256M pixels of white in ~280KB: refused by the 64M pixel cap, not decoded
+const bombPng = () =>
+	sharp({ create: { width: 16000, height: 16000, channels: 3, background: "#fff" } }).toColourspace("b-w").png().toBuffer();
+
+test("a 16000x16000 PNG is refused by the pixel cap through done(err) only", { skip }, async () => {
+	const h = makeNode({ outputFormat: "raw" });
+	const errors = [];
+	h.node.error = (e) => errors.push(e);
+	const err = await h.run({ payload: await bombPng() });
+	assert.match(err && err.message, /msg\.payload: 16000x16000 is above the 64M pixel cap/);
+	assert.strictEqual(h.sent.length, 0);
+	assert.deepStrictEqual(errors, []);
+});
+
+test("a 12 MP JPEG still decodes", { skip }, async () => {
+	const jpg = await sharp({ create: { width: 4000, height: 3000, channels: 3, background: "#7f7f7f" } }).jpeg().toBuffer();
+	const h = makeNode({ widthMode: "multiply", widthValue: 1, heightMode: "auto", outputFormat: "raw" });
+	assert.strictEqual(await h.run({ payload: jpg }), null);
+	assert.deepStrictEqual([h.sent[0].payload.width, h.sent[0].payload.height], [4000, 3000]);
 });

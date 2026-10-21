@@ -2075,6 +2075,10 @@ the editor.
 
 ## Deployment notes
 
+- Every image input is refused above 64M pixels, and encoded inputs must
+  be JPEG, PNG, WebP, GIF, TIFF or HEIF (SVG never reaches a decoder), so
+  a small compressed file cannot decode into gigabytes; split or downscale
+  larger captures before they reach these nodes.
 - `goldenPath`/`scaleFilePath` are paths **inside the container** — use
   `/data` for anything that should survive a rebuild.
 - The working canvas the frame is decoded onto is sized by the calibrated
@@ -2209,7 +2213,7 @@ the editor.
 
 ## Tests
 
-`npm test` (Node 22+, no test framework needed — `node --test`), 900 tests.
+`npm test` (Node 22+, no test framework needed — `node --test`), 919 tests.
 Fixtures are generated with `sharp` rather than read from
 real camera photos, so the suite runs anywhere; the real QC photos are
 gitignored. Coverage spans the lib pipeline (`compare`, `align`, `warp`,

@@ -450,3 +450,18 @@ test("an error names the region object by its position in msg.regions, filtered 
 	await h.run({ payload: await turnedFrame(), regions: [KINDED[0], KINDED[1], 7] });
 	assert.deepEqual(h.doneErrors, ["text-inspect: msg.regions[2] is not a region object"]);
 });
+
+// 256M pixels of white in ~280KB: refused by the 64M pixel cap, not decoded
+const bombPng = () =>
+	sharp({ create: { width: 16000, height: 16000, channels: 3, background: "#fff" } }).toColourspace("b-w").png().toBuffer();
+
+test("a 16000x16000 PNG is refused by the pixel cap and an SVG outright, through done(err) only", async () => {
+	const h = makeNode({ regions: [LEFT] });
+	await h.run({ payload: await bombPng() });
+	await h.run({ payload: Buffer.from('<svg xmlns="http://www.w3.org/2000/svg" width="500" height="80"/>') });
+	assert.equal(h.doneErrors.length, 2);
+	assert.match(h.doneErrors[0], /msg\.payload: 16000x16000 is above the 64M pixel cap/);
+	assert.match(h.doneErrors[1], /not a supported image/);
+	assert.equal(h.sent.length, 0);
+	assert.deepEqual(h.errors, []);
+});

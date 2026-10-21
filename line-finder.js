@@ -76,7 +76,7 @@ module.exports = (RED) => {
 		POLARITIES,
 		EDGE_SELECTS,
 	} = require("./lib/lineFinder.js");
-	const { clampInt, clampFloat, pickMode, isBytes, asView, assertRawFits } = require("./lib/nodeInput.js");
+	const { clampInt, clampFloat, pickMode, isBytes, asView, assertRawFits, assertImageSignature, sharpInput } = require("./lib/nodeInput.js");
 	const { formatMs } = require("./lib/formatMs.js");
 
 	const BOUNDS = {
@@ -247,8 +247,7 @@ module.exports = (RED) => {
 			return { gray, width, height, raw };
 		}
 		if (Buffer.isBuffer(payload)) {
-			const sharp = require("sharp");
-			const { data, info } = await sharp(payload)
+			const { data, info } = await (await sharpInput(payload, "msg.payload"))
 				.grayscale()
 				.raw()
 				.toBuffer({ resolveWithObject: true });
@@ -457,7 +456,7 @@ module.exports = (RED) => {
 							},
 						},
 					)
-				: sharp(payload);
+				: await sharpInput(payload, "msg.payload");
 		const jpeg = await pipeline
 			.resize({ width, withoutEnlargement: true })
 			.jpeg({ quality: 70 })
@@ -595,6 +594,7 @@ module.exports = (RED) => {
 			source = "cached";
 		} else {
 			const bytes = Buffer.from(body.image.replace(/^data:[^,]*,/, ""), "base64");
+			assertImageSignature(bytes, "line-finder/run: image");
 			decoded = await toGray(bytes);
 			source = "upload";
 		}

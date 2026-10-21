@@ -49,6 +49,8 @@ const {
 	asView,
 	assertUnderCap,
 	readRegularFile,
+	sharpInput,
+	MAX_INPUT_PIXELS,
 } = require("./lib/nodeInput.js");
 
 module.exports = (RED) => {
@@ -63,7 +65,7 @@ module.exports = (RED) => {
 		if (!Number.isInteger(height) || height <= 0) return undefined;
 		if (!Number.isInteger(channels) || channels < 1 || channels > 4)
 			return undefined;
-		if (width * height > 64 * 1024 * 1024) return undefined;
+		if (width * height > MAX_INPUT_PIXELS) return undefined;
 		return { width, height, channels };
 	}
 
@@ -116,7 +118,7 @@ module.exports = (RED) => {
 			}
 			return { data: bytes.subarray(0, need), ...geometry, decoded: false };
 		}
-		const { data, info } = await sharp(bytes)
+		const { data, info } = await (await sharpInput(bytes, label))
 			.raw()
 			.toBuffer({ resolveWithObject: true });
 		return {
@@ -194,6 +196,9 @@ module.exports = (RED) => {
 				try {
 					frame = await resolveRaw(msg);
 				} catch (err) {
+					// over the pixel cap or not an image: no later frame of
+					// this kind could pass either, so it fails the message
+					if (err.code === "ERR_IMAGE_REFUSED") throw err;
 					return passThrough("input", err);
 				}
 				const decodeMs = performance.now() - t0;

@@ -193,7 +193,8 @@ test("a frame with a different aspect ratio passes through unrectified, with a r
 test("an undecodable payload passes through with reason input", async () => {
 	const dir = await tmpDir();
 	const { run, sent, doneErrors } = makeNode({ scaleFilePath: await scaleFile(dir, { homography: SHIFT }) });
-	const payload = Buffer.from("not an image");
+	// a JPEG signature with nothing decodable after it
+	const payload = Buffer.from([0xff, 0xd8, 0xff, 0xe0, 1, 2, 3, 4]);
 	await run({ payload });
 	assert.strictEqual(doneErrors.length, 0, doneErrors.join("\n"));
 	assert.strictEqual(sent[0].payload, payload);
@@ -238,4 +239,19 @@ test("raw input shorter than its declared geometry passes through as an input fa
 	assert.strictEqual(doneErrors.length, 0);
 	assert.strictEqual(sent[0].rectify.reason, "input");
 	assert.match(sent[0].rectify.error, /shorter than 40x30x1/);
+});
+
+test("a frame above the pixel cap, or not an image at all, fails the message instead of passing through", async () => {
+	const dir = await tmpDir();
+	const { run, sent, doneErrors } = makeNode({ scaleFilePath: await scaleFile(dir, { homography: SHIFT }) });
+	const bomb = await sharp({ create: { width: 16000, height: 16000, channels: 3, background: "#fff" } })
+		.toColourspace("b-w")
+		.png()
+		.toBuffer();
+	await run({ payload: bomb });
+	await run({ payload: Buffer.from("<svg xmlns='http://www.w3.org/2000/svg'/>") });
+	assert.strictEqual(sent.length, 0);
+	assert.strictEqual(doneErrors.length, 2, doneErrors.join("\n"));
+	assert.match(doneErrors[0], /msg\.payload: 16000x16000 is above the 64M pixel cap/);
+	assert.match(doneErrors[1], /msg\.payload: not a supported image/);
 });

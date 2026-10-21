@@ -49,7 +49,7 @@
 const sharp = require("sharp");
 const { performance } = require("node:perf_hooks");
 const { detectRegions } = require("./lib/regionDetect.js");
-const { resolveImage, rawGeometry, assertRawFits, asView, asBoolean, clampInt, clampFloat, pickMode } = require("./lib/nodeInput.js");
+const { resolveImage, rawGeometry, assertRawFits, asView, asBoolean, clampInt, clampFloat, pickMode, sharpInput } = require("./lib/nodeInput.js");
 const { formatMs } = require("./lib/formatMs.js");
 
 const DETECT_KEYS = ["orientation", "minTextHeight", "minScore", "graphics", "barcodes", "pad"];
@@ -146,14 +146,14 @@ module.exports = (RED) => {
 			try {
 				const opts = messageOptions(base, msg.detect);
 				// read-only: no copy of a raw frame's bytes
-				const buffer = await resolveImage(msg.payload, "msg.payload", { copy: false });
 				const geometry = rawGeometry(msg, msg.payload);
+				const buffer = await resolveImage(msg.payload, "msg.payload", { copy: false, raw: !!geometry });
 				assertRawFits(buffer, geometry, "msg.payload");
 				let frame;
 				if (geometry) {
 					frame = { data: buffer.subarray(0, geometry.width * geometry.height * geometry.channels), ...geometry };
 				} else {
-					const { data, info } = await sharp(buffer).raw().toBuffer({ resolveWithObject: true });
+					const { data, info } = await (await sharpInput(buffer, "msg.payload")).raw().toBuffer({ resolveWithObject: true });
 					frame = { data, width: info.width, height: info.height, channels: info.channels };
 				}
 				const receivedAt = Date.now();

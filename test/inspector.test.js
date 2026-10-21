@@ -255,10 +255,10 @@ test("a golden that fails to prepare does not wedge its key", async () => {
 	const frame = await png(svg(400, 560));
 	const { run, sent } = makeNode({ ...CFG });
 
-	// an Error with sharp's own message, across the thread boundary
+	// an Error with the signature guard's message, across the thread boundary
 	await assert.rejects(run({ payload: frame, golden: notAnImage, goldenKey: "wedge" }), (err) => {
 		assert.ok(err instanceof Error, "not an Error");
-		assert.match(err.message, /unsupported image format|Input buffer/i);
+		assert.match(err.message, /^golden: not a supported image \(JPEG, PNG, WebP, GIF, TIFF, HEIF\)$/);
 		return true;
 	});
 

@@ -72,6 +72,18 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Changed
 
+- **Every image input is capped at 64M pixels and must carry a known
+  image signature.** A 16000x16000 PNG is ~280 KB yet decodes to 256 MB
+  or more; each node now fails such a frame through `done(err)` with
+  "msg.payload: WxH is above the 64M pixel cap", read from the header
+  before any decode, including where OpenCV decodes (label-crop, the
+  golden-compare fast path) and in perspective-rectify, which used to
+  pass such a frame through. An encoded input (payload, golden, file or
+  line-finder Run upload) reaches a decoder only if it starts with a
+  JPEG, PNG, WebP, GIF, TIFF or HEIF signature, so SVG - plain,
+  BOM- or whitespace-prefixed, or gzip-compressed - never does; BMP and
+  other formats are refused with "not a supported image". Raw pixel
+  input is unaffected.
 - **text-inspect and barcode-locate keep only regions of their kind.**
   A `msg.regions` item with a `kind` string (region-detect's output) is
   read by text-inspect only when `kind` is `"text"` (a list with items
@@ -101,6 +113,8 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Fixed
 
+- **sharp 0.35.5** (was 0.35.4), for GHSA-wq5f-xc86-pv6w: a librsvg
+  vulnerability (CVE-2026-96889) in the SVG decoder sharp bundles.
 - **A fetched last frame that does not decode says so.** The
   line-finder editor's caption read "fetching the last frame…" forever;
   it now reads "the last frame could not be decoded - send another, or

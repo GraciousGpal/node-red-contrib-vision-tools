@@ -29,7 +29,14 @@ const {
 	assertRawFits,
 	locateSource,
 	resolveImage,
+	assertImageSignature,
+	sharpInput,
+	assertPixelsUnderCap,
+	geometryOf,
+	MAX_INPUT_PIXELS,
 } = require("../lib/nodeInput.js");
+const sharp = require("sharp");
+const zlib = require("node:zlib");
 
 const made = [];
 test.after(() => {
@@ -98,8 +105,8 @@ test("resolveImage refuses a buffer over the 512MB cap before copying it", async
 
 test("resolveImage accepts an ArrayBuffer in the object form, as at the top level", async () => {
 	const ab = new Uint8Array([1, 2, 3, 4]).buffer;
-	assert.deepStrictEqual([...(await resolveImage({ data: ab }, "msg.payload"))], [1, 2, 3, 4]);
-	assert.deepStrictEqual([...(await resolveImage(ab, "msg.payload"))], [1, 2, 3, 4]);
+	assert.deepStrictEqual([...(await resolveImage({ data: ab }, "msg.payload", { raw: true }))], [1, 2, 3, 4]);
+	assert.deepStrictEqual([...(await resolveImage(ab, "msg.payload", { raw: true }))], [1, 2, 3, 4]);
 });
 
 // copy: true promises bytes the caller can no longer change: each source
@@ -140,7 +147,8 @@ test("resolveImage copy:true: no source kind's later writes show through", async
 	for (const { name, make } of cases) {
 		try {
 			const { source, mutate } = make();
-			const out = await resolveImage(source, "msg.payload", { copy: true });
+			// bytes with no image header: only a raw frame is taken unsniffed
+			const out = await resolveImage(source, "msg.payload", { copy: true, raw: true });
 			mutate();
 			assert.deepStrictEqual([...out], [1, 2, 3, 4]);
 		} catch (err) {
@@ -148,4 +156,85 @@ test("resolveImage copy:true: no source kind's later writes show through", async
 		}
 	}
 	assert.deepStrictEqual(failures, []);
+});
+
+// 256M pixels of white compress to ~280KB: a decompression bomb the size
+// of a thumbnail. libvips would allocate 256MB (more as RGB) to decode it.
+function whitePng(side) {
+	return sharp({ create: { width: side, height: side, channels: 3, background: "#fff" } })
+		.toColourspace("b-w")
+		.png()
+		.toBuffer();
+}
+
+test("assertImageSignature refuses SVG in any disguise, and anything else without a known signature", () => {
+	const svg = "<svg xmlns='http://www.w3.org/2000/svg' width='4' height='4'/>";
+	const refused = {
+		svg: Buffer.from(svg),
+		xml: Buffer.from("  <?xml version='1.0'?>" + svg),
+		bom: Buffer.from("\ufeff" + svg),
+		doubleBom: Buffer.from("\ufeff\ufeff" + svg),
+		formFeed: Buffer.from("\f" + svg),
+		nbsp: Buffer.from("\u00a0" + svg),
+		prefixed: Buffer.from("abc" + svg),
+		svgz: zlib.gzipSync(Buffer.from(svg)),
+		bmp: Buffer.from("BM" + "\0".repeat(52), "latin1"),
+		empty: Buffer.alloc(0),
+	};
+	for (const [name, bytes] of Object.entries(refused)) {
+		assert.throws(
+			() => assertImageSignature(bytes, "msg.payload"),
+			/^Error: msg\.payload: not a supported image \(JPEG, PNG, WebP, GIF, TIFF, HEIF\)$/,
+			name,
+		);
+	}
+});
+
+test("assertImageSignature passes every format it names", async () => {
+	const img = sharp({ create: { width: 8, height: 8, channels: 3, background: "#808080" } });
+	const formats = {
+		jpeg: await img.clone().jpeg().toBuffer(),
+		png: await img.clone().png().toBuffer(),
+		webp: await img.clone().webp().toBuffer(),
+		gif: await img.clone().gif().toBuffer(),
+		tiffLE: await img.clone().tiff().toBuffer(),
+		tiffBE: Buffer.from([0x4d, 0x4d, 0x00, 0x2a, 0, 0, 0, 8]),
+		avif: await img.clone().avif().toBuffer(),
+	};
+	for (const [name, bytes] of Object.entries(formats)) {
+		assert.doesNotThrow(() => assertImageSignature(bytes, "msg.payload"), name);
+	}
+});
+
+test("resolveImage refuses SVG bytes and SVG files, but not a raw frame that starts with '<'", async () => {
+	const svg = Buffer.from("<svg/>");
+	await assert.rejects(resolveImage(svg, "msg.payload"), /not a supported image/);
+	const file = path.join(tmpDir(), "art.png");
+	fs.writeFileSync(file, svg);
+	await assert.rejects(resolveImage(file, "msg.golden"), /msg\.golden: not a supported image/);
+	// raw pixels have no header: a first pixel of 60 is just dark grey
+	const out = await resolveImage(svg, "msg.payload", { raw: true });
+	assert.strictEqual(out.length, svg.length);
+});
+
+test("sharpInput refuses an image above the 64M pixel cap by name, before any decode", async () => {
+	const png = await whitePng(16000);
+	await assert.rejects(sharpInput(png, "msg.payload"), /msg\.payload: 16000x16000 is above the 64M pixel cap/);
+	const { info } = await (await sharpInput(await whitePng(100), "msg.payload")).raw().toBuffer({ resolveWithObject: true });
+	assert.deepStrictEqual([info.width, info.height], [100, 100]);
+});
+
+test("assertPixelsUnderCap names the size and the cap, and passes a normal image", async () => {
+	await assert.rejects(assertPixelsUnderCap(await whitePng(16000), "msg.payload"), /msg\.payload: 16000x16000 is above the 64M pixel cap/);
+	await assertPixelsUnderCap(await whitePng(1000), "msg.payload");
+});
+
+test("geometryOf caps a raw descriptor at MAX_INPUT_PIXELS, the decode cap", () => {
+	assert.strictEqual(MAX_INPUT_PIXELS, 64e6);
+	assert.deepStrictEqual(geometryOf({ width: 8000, height: 8000, channels: 1 }), { width: 8000, height: 8000, channels: 1 });
+	assert.strictEqual(geometryOf({ width: 8001, height: 8000, channels: 1 }), undefined);
+});
+
+test("assertPixelsUnderCap refuses bytes with no image signature before any header read", async () => {
+	await assert.rejects(assertPixelsUnderCap(Buffer.from("not an image"), "msg.payload"), /msg\.payload: not a supported image/);
 });

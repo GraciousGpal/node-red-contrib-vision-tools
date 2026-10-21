@@ -43,6 +43,7 @@ const {
 	geometryOf,
 	geometryFromImages,
 	rawGeometry,
+	sharpInput,
 	assertRawFits,
 } = require("./lib/nodeInput.js");
 
@@ -540,9 +541,9 @@ module.exports = (RED) => {
 
 	/** A rendered image, whichever of the three formats it is in, as a
 	 * sharp pipeline. */
-	function imagePipeline(image) {
+	async function imagePipeline(image) {
 		const sharp = require("sharp");
-		if (Buffer.isBuffer(image)) return sharp(image);
+		if (Buffer.isBuffer(image)) return sharpInput(image, "stage");
 		return sharp(
 			Buffer.from(image.data.buffer, image.data.byteOffset, image.data.byteLength),
 			{
@@ -559,7 +560,7 @@ module.exports = (RED) => {
 			return { bytes: image, contentType: png ? "image/png" : "image/jpeg" };
 		}
 		return {
-			bytes: await imagePipeline(image).png({ compressionLevel: 1 }).toBuffer(),
+			bytes: await (await imagePipeline(image)).png({ compressionLevel: 1 }).toBuffer(),
 			contentType: "image/png",
 		};
 	}
@@ -1906,7 +1907,7 @@ module.exports = (RED) => {
 		if (!thumb) {
 			const source = images.heatmap || images.targetGrayAligned;
 			if (!source) return;
-			thumb = await imagePipeline(source)
+			thumb = await (await imagePipeline(source))
 				.resize({ width: cfg.previewWidth, withoutEnlargement: true })
 				.jpeg({ quality: 70 })
 				.toBuffer();

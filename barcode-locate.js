@@ -62,9 +62,8 @@
  */
 
 const fsp = require("fs").promises;
-const sharp = require("sharp");
 const { locateBarcodes, warmUp, DEFAULT_FORMATS } = require("./lib/locate.js");
-const { resolveImage, rawGeometry, assertRawFits, clampInt, clampFloat, pickMode } = require("./lib/nodeInput.js");
+const { resolveImage, rawGeometry, assertRawFits, clampInt, clampFloat, pickMode, sharpInput } = require("./lib/nodeInput.js");
 const { formatMs } = require("./lib/formatMs.js");
 const profileStore = require("./lib/profileStore.js");
 const { mapProfileRegions } = require("./lib/goldenRegions.js");
@@ -324,7 +323,7 @@ module.exports = (RED) => {
 			// still fails the message, as it would in the decode
 			let frame = raw ? { width: raw.width, height: raw.height } : null;
 			if (!frame) {
-				const meta = await sharp(buffer).metadata();
+				const meta = await (await sharpInput(buffer, "msg.payload")).metadata();
 				frame = { width: meta.width, height: meta.height };
 			}
 			try {
@@ -439,8 +438,8 @@ module.exports = (RED) => {
 			const ms = (from) => Math.round((performance.now() - from) * 10) / 10;
 			try {
 				// read-only from here on: no copy of a raw frame's bytes
-				const buffer = await resolveImage(msg.payload, "msg.payload", { copy: false });
 				const raw = rawGeometry(msg, msg.payload);
+				const buffer = await resolveImage(msg.payload, "msg.payload", { copy: false, raw: !!raw });
 				assertRawFits(buffer, raw, "msg.payload");
 				const inputMs = ms(started);
 				const mode = msg.mode || node.mode;

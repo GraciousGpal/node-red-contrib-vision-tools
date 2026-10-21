@@ -27,7 +27,6 @@
 
 "use strict";
 
-const sharp = require("sharp");
 const { formatMs } = require("./lib/formatMs.js");
 const {
 	clampInt,
@@ -38,6 +37,7 @@ const {
 	readRegularFile,
 	rawGeometry,
 	assertRawFits,
+	sharpInput,
 } = require("./lib/nodeInput.js");
 
 // the editor's defaults (image-resize.html), and what a config missing a
@@ -114,9 +114,9 @@ async function resolveRaw(msg, source, label) {
 			decoded: false,
 		};
 	}
-	let { data, info } = await sharp(bytes).raw().toBuffer({ resolveWithObject: true });
+	let { data, info } = await (await sharpInput(bytes, label)).raw().toBuffer({ resolveWithObject: true });
 	if (info.channels === 2) {
-		({ data, info } = await sharp(bytes).toColourspace("srgb").ensureAlpha().raw().toBuffer({ resolveWithObject: true }));
+		({ data, info } = await (await sharpInput(bytes, label)).toColourspace("srgb").ensureAlpha().raw().toBuffer({ resolveWithObject: true }));
 	}
 	return {
 		image: {
